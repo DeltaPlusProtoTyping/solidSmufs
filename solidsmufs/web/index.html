@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light dark">
+  <script>document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') === 'dark' ? 'dark' : 'light';</script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WMC Viewer</title>
+  <link rel="icon" href="img/icon-256.png">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="importmap">
+    {"imports": {"three": "./vendor/three/three.module.min.js", "three/addons/": "./vendor/three/addons/"}}
+  </script>
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- title bar: logo menu, menus, quick access toolbar, document title, command search -->
+    <header class="titlebar">
+      <button class="logo" id="logo" title="Wagner Machine Co. — menus">
+        <img src="img/brand/wmc-logo-white.svg" alt="Wagner Machine Co.">
+      </button>
+      <nav class="menubar" id="menubar"></nav>
+      <div class="qat" id="qat"></div>
+      <div class="doc-title" id="doc-title">WMC Viewer</div>
+      <div class="title-right">
+        <label class="cmd-search" title="Search commands (Ctrl+F)">
+          <i data-icon="search"></i><input id="cmd-search" placeholder="Search commands" autocomplete="off" spellcheck="false">
+        </label>
+        <button class="tb-btn" id="btn-help" title="Help (F1)"><i data-icon="help"></i></button>
+      </div>
+    </header>
+
+    <!-- CommandManager -->
+    <section class="cmdmgr" id="cmdmgr">
+      <div class="cm-row" id="cm-row"></div>
+      <div class="cm-tabs" id="cm-tabs"></div>
+    </section>
+
+    <main class="workspace" id="workspace">
+      <!-- FeatureManager / PropertyManager / DisplayManager -->
+      <aside class="manager" id="manager">
+        <div class="mgr-tabs" id="mgr-tabs"></div>
+        <div class="mgr-body" id="mgr-body"></div>
+      </aside>
+      <div class="splitter" id="splitter" title="Drag to resize"></div>
+
+      <!-- graphics area -->
+      <section class="graphics" id="graphics">
+        <div class="doc-tabs" id="doc-tabs"></div>
+        <div class="viewport" id="viewport">
+          <div class="hud" id="hud"></div>
+          <div class="cube-ui" id="cube-ui"></div>
+          <div class="labels" id="labels"></div>
+          <div class="rubber" id="rubber"></div>
+          <div class="pivot-dot" id="pivot-dot"></div>
+          <div class="gesture" id="gesture"></div>
+          <div class="ctx-toolbar" id="ctx-toolbar"></div>
+          <div class="empty" id="empty"></div>
+          <div class="loading" id="loading" hidden></div>
+          <div class="dropzone" id="drop" hidden><div class="drop-card"><i data-icon="open"></i><b>Drop to open</b><span>STEP · IGES · SolidWorks · Parasolid · STL · OBJ · 3MF · glTF</span></div></div>
+        </div>
+        <div class="bottom-tabs" id="bottom-tabs"></div>
+      </section>
+
+      <!-- task pane -->
+      <aside class="taskpane" id="taskpane">
+        <div class="tp-strip" id="tp-strip"></div>
+        <div class="tp-flyout" id="tp-flyout" hidden></div>
+      </aside>
+    </main>
+
+    <footer class="statusbar" id="statusbar">
+      <span class="sb-product" id="sb-product"></span>
+      <span class="sb-msg" id="sb-msg"></span>
+      <span class="sb-spacer"></span>
+      <span class="sb-xyz" id="sb-xyz"></span>
+      <span class="sb-mode" id="sb-mode"></span>
+      <button class="sb-units" id="sb-units" title="Unit system"></button>
+      <button class="sb-tips" id="sb-tips" title="Mouse and keyboard"><i data-icon="help"></i></button>
+    </footer>
+  </div>
+  <div id="layer"></div>
+  <div class="toasts" id="toasts"></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

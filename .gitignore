@@ -1,0 +1,8 @@
+# Python environment and caches
+.venv/
+__pycache__/
+*.pyc
+
+# test and tool output
+*.out.step
+*.log
