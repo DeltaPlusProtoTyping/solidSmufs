@@ -10,7 +10,7 @@ $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $desktop
 $link.TargetPath = Join-Path $root '.venv\Scripts\pythonw.exe'
 $link.Arguments = '-m solidsmufs'
 $link.WorkingDirectory = $root
-$link.IconLocation = (Join-Path $root 'solidsmufs\web\img\icon.ico') + ',0'
+$link.IconLocation = (Join-Path $root 'solidsmufs\web\img\solidsmurfs.ico') + ',0'
 $link.Description = 'SolidSmurfs - Wagner Machine 3D part viewer'
 $link.Save()
 Write-Output "Created $(Join-Path $desktop 'SolidSmurfs.lnk')"

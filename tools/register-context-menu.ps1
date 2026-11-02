@@ -7,7 +7,7 @@ param([switch]$Remove)
 $root = Split-Path -Parent $PSScriptRoot
 $pythonw = Join-Path $root '.venv\Scripts\pythonw.exe'
 $launcher = Join-Path $root 'solidsmurfs.pyw'
-$icon = Join-Path $root 'solidsmufs\web\img\icon.ico'
+$icon = Join-Path $root 'solidsmufs\web\img\solidsmurfs.ico'
 $extensions = @(
     '.step', '.stp', '.igs', '.iges', '.brep', '.brp',
     '.sldprt', '.sldasm',

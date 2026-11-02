@@ -78,7 +78,7 @@ def run(argv):
                 break
             time.sleep(0.25)
             first = instance_lock.tryLock(0)  # the first window closed before listening
-    icon = QIcon(str(WEB / "img" / "icon.ico"))
+    icon = QIcon(str(WEB / "img" / "solidsmurfs.ico"))
     qapp.setWindowIcon(icon)
 
     class Bridge(QObject):

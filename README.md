@@ -1,3 +1,5 @@
+<img src="solidsmufs/web/img/icon-256.png" alt="SolidSmurfs logo" width="96">
+
 # SolidSmurfs
 
 Wagner Machine Co.'s 3D part viewer for Windows. It looks and works like SolidWorks (menus,

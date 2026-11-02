@@ -1,7 +1,7 @@
 """Make the app icon from web/img/icon.svg (the SolidSmurfs cube: blue, an S on each side face, on Wagner
 navy).
 
-Writes web/img/icon.ico (all the sizes Windows asks for) and web/img/icon-256.png.
+Writes web/img/solidsmurfs.ico (all the sizes Windows asks for) and web/img/icon-256.png.
 
     .venv\\Scripts\\python tools\\make_icon.py
 """
@@ -50,9 +50,9 @@ def main():
         out += struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(data), offset)
         offset += len(data)
     out += b"".join(d for _, d in images)
-    (IMG / "icon.ico").write_bytes(out)
+    (IMG / "solidsmurfs.ico").write_bytes(out)
     (IMG / "icon-256.png").write_bytes(images[-1][1])
-    print("wrote", IMG / "icon.ico", "and icon-256.png")
+    print("wrote", IMG / "solidsmurfs.ico", "and icon-256.png")
 
 
 if __name__ == "__main__":
