@@ -256,6 +256,63 @@ def oriented_axes(points):
     return ax
 
 
+def reference_axes(points, dirs):
+    """Box axes (length, width, height) set by picked faces or edges, like SolidWorks' Bounding Box
+    "Reference Face/Plane": the first direction is the height; a second one (made square to it) is the
+    length; with only one, length and width are the smallest rectangle around the points in that plane."""
+    z = unit(np.asarray(dirs[0], np.float64))
+    x = None
+    if len(dirs) > 1:
+        d = np.asarray(dirs[1], np.float64)
+        d = d - z * float(d @ z)
+        if np.linalg.norm(d) > 1e-6:
+            x = unit(d)
+    if x is None:
+        pts = np.asarray(points, np.float64)
+        if len(pts) > 60000:
+            pts = pts[np.random.default_rng(0).choice(len(pts), 60000, replace=False)]
+        a = unit(np.cross(z, [1.0, 0, 0] if abs(z[0]) < 0.9 else [0, 1.0, 0]))
+        b = np.cross(z, a)
+        hull = _hull_2d(np.stack([pts @ a, pts @ b], axis=1))
+        # the smallest rectangle around a convex outline has a side along one of its edges
+        best_area, t = None, 0.0
+        for p, q in zip(hull, np.roll(hull, -1, axis=0)):
+            e = q - p
+            if not e.any():
+                continue
+            ang = float(np.arctan2(e[1], e[0]))
+            c, s = np.cos(ang), np.sin(ang)
+            r = hull @ np.array([[c, -s], [s, c]])
+            area = float(np.prod(np.ptp(r, axis=0)))
+            if best_area is None or area < best_area - 1e-12:
+                best_area, t = area, ang
+        x = np.cos(t) * a + np.sin(t) * b
+        y = np.cross(z, x)
+        q = np.asarray(points, np.float64)
+        if np.ptp(q @ y) > np.ptp(q @ x):  # length is the longer of the two
+            x = y
+    y = np.cross(z, x)
+    return np.array([x, y, z])
+
+
+def _hull_2d(pts):
+    """Convex hull of 2-D points (Andrew's monotone chain), counter-clockwise, as an (n, 2) array."""
+    pts = np.unique(np.round(pts, 9), axis=0)
+    if len(pts) < 3:
+        return pts
+    cross = lambda o, a, b: (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lower, upper = [], []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    for p in pts[::-1]:
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return np.array(lower[:-1] + upper[:-1])
+
+
 def _rotate_axes(axes, k, ang):
     i, j = [n for n in range(3) if n != k]
     cs, sn = np.cos(ang), np.sin(ang)

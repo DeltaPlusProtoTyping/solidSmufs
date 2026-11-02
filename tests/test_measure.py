@@ -24,7 +24,19 @@ HOLES = [((10.0, 10.0), 8.0), ((30.0, 10.0), 6.0)]  # (centre x, y), diameter
 TOL = 1e-6
 
 
-def _make_block(path):
+def _make_block(path, turn=None):
+    """Write the block as STEP, optionally turned (turn = [(axis, degrees), ...] about the origin). Built in
+    a process of its own so its gmsh session can't disturb the viewer's."""
+    import multiprocessing as mp
+
+    p = mp.get_context("spawn").Process(target=_build_block, args=(str(path), turn))
+    p.start()
+    p.join(120)
+    if p.exitcode != 0 or not Path(path).is_file():
+        raise RuntimeError("could not build the test block")
+
+
+def _build_block(path, turn):
     import gmsh
 
     gmsh.initialize()
@@ -33,7 +45,9 @@ def _make_block(path):
     occ = gmsh.model.occ
     box = occ.addBox(0, 0, 0, L, W, H)
     cyls = [(3, occ.addCylinder(x, y, -1, 0, 0, H + 2, d / 2)) for (x, y), d in HOLES]
-    occ.cut([(3, box)], cyls)
+    out, _ = occ.cut([(3, box)], cyls)
+    for axis, deg in turn or []:
+        occ.rotate(out, 0, 0, 0, *axis, math.radians(deg))
     occ.synchronize()
     gmsh.write(str(path))
     gmsh.finalize()
@@ -144,6 +158,63 @@ class BlockWithHoles(unittest.TestCase):
         np.testing.assert_allclose(world["size"], [L, W, H], atol=1e-6)
         best = self.s.bbox(None, "oriented")
         np.testing.assert_allclose(sorted(best["size"], reverse=True), [L, W, H], atol=1e-6)
+
+
+class BoxAlignedToPickedFaces(unittest.TestCase):
+    """The block turned 30° about Z and tipped 20° about X, so no box along X / Y / Z fits it."""
+
+    @classmethod
+    def setUpClass(cls):
+        from solidsmufs.kernel.worker import Session
+
+        cls.dir = Path(tempfile.mkdtemp(prefix="solidsmufs-test-"))
+        step = cls.dir / "turned.step"
+        cls.turn = [((0, 0, 1), 30.0), ((1, 0, 0), 20.0)]
+        _make_block(step, cls.turn)
+        cls.s = Session()
+        cls.s.load(str(step), "normal")
+        cls.m = cls.s.model
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def turned(self, v):
+        """Where a direction of the unturned block points now."""
+        v = np.asarray(v, float)
+        for axis, deg in self.turn:
+            a, t = np.asarray(axis, float), math.radians(deg)
+            v = v * math.cos(t) + np.cross(a, v) * math.sin(t) + a * (a @ v) * (1 - math.cos(t))
+        return v
+
+    def face_along(self, n):
+        n = self.turned(n)
+        for f, t in enumerate(self.m.face_type):
+            if t == "plane" and abs(abs(np.dot(self.m.face_params[f]["normal"], n)) - 1) < 1e-6:
+                return {"kind": "face", "index": f}
+        self.fail("no such face")
+
+    def test_world_box_is_bigger_than_the_block(self):
+        size = self.s.bbox(None, "world")["size"]
+        self.assertGreater(float(np.prod(size)), L * W * H * 1.2)
+
+    def test_one_face_sets_the_height_and_fits_the_rest(self):
+        res = self.s.bbox(None, "reference", [self.face_along((0, 0, 1))])
+        np.testing.assert_allclose(res["size"], [L, W, H], atol=1e-6)
+        self.assertAlmostEqual(abs(float(np.dot(res["axes"][2], self.turned((0, 0, 1))))), 1.0, places=9)
+
+    def test_second_face_sets_the_length_direction(self):
+        res = self.s.bbox(None, "reference", [self.face_along((0, 0, 1)), self.face_along((0, 1, 0))])
+        np.testing.assert_allclose(res["size"], [W, L, H], atol=1e-6)  # length now runs along the 20 mm side
+
+    def test_a_hole_sets_the_height_along_its_axis(self):
+        hole = next(f for f, t in enumerate(self.m.face_type) if t == "cylinder")
+        res = self.s.bbox(None, "reference", [{"kind": "face", "index": hole}])
+        np.testing.assert_allclose(res["size"], [L, W, H], atol=1e-6)
+
+    def test_asks_for_a_usable_face(self):
+        with self.assertRaises(ValueError):
+            self.s.bbox(None, "reference", [])
 
 
 if __name__ == "__main__":

@@ -118,7 +118,11 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
 - **Mass Properties:** pick a material (or a density); the report is in SolidWorks' format: mass,
   volume, surface area, center of mass, principal axes and moments, inertia at the center of mass
   and at the origin.
-- **Section Properties** of flat faces, **Bounding Box** (best fit or aligned), **Statistics**.
+- **Section Properties** of flat faces, **Statistics**.
+- **Bounding Box:** best fit (the smallest box, for stock), aligned to the Front / Top / Right planes,
+  or aligned to selected faces: pick a flat or round face (or a straight edge) and the box stands on
+  it, with length and width fitted as tight as they go; Ctrl+click a second face to set the length
+  direction too. Sizes are exact, from the true surfaces.
 - **Stock Size:** smallest block (and round bar, for round parts) with allowance and rounding,
   plus stock weight. **Hole Report:** every hole by diameter, count and depth, matched to tap
   drills, clearance holes and standard drills. **Quote Summary:** all of it in one copyable list.

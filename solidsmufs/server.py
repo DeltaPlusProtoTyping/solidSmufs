@@ -293,7 +293,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json(doc.request("massprops", timeout=300, bodies=b.get("bodies"),
                                           density=b.get("density", 1.0)))
         if what == "bbox":
-            return self._json(doc.request("bbox", timeout=300, bodies=b.get("bodies"), mode=b.get("mode", "world")))
+            return self._json(doc.request("bbox", timeout=300, bodies=b.get("bodies"), mode=b.get("mode", "world"),
+                                          refs=b.get("refs")))
         if what == "sectionprops":
             return self._json(doc.request("section_props", timeout=120, faces=b.get("faces", [])))
         if what == "holes":

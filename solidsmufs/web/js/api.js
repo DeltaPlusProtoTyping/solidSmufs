@@ -29,7 +29,7 @@ export const api = {
   reload: (id, quality, config) => call('POST', `/api/docs/${id}/reload`, config === undefined ? { quality } : { quality, config }),
   measure: (id, selection, options) => call('POST', `/api/docs/${id}/measure`, { selection, options }),
   massprops: (id, bodies, density) => call('POST', `/api/docs/${id}/massprops`, { bodies, density }),
-  bbox: (id, bodies, mode) => call('POST', `/api/docs/${id}/bbox`, { bodies, mode }),
+  bbox: (id, bodies, mode, refs) => call('POST', `/api/docs/${id}/bbox`, { bodies, mode, refs }),
   sectionProps: (id, faces) => call('POST', `/api/docs/${id}/sectionprops`, { faces }),
   holes: (id) => call('POST', `/api/docs/${id}/holes`, {}),
   saveStep: (id) => call('POST', `/api/docs/${id}/save-step`, {}),

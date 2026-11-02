@@ -309,16 +309,22 @@ class Session:
             res = massprops.mesh_mass(m, bodies, 1.0 if density is None else float(density))
         return jsonable(res)
 
-    def bbox(self, bodies=None, mode="world"):
+    def bbox(self, bodies=None, mode="world", refs=None):
+        """Exact box around the bodies: along world XYZ, best fit ("oriented"), or "reference": aligned to
+        picked faces / edges (refs: [{"kind", "index"}]; the first sets the height direction)."""
         m = self.model
         bodies = list(range(len(m.bodies))) if bodies is None else [int(b) for b in bodies]
         axes = None
-        if mode == "oriented":
+        if mode in ("oriented", "reference"):
             pts = [m.face_triangles(f)[0] for b in bodies
                    for f in range(m.bodies[b]["faces"][0], sum(m.bodies[b]["faces"]))]
             pts = [p for p in pts if len(p)]
+            dirs = [d for d in (_direction(m, r) for r in refs or []) if d is not None]
+            if mode == "reference" and not dirs:
+                raise ValueError("Pick a flat or round face (or a straight edge) to line the box up with.")
             if pts:
-                axes = massprops.oriented_axes(np.concatenate(pts))
+                pts = np.concatenate(pts)
+                axes = massprops.reference_axes(pts, dirs) if mode == "reference" else _best_fit_axes(m, bodies, pts)
         if m.kind == "brep":
             res = massprops.cad_bbox(m, bodies, axes)
         else:
@@ -439,6 +445,46 @@ class Session:
                     if face_area(m, g) <= np.pi * hole["r"] ** 2 * 1.02:
                         return True
         return False
+
+
+def _best_fit_axes(m, bodies, pts):
+    """The smallest box we can find: the rotation search, and boxes standing on each of the biggest flat
+    faces and on its own axes (machined parts nearly always fit tightest square to a flat face)."""
+    cands = [massprops.oriented_axes(pts)]
+    faces = [f for b in bodies for f in range(m.bodies[b]["faces"][0], sum(m.bodies[b]["faces"]))
+             if m.face_type[f] == "plane" and (m.face_params[f] or {}).get("normal") is not None]
+    faces.sort(key=lambda f: -(m.exact_area(f) or 0.0) if hasattr(m, "exact_area") else -m.face_tcount[f])
+    normals = []
+    for f in faces:
+        n = np.asarray(m.face_params[f]["normal"], np.float64)
+        if all(abs(float(n @ k)) < 0.9999 for k in normals):
+            normals.append(n)
+        if len(normals) == 5:
+            break
+    for d in [*normals, *cands[0]]:
+        cands.append(massprops.reference_axes(pts, [d]))
+    vol = lambda ax: float(np.prod(np.ptp(pts @ np.asarray(ax).T, axis=0)))
+    best = min(cands, key=vol)
+    order = np.argsort(-np.ptp(pts @ best.T, axis=0))  # longest first, right-handed, as before
+    best = best[order]
+    if np.linalg.det(best) < 0:
+        best[2] = -best[2]
+    return best
+
+
+def _direction(m, ent):
+    """The direction a picked entity lines a box up with: a flat face's normal, a round face's axis, a
+    straight edge's direction or a circle's axis. None when it has none (a spline face, a vertex)."""
+    kind, i = ent.get("kind"), int(ent.get("index", -1))
+    if kind == "face" and 0 <= i < len(m.face_type):
+        p = m.face_params[i] or {}
+        d = p.get("normal") if m.face_type[i] == "plane" else p.get("axis")
+    elif kind == "edge" and 0 <= i < len(m.edge_type):
+        p = m.edge_params[i] or {}
+        d = p.get("dir") if m.edge_type[i] == "line" else p.get("normal") if m.edge_type[i] == "circle" else None
+    else:
+        d = None
+    return None if d is None else np.asarray(d, np.float64)
 
 
 def _set_material(m):

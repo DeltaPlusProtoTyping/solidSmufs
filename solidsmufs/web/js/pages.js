@@ -174,11 +174,17 @@ export class Pages {
     if (!this.meta) return;
     const app = this.app, o = this.bboxOpts;
     let result = null, busy = false;
+    // reference faces / edges for "Aligned to selected faces": the first sets the height, a second the length
+    const refsFromSelection = () => app.sel.filter((s) => s.kind === 'face' || s.kind === 'edge').slice(0, 2).map((s) => ({ kind: s.kind, index: s.index }));
     const compute = async () => {
+      if (o.mode === 'reference') {
+        o.refs = refsFromSelection();
+        if (!o.refs.length) { result = null; this.viewer.showBox(null); this.mgr.updatePM(); return; }
+      }
       busy = true;
       this.mgr.updatePM();
       const bodies = this.meta.bodies.map((_, i) => i).filter((i) => o.hidden || this.viewer.bodies[i]?.visible);
-      try { result = await api.bbox(app.active.id, bodies, o.mode); } catch (e) { result = { error: e.message }; }
+      try { result = await api.bbox(app.active.id, bodies, o.mode, o.mode === 'reference' ? o.refs : undefined); } catch (e) { result = { error: e.message }; }
       busy = false;
       if (result && !result.error) this.viewer.showBox(result);
       this.mgr.updatePM();
@@ -191,6 +197,13 @@ export class Pages {
         { title: 'Reference Face/Plane', body: [
           h('label', { class: 'chk' }, h('input', { type: 'radio', name: 'bbm', checked: o.mode === 'oriented', onchange: () => { o.mode = 'oriented'; compute(); } }), 'Best fit (smallest box, for stock)'),
           h('label', { class: 'chk' }, h('input', { type: 'radio', name: 'bbm', checked: o.mode === 'world', onchange: () => { o.mode = 'world'; compute(); } }), 'Aligned to Front / Top / Right planes'),
+          h('label', { class: 'chk' }, h('input', { type: 'radio', name: 'bbm', checked: o.mode === 'reference', onchange: () => { o.mode = 'reference'; compute(); } }), 'Aligned to selected faces'),
+          ...(o.mode === 'reference' ? [
+            h('div', { class: 'selbox active' }, ...(o.refs?.length ? o.refs.map((r, i) => h('div', { class: 'si' },
+              h('span', { html: tool(r.kind), style: { width: '13px', height: '13px', display: 'inline-flex' } }),
+              h('span', { text: `${app.describe(r, true)} — ${i === 0 ? 'height' : 'length'}` })))
+              : [h('div', { class: 'hint', style: { padding: '4px 6px' }, text: 'Click a flat or round face (or a straight edge) for the height direction. Ctrl+click a second one to set the length direction.' })])),
+          ] : []),
         ] },
         { title: 'Options', body: [
           h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: o.hidden, onchange: (e) => { o.hidden = e.target.checked; compute(); } }), 'Include hidden bodies'),
@@ -199,7 +212,7 @@ export class Pages {
           : result?.error ? [h('div', { class: 'hint', style: { color: 'var(--bad)' }, text: result.error })]
             : result ? (() => {
               const dims = o.mode === 'oriented' ? [...result.size].sort((a, b) => b - a) : result.size;
-              const names = o.mode === 'oriented' ? ['Length', 'Width', 'Thickness'] : ['X', 'Y', 'Z'];
+              const names = { oriented: ['Length', 'Width', 'Thickness'], reference: ['Length', 'Width', 'Height'] }[o.mode] || ['X', 'Y', 'Z'];
               const text = dims.map((d) => u.len(d)).join(' x ');
               return [
                 ...dims.map((d, i) => h('div', { class: 'pm-row' }, h('label', { text: names[i] }), h('b', { text: u.len(d) }))),
@@ -211,6 +224,10 @@ export class Pages {
       ],
       onOK: () => app.manager.refresh(),
       onCancel: () => { this.viewer.showBox(null); app.manager.refresh(); },
+      onSelection: () => {
+        const key = (rs) => JSON.stringify(rs || []);
+        if (o.mode === 'reference' && key(refsFromSelection()) !== key(o.refs)) compute();
+      },
     };
     this.mgr.openPM(page);
     compute();
