@@ -792,7 +792,7 @@ export class Viewer {
   _buildReferences(highlight = null) {
     this.refGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.refGroup.clear();
-    this.labels = this.labels.filter((l) => { if (l.ref) { l.el.remove(); return false; } return true; });
+    this.labels = this.labels.filter((l) => { if (l.ref) { l.el.remove(); l.lead?.remove(); return false; } return true; });
     if (!this.model) return;
     const sel = new Set(this.selection.filter((s) => s.kind === 'plane').map((s) => s.index));
     const hov = this.hover?.kind === 'plane' ? this.hover.index : -1;
@@ -1141,15 +1141,34 @@ export class Viewer {
   showBox(b) {
     this.boxGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.boxGroup.clear();
-    this.labels = this.labels.filter((l) => { if (l.box) { l.el.remove(); return false; } return true; });
+    this.labels = this.labels.filter((l) => { if (l.box) { l.el.remove(); l.lead?.remove(); return false; } return true; });
     this.bboxShown = !!b;
+    this.shownBox = null;
     if (!b) { this.requestRender(); return; }
     const ax = b.axes.map((a) => new THREE.Vector3(...a));
     const corner = (i) => ax[0].clone().multiplyScalar(i & 1 ? b.max[0] : b.min[0]).addScaledVector(ax[1], i & 2 ? b.max[1] : b.min[1]).addScaledVector(ax[2], i & 4 ? b.max[2] : b.min[2]);
     const pts = [];
     for (let i = 0; i < 8; i++) for (const bit of [1, 2, 4]) if (!(i & bit)) pts.push(...corner(i).toArray(), ...corner(i | bit).toArray());
     this._fatLine(pts, 0xd99a1c, 1.6, { group: this.boxGroup, noClip: true, order: 30, dashed: true, dashSize: this.rig.radius * 0.03, gapSize: this.rig.radius * 0.015 });
+    // its size along each side, on the three edges that meet at the corner nearest the viewer (moved as
+    // the view turns, in _placeLabels), the way SolidWorks dimensions it
+    const fmt = this.formatLength || ((mm) => `${mm.toFixed(2)} mm`);
+    [1, 2, 4].forEach((bit, k) => {
+      this.addLabel(corner(0), fmt(b.max[k] - b.min[k]), 'box');
+      Object.assign(this.labels[this.labels.length - 1], { box: true, boxBit: bit });
+    });
+    this.boxCorner = corner;
+    this.shownBox = b;
     this.requestRender();
+  }
+
+  // the box corner nearest the viewer; when several are equally near (looking straight at a side), the one
+  // lowest and furthest left on screen, so the sizes read along the bottom and left like a drawing
+  _nearBoxCorner() {
+    const eye = this.rig.dir(), c = [...Array(8).keys()].map((i) => this.boxCorner(i));
+    const depth = c.map((p) => p.dot(eye)), top = Math.max(...depth), tol = this.rig.radius * 1e-6;
+    const score = (i) => { const s = this.project(c[i]); return s.y - s.x; };
+    return [...Array(8).keys()].filter((i) => depth[i] > top - tol).reduce((a, i) => (score(i) > score(a) ? i : a));
   }
 
   // ================================================================== View Selector cube
@@ -1227,6 +1246,10 @@ export class Viewer {
   // moves to the nearest free spot around its point, with a thin leader line back to it.
   _placeLabels() {
     const rank = (l) => (l.el.classList.contains('primary') ? 0 : l.el.classList.contains('small') ? 2 : 1);
+    if (this.shownBox && this.labels.some((l) => l.boxBit)) {
+      const near = this._nearBoxCorner();
+      for (const l of this.labels) if (l.boxBit) l.pos.copy(this.boxCorner(near)).add(this.boxCorner(near ^ l.boxBit)).multiplyScalar(0.5);
+    }
     const items = [];
     for (const l of this.labels) {
       const s = this.project(l.pos);
@@ -1236,6 +1259,11 @@ export class Viewer {
     }
     items.sort((a, b) => a.rank - b.rank);
     const PAD = 3, placed = [];
+    const hud = this.container.querySelector('.hud'); // labels keep clear of the heads-up toolbar too
+    if (hud && hud.offsetWidth) {
+      const r = hud.getBoundingClientRect(), c = this.canvas.getBoundingClientRect();
+      placed.push({ x: r.left - c.left + r.width / 2, y: r.top - c.top + r.height / 2, w: r.width, h: r.height });
+    }
     const hits = (x, y, w, h) => placed.some((r) => Math.abs(x - r.x) * 2 < w + r.w + PAD * 2 && Math.abs(y - r.y) * 2 < h + r.h + PAD * 2);
     for (const it of items) {
       let x = it.s.x, y = it.s.y;

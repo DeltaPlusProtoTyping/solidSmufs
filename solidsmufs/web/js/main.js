@@ -29,6 +29,7 @@ class App {
     this.prefs = { ...DEFAULTS };
     this.units = new Units('MMGS');
     this.viewer = new Viewer(this.$('viewport'));
+    this.viewer.formatLength = (mm) => this.units.len(mm); // labels drawn in the graphics area use the document units
     this.docs = [];
     this.active = null;
     this.sel = [];
@@ -111,6 +112,7 @@ class App {
   setSystem(system, decimals = null) {
     this.units.setSystem(system, decimals);
     this.save({ system, decimals });
+    if (this.viewer.shownBox) this.viewer.showBox(this.viewer.shownBox); // its size labels in the new units
     this.refreshAll();
     this.tools.refresh();
   }
