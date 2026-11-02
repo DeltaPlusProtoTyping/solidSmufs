@@ -317,7 +317,7 @@ export class Shell {
   // ------------------------------------------------------------------ status bar
   _buildStatus() {
     const app = this.app;
-    document.getElementById('sb-product').innerHTML = `<img src="img/brand/wmc-logo-white.svg" alt=""> ${PRODUCT} 2026`;
+    document.getElementById('sb-product').innerHTML = `<img src="img/icon.svg" alt=""> ${PRODUCT} 2026`;
     const ub = document.getElementById('sb-units');
     ub.addEventListener('click', () => menu(ub, [
       { head: 'Unit system' },

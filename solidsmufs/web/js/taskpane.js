@@ -75,7 +75,10 @@ export class TaskPane {
     const app = this.app;
     body.append(
       h('div', { style: { padding: '14px 12px 10px', background: 'var(--title-bg)', color: '#fff' } },
-        h('img', { src: 'img/brand/wmc-logo-white.svg', style: { height: '34px' } }),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+          h('img', { src: 'img/icon.svg', style: { height: '36px' } }),
+          h('div', {}, h('div', { style: { font: '600 17px var(--brand)' }, text: PRODUCT }),
+            h('div', { style: { fontSize: '11px', opacity: 0.8 }, text: 'by Wagner Machine Co.' }))),
         h('div', { style: { font: 'italic 12px var(--serif)', marginTop: '6px', opacity: 0.85 }, text: 'The difficult we do right away, the impossible will take a little longer.' })),
       h('div', { class: 'fx-section', text: 'Get started' }),
       ...['open', 'explorer', 'help', 'options'].map((id) => {

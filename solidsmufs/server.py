@@ -245,7 +245,7 @@ class _Handler(BaseHTTPRequestHandler):
                 out.write_bytes(base64.b64decode(data.split(",", 1)[1]))
                 return self._json({"path": str(out)})
             if parts == ["title"] and method == "POST":
-                self.ctx.native.set_title(self._jbody().get("title", "WMC Viewer"))
+                self.ctx.native.set_title(self._jbody().get("title", "SolidSmurfs"))
                 return self._json({"ok": True})
             if parts == ["fs", "roots"]:
                 return self._json(_fs_roots())

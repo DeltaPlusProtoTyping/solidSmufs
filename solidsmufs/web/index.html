@@ -5,7 +5,7 @@
   <meta name="color-scheme" content="light dark">
   <script>document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') === 'dark' ? 'dark' : 'light';</script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WMC Viewer</title>
+  <title>SolidSmurfs</title>
   <link rel="icon" href="img/icon-256.png">
   <link rel="stylesheet" href="css/app.css">
   <script type="importmap">
@@ -16,12 +16,12 @@
   <div class="app" id="app">
     <!-- title bar: logo menu, menus, quick access toolbar, document title, command search -->
     <header class="titlebar">
-      <button class="logo" id="logo" title="Wagner Machine Co. — menus">
-        <img src="img/brand/wmc-logo-white.svg" alt="Wagner Machine Co.">
+      <button class="logo" id="logo" title="SolidSmurfs by Wagner Machine Co. — menus">
+        <img src="img/icon.svg" alt=""><span class="logo-name">Solid<b>Smurfs</b></span>
       </button>
       <nav class="menubar" id="menubar"></nav>
       <div class="qat" id="qat"></div>
-      <div class="doc-title" id="doc-title">WMC Viewer</div>
+      <div class="doc-title" id="doc-title">SolidSmurfs</div>
       <div class="title-right">
         <label class="cmd-search" title="Search commands (Ctrl+F)">
           <i data-icon="search"></i><input id="cmd-search" placeholder="Search commands" autocomplete="off" spellcheck="false">

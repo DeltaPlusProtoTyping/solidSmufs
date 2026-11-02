@@ -44,7 +44,7 @@ def run(argv):
 
     if sys.platform == "win32":
         try:
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WagnerMachine.WMCViewer")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WagnerMachine.SolidSmurfs")
         except Exception:
             pass
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
@@ -176,7 +176,7 @@ def run(argv):
     # a profile kept on disk (Qt's default one is thrown away at exit): compiled scripts and shaders
     # are reused on the next launch, and the page's saved state (dialog positions) survives
     web_dir = Path(os.environ.get("LOCALAPPDATA") or settings.folder()) / "SolidSmufs" / "web"
-    profile = QWebEngineProfile("WMCViewer", qapp)
+    profile = QWebEngineProfile("SolidSmurfs", qapp)
     profile.setPersistentStoragePath(str(web_dir / "storage"))
     profile.setCachePath(str(web_dir / "cache"))
     profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)

@@ -1,5 +1,5 @@
 // Shared names and tables (kept apart from main.js so modules don't import each other in a circle).
-export const PRODUCT = 'WMC Viewer';
+export const PRODUCT = 'SolidSmurfs';
 
 export const STYLES = [
   { id: 'shadedEdges', label: 'Shaded With Edges', icon: 'stShadedEdges' },

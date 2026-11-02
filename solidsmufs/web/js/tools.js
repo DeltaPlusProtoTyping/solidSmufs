@@ -656,8 +656,10 @@ export class Tools {
 
   about() {
     modal(`About ${PRODUCT}`, h('div', { class: 'stack', style: { alignItems: 'center', textAlign: 'center', padding: '10px 8px' } },
-      h('img', { src: 'img/brand/wmc-logo.svg', style: { height: '70px', background: '#fff', padding: '6px 10px', borderRadius: '4px' } }),
-      h('div', { style: { font: '600 18px var(--brand)', marginTop: '6px' }, text: `${PRODUCT} 2026` }),
+      h('img', { src: 'img/icon.svg', style: { height: '84px' } }),
+      h('div', { style: { font: '600 20px var(--brand)', marginTop: '4px' }, text: `${PRODUCT} 2026` }),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--muted)' } }, 'by',
+        h('img', { src: 'img/brand/wmc-logo.svg', style: { height: '28px', background: '#fff', padding: '3px 6px', borderRadius: '4px' } })),
       h('div', { style: { font: 'italic 13px var(--serif)', color: 'var(--muted)' }, text: 'The difficult we do right away, the impossible will take a little longer.' }),
       h('div', { class: 'hint', html: 'Wagner Machine Co. · 3200 Farber Drive, Champaign, Illinois<br>Reads STEP, IGES, SolidWorks, Parasolid and mesh files. Geometry by OpenCASCADE (via gmsh); graphics by three.js.' })),
     { width: 470 });

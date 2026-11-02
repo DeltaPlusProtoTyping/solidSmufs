@@ -2,4 +2,4 @@
 with SolidWorks-style viewing and measuring tools."""
 
 __version__ = "0.1.0"
-APP_NAME = "WMC Viewer"
+APP_NAME = "SolidSmurfs"

@@ -1,4 +1,4 @@
-/* WMC Viewer — a SolidWorks-style workspace in Wagner Machine Co. colors. */
+/* SolidSmurfs — a SolidWorks-style workspace in Wagner Machine Co. colors. */
 @font-face { font-family: "Poppins"; src: url("../fonts/poppins-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Poppins"; src: url("../fonts/poppins-500.woff2") format("woff2"); font-weight: 500; font-display: swap; }
 @font-face { font-family: "Poppins"; src: url("../fonts/poppins-600.woff2") format("woff2"); font-weight: 600; font-display: swap; }
@@ -160,7 +160,9 @@ i[data-icon] svg { width: 100%; height: 100%; }
 /* ------------------------------------------------------------------ title bar */
 .titlebar { display: flex; align-items: center; gap: 4px; background: var(--title-bg); color: var(--title-ink); padding: 0 8px 0 0; min-width: 0; position: relative; z-index: 6; box-shadow: 0 1px 0 rgba(0, 0, 0, .25); }
 .logo { height: 100%; padding: 0 12px 0 10px; border: 0; background: transparent; display: flex; align-items: center; cursor: pointer; border-right: 1px solid var(--title-line); }
-.logo img { height: 23px; display: block; }
+.logo img { height: 24px; display: block; }
+.logo-name { margin-left: 8px; font: 500 15px/1 var(--brand); letter-spacing: .2px; color: var(--title-ink); white-space: nowrap; }
+.logo-name b { font-weight: 700; color: #9ec2ff; }
 .logo:hover, .logo.open { background: var(--title-hover); }
 .menubar { display: flex; height: 100%; }
 .menubar button { height: 100%; padding: 0 10px; border: 0; background: transparent; color: var(--title-ink); cursor: default; font-size: 12.5px; }
@@ -401,6 +403,7 @@ input[type="range"] { accent-color: var(--accent); width: 100%; }
 .welcome .wl-brand img { height: 64px; }
 .welcome .wl-brand .wl-title { font: 600 24px var(--brand); color: var(--navy); line-height: 1.1; }
 [data-theme="dark"] .welcome .wl-brand .wl-title { color: #c9d6f5; }
+.welcome .wl-by { font: 500 12px var(--brand); color: var(--muted); margin-top: 3px; }
 .welcome .wl-brand .wl-sub { font: italic 400 13px var(--serif); color: var(--muted); margin-top: 4px; }
 .welcome .wl-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-sm); overflow: hidden; }
 .welcome .wl-row { display: grid; grid-template-columns: 220px 1fr; min-height: 270px; }
@@ -469,7 +472,7 @@ input[type="range"] { accent-color: var(--accent); width: 100%; }
 .statusbar { display: flex; align-items: center; gap: 0; background: var(--status-bg); color: var(--status-ink); font-size: 11.5px; white-space: nowrap; overflow: hidden; }
 .statusbar > * { padding: 0 10px; height: 100%; display: flex; align-items: center; }
 .sb-product { font: 500 11.5px var(--brand); color: #fff; border-right: 1px solid var(--title-line); gap: 6px; }
-.sb-product img { height: 13px; }
+.sb-product img { height: 15px; }
 .sb-msg { display: block !important; line-height: var(--status-h); overflow: hidden; text-overflow: ellipsis; color: var(--status-ink); min-width: 0; }
 .sb-msg b { color: #fff; font-weight: 600; }
 .sb-msg .sep { color: var(--status-muted); margin: 0 7px; }

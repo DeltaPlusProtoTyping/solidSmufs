@@ -1,4 +1,4 @@
-# WMC Viewer
+# SolidSmurfs
 
 Wagner Machine Co.'s 3D part viewer for Windows. It looks and works like SolidWorks (menus,
 CommandManager, FeatureManager tree, PropertyManager, heads-up view toolbar, Measure and Mass
@@ -7,7 +7,7 @@ any CAD program installed.
 
 ## Run it
 
-Double-click the **WMC Viewer** shortcut on the desktop (drop files on it to open them), or
+Double-click the **SolidSmurfs** shortcut on the desktop (drop files on it to open them), or
 `SolidSmufs.cmd` in this folder. To put the shortcut back on a desktop:
 `powershell -ExecutionPolicy Bypass -File tools\make-shortcut.ps1`. To open a file directly:
 
@@ -18,7 +18,7 @@ SolidSmufs.cmd "C:\path\to\part.step"
 You can also drag files onto the window. Opening another file while the viewer is running adds a
 tab to the window that's already open.
 
-**Right-click menu:** right-click any part in Explorer → **Open with WMC Viewer** (select several to
+**Right-click menu:** right-click any part in Explorer → **Open with SolidSmurfs** (select several to
 open them as tabs). Double-click still opens files in SolidWorks or whatever owns them. It's set up
 for the current Windows user (no admin); to add it on another PC, or take it out:
 

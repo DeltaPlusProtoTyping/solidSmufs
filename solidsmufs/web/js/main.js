@@ -1,4 +1,4 @@
-// WMC Viewer: a SolidWorks-style part viewer. The App owns documents, selection, preferences and
+// SolidSmurfs: a SolidWorks-style part viewer. The App owns documents, selection, preferences and
 // the command table; the shell (menus, CommandManager, heads-up toolbar, status bar), the managers
 // (FeatureManager / PropertyManager), dialogs and the task pane all work through it.
 import * as THREE from 'three';
@@ -641,8 +641,9 @@ class App {
     const recent = (this.recent || []).slice(0, 8);
     el.replaceChildren(h('div', { class: 'welcome' },
       h('div', { class: 'wl-brand' },
-        h('img', { src: this.prefs.theme === 'dark' ? 'img/brand/wmc-logo-white.svg' : 'img/brand/wmc-logo.svg', alt: 'Wagner Machine Co.' }),
+        h('img', { src: 'img/icon.svg', alt: '' }),
         h('div', {}, h('div', { class: 'wl-title', text: PRODUCT }),
+          h('div', { class: 'wl-by', text: 'by Wagner Machine Co.' }),
           h('div', { class: 'wl-sub', text: 'The difficult we do right away, the impossible will take a little longer.' }))),
       h('div', { class: 'wl-card' }, h('div', { class: 'wl-row' },
         h('div', { class: 'wl-actions' },
@@ -663,7 +664,7 @@ class App {
     const err = d.state === 'error';
     const pct = Math.round((d.fraction || 0) * 100);
     el.replaceChildren(h('div', { class: `load-card${err ? ' error' : ''}` },
-      h('div', { class: 'lc-head' }, h('img', { src: 'img/brand/wmc-logo-white.svg', alt: '' }), h('span', { text: err ? 'Could not open the file' : 'Opening' })),
+      h('div', { class: 'lc-head' }, h('img', { src: 'img/icon.svg', alt: '' }), h('span', { text: err ? 'Could not open the file' : 'Opening' })),
       h('div', { class: 'lc-body' },
         h('div', { class: 'lc-name', text: d.name }),
         h('div', { class: 'lc-stage', text: err ? (d.error || 'Could not open this file.') : `${d.stage || 'Working'}…` }),
