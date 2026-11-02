@@ -283,7 +283,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.ctx.docs.close(doc_id)
             return self._json({"ok": True})
         if what == "reload":
-            doc.reload(b.get("quality", doc.quality))
+            doc.reload(b.get("quality", doc.quality), b["config"] if "config" in b else "keep")
             settings.set_ui({"quality": doc.quality})
             return self._json(doc.status())
         if what == "measure":

@@ -89,6 +89,21 @@ class SamplePartLooks(unittest.TestCase):
         (rgb,) = appearance.colours(model)[0].values()
         np.testing.assert_allclose(rgb, (0.125, 0.737, 0.941), atol=1e-3)  # the blue bracket
 
+    def test_lists_configurations_and_opens_the_one_asked_for(self):
+        from solidsmufs.kernel.worker import Session
+
+        pin = BRACKET.with_name("pin.sldprt")
+        lengths = {}
+        for cid in (0, 1):
+            s = Session()
+            meta = s.open(str(pin), "normal", config=cid)["meta"]
+            self.assertEqual([c["name"] for c in meta["configs"]], ["LONG", "SHORT"])
+            self.assertEqual(meta["config"], cid)
+            b = meta["bbox"]
+            lengths[cid] = max(b[3] - b[0], b[4] - b[1], b[5] - b[2])
+        self.assertAlmostEqual(lengths[0], 38.1, places=3)  # LONG: 1.5 in
+        self.assertAlmostEqual(lengths[1], 12.7, places=3)  # SHORT: 0.5 in
+
     def test_reads_material_density_and_appearance(self):
         pin = appearance.solidworks(str(PIN_304))
         self.assertEqual((pin["material"], pin["density"]), ("AISI 304", 8000.0))

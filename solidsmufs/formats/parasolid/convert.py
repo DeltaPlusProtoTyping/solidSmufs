@@ -80,12 +80,16 @@ def convert(src_path, out_path, config=None):
         ver = parasolid_version(chosen[0][1].version, src.header)
         if ver:
             fmt = f"{fmt} ({ver})"
-    looks = {"material": None, "density": None, "appearances": []}
+    looks = {"material": None, "density": None, "appearances": [], "configurations": []}
+    shown = config  # the SolidWorks configuration shown: the one asked for, else the first that has the part
+    if shown is None:
+        ids = [int(m.group(1)) for n, _m in chosen for m in [re.search(r"Config-(\d+)-", n)] if m]
+        shown = ids[0] if ids else None
     if fmt.startswith("SolidWorks"):
-        looks = appearance.solidworks(src_path, config)
+        looks = appearance.solidworks(src_path, shown)
     return {"bodies": len(items), "faces": n_faces, "format": fmt, "app": src.app, "warnings": warnings,
             "edges_exact": n_exact, "edges_approx": n_fit, "edges_polyline": n_poly,
-            "colours": [list(c) if c else None for c in colours], "translucency": clears, **looks}
+            "colours": [list(c) if c else None for c in colours], "translucency": clears, "config": shown, **looks}
 
 
 def _for_config(transmits, config):

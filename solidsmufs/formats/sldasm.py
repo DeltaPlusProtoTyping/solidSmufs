@@ -47,6 +47,7 @@ class Placement:
     config: int | None  # the part's configuration id (its Config-<n>-Partition), None for its default
     matrix: np.ndarray  # 4x4, millimetres, part coordinates -> assembly coordinates
     path: list  # instance names from the top: ["crank sub-1", "crank-arm-1"]
+    hidden: bool = False  # hidden in the assembly's saved display state (shown greyed in the tree)
 
 
 @dataclass
@@ -56,6 +57,7 @@ class Assembly:
     missing: list = field(default_factory=list)  # (instance path text, file name, why)
     files: list = field(default_factory=list)  # every file read (for the cache key)
     infos: dict = field(default_factory=dict)  # (part file, configuration) -> its translation info (looks)
+    suppressed: list = field(default_factory=list)  # instance path texts left out (suppressed in SolidWorks)
 
 
 @dataclass
@@ -70,7 +72,7 @@ def read(path):
     """The assembly at `path`, flattened to placed parts. Raises UnsupportedFile when it can't be read."""
     path = Path(path)
     asm = Assembly(path.stem)
-    _expand(path, None, np.eye(4), [], asm, [], _Finder())
+    _expand(path, None, np.eye(4), [], asm, [], _Finder(), False)
     if not asm.placements and not asm.missing:
         raise UnsupportedFile("No components were found in this assembly.")
     return asm
@@ -85,7 +87,7 @@ def dependencies(path):
 
 
 # ---------------------------------------------------------------------------------------------- walk
-def _expand(path, config_id, parent, prefix, asm, stack, finder):
+def _expand(path, config_id, parent, prefix, asm, stack, finder, hidden):
     if len(stack) >= MAX_DEPTH or path.resolve() in stack:
         asm.missing.append(("/".join(prefix), path.name, "the assembly refers to itself"))
         return
@@ -96,11 +98,17 @@ def _expand(path, config_id, parent, prefix, asm, stack, finder):
     data = _config_stream(streams, config_id if config_id is not None else active)
     if data is None:
         raise UnsupportedFile(f"{path.name}: no component list was found (an unsupported assembly format?).")
+    states = _states(streams.get("swXmlContents/COMPINSTANCETREE"), config_id if config_id is not None else active)
     for name, cfg_name, matrix in _records(data):
         model = _match(models, name, cfg_name)
         inst = prefix + [name]
         if model is None:
             continue  # records of the same type that aren't parts (lights such as "Directional-1")
+        state = states.get(name, {})
+        if state.get("suppressed"):  # still has a placement record, but SolidWorks doesn't show or count it
+            asm.suppressed.append("/".join(inst))
+            continue
+        hide = hidden or bool(state.get("hidden"))
         file_name = Path(model.saved_path.replace("\\", "/")).name
         if "^" in name:
             asm.missing.append(("/".join(inst), file_name, "a virtual part stored inside the assembly"))
@@ -112,9 +120,9 @@ def _expand(path, config_id, parent, prefix, asm, stack, finder):
         world = parent @ matrix
         ext = found.suffix.lower()
         if ext == ".sldasm":
-            _expand(found, model.config_id, world, inst, asm, stack + [path.resolve()], finder)
+            _expand(found, model.config_id, world, inst, asm, stack + [path.resolve()], finder, hide)
         elif ext == ".sldprt":
-            asm.placements.append(Placement(found, model.config_id, world, inst))
+            asm.placements.append(Placement(found, model.config_id, world, inst, hide))
             if found not in asm.files:
                 asm.files.append(found)
         else:
@@ -145,6 +153,31 @@ def _models(xml):
         if c.get("swMostRecentConfiguration") == "YES" and (c.get("swID") or "").isdigit():
             active = int(c.get("swID"))
     return models, saved_self, active
+
+
+def _states(xml, config_id):
+    """{component instance name ("pin-2"): {"suppressed": bool, "hidden": bool}} for the assembly's own
+    components in configuration `config_id`, from COMPINSTANCETREE: the swConfiguration's swModelRef is the
+    assembly itself in that configuration, and its swReference children carry swSuppressed / swHidden
+    (hidden as in the display state it was saved in). References added since a configuration was last
+    rebuilt carry neither and count as shown."""
+    if not xml:
+        return {}
+    try:
+        root = ET.fromstring(xml.decode("utf-8", "replace"))
+    except ET.ParseError:
+        return {}
+    configs = list(root.iter(NS + "swConfiguration"))
+    cfg = next((c for c in configs if config_id is not None and c.get("swID") == str(config_id)), None)
+    if cfg is None:  # (not `or`: an element without children is falsy)
+        cfg = next((c for c in configs if c.get("swMostRecentConfiguration") == "YES"), configs[0] if configs else None)
+    models = {m.get("id"): m for m in root.iter(NS + "swModel")}
+    top = models.get(cfg.get("swModelRef")) if cfg is not None else None
+    if top is None:
+        return {}
+    return {f"{r.get('swName')}-{r.get('swReferenceNumber')}": {"suppressed": r.get("swSuppressed") == "YES",
+                                                                 "hidden": r.get("swHidden") == "YES"}
+            for r in top.findall(NS + "swReference")}
 
 
 def _config_stream(streams, config_id):

@@ -59,13 +59,14 @@ def solidworks(path, config=None):
     configuration `config` (its Config-<n> id; else the first). Empty values when the file has none."""
     from .containers import sw_streams
 
-    out = {"material": None, "density": None, "appearances": []}
+    out = {"material": None, "density": None, "appearances": [], "configurations": []}
     try:
         streams = sw_streams(path, keep=lambda n: n == "swXmlContents/KeyWords"
                              or re.fullmatch(r"Contents/Config-\d+", n) is not None)
     except Exception:  # not a SolidWorks file we can open: no material, the colours still count
         return out
     out["material"] = _material(streams.get("swXmlContents/KeyWords", b""), config)
+    out["configurations"] = configurations(streams.get("swXmlContents/KeyWords", b""))
     ids = sorted(int(n.rsplit("-", 1)[1]) for n in streams if n.startswith("Contents/Config-"))
     if not ids:
         return out
@@ -106,6 +107,14 @@ def density_for(material, stored):
     if stored is None or (stored == 1000.0 and family is not None and abs(family - 1000) > 100):
         return float(family) if family else stored
     return stored
+
+
+def configurations(keywords):
+    """[{"id": Config-<n> id, "name": "LONG"}, ...]: a part's configurations, in the file's order."""
+    text = keywords.decode("utf-8", "replace")
+    found = re.findall(r'<Configuration id="(\d+)" Name="([^"]*)"[^>]*Type="ConfigurationManager"', text)
+    unescape = lambda s: s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&amp;", "&")
+    return [{"id": int(cid), "name": unescape(name)} for cid, name in found]
 
 
 def _material(keywords, config):

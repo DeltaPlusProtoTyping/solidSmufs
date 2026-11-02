@@ -28,14 +28,15 @@ class Session:
         self.model = None
         self.exact = False  # is the exact OpenCASCADE model loaded (not just a cached tessellation)?
         self.path = self.quality = None
+        self.config = None  # SolidWorks part configuration shown (its Config-<n> id); None: the file's first
         self.post = None  # work to do after the answer has gone out (writing the cache)
 
     # ------------------------------------------------------------------ loading
-    def open(self, path, quality="normal", progress=lambda *a: None):
+    def open(self, path, quality="normal", progress=lambda *a: None, config=None):
         """First look at a file: a cached tessellation when there is one (instant), else a full load.
         {"meta", "blob", "exact"}; when exact is False, ensure_exact() loads the real geometry."""
-        self.path, self.quality = path, quality
-        hit = _mesh_cache_read(path, quality)
+        self.path, self.quality, self.config = path, quality, config
+        hit = _mesh_cache_read(path, quality, config)
         if hit is not None:
             progress("Opening from cache", 0.5)
             self.model, meta, blob = hit
@@ -55,7 +56,7 @@ class Session:
         ext = Path(path).suffix.lower()
         try:
             if ext in PARASOLID_FORMATS:
-                step, _info, cleanup = self._parasolid_step(path, ext, progress)
+                step, _info, cleanup = self._parasolid_step(path, ext, progress, self.config)
                 try:
                     gmsh = cad.import_only(path, source=step)
                 finally:
@@ -79,7 +80,9 @@ class Session:
         meta, blob = self.load(path, quality, progress)  # the cache didn't match: start over
         return {"changed": True, "meta": meta, "blob": blob}
 
-    def load(self, path, quality="normal", progress=lambda *a: None):
+    def load(self, path, quality="normal", progress=lambda *a: None, config="keep"):
+        if config != "keep":
+            self.config = config
         ext = Path(path).suffix.lower()
         name = Path(path).name
         if ext not in ALL_FORMATS:
@@ -103,8 +106,8 @@ class Session:
         meta, blob = self.model.payload()
         meta = jsonable(meta)
         if self.model.kind == "brep":
-            model = self.model
-            self.post = lambda: _mesh_cache_write(path, quality, model, meta, blob)
+            model, config = self.model, self.config
+            self.post = lambda: _mesh_cache_write(path, quality, model, meta, blob, config)
         return meta, blob
 
     def _parasolid_step(self, path, ext, progress, config=None):
@@ -138,7 +141,7 @@ class Session:
 
     def _load_parasolid(self, path, name, ext, quality, progress):
         from . import cad
-        step, info, cleanup = self._parasolid_step(path, ext, progress)
+        step, info, cleanup = self._parasolid_step(path, ext, progress, self.config)
         try:
             m = cad.load(path, name, info.get("format") or PARASOLID_FORMATS[ext], quality, progress, source=step)
         finally:
@@ -146,6 +149,7 @@ class Session:
         if info.get("app"):
             m.info["Created by"] = info["app"]
         m.warnings += list(info.get("warnings") or [])
+        m.configs, m.config = info.get("configurations") or [], info.get("config")
         looks.apply(m, info)
         _set_material(m)
         return m
@@ -203,17 +207,23 @@ class Session:
             inst = "/".join(n.replace("::", "-") for n in b.get("path") or [] if "::" in n)
             if inst in part_of:
                 instances.setdefault((inst, part_of[inst]), []).append(bi)
-        for (_inst, part), bodies in instances.items():
+        hidden = {"/".join(p.path) for p in asm.placements if p.hidden}
+        for (inst, part), bodies in instances.items():
             if part in asm.infos:
                 looks.apply(m, asm.infos[part], bodies)
+            if inst in hidden:  # hidden in SolidWorks: loaded, but starts hidden (show it from the tree)
+                for bi in bodies:
+                    m.bodies[bi]["hidden"] = True
+        if asm.suppressed:
+            m.info["Suppressed"] = f"{len(asm.suppressed)} component{'s' if len(asm.suppressed) != 1 else ''} (not shown or counted)"
         _set_material(m)
         if asm.missing:
             m.warnings.append(_missing_text(asm.missing))
             m.notices.append(_missing_text(asm.missing))
         return m
 
-    def reload(self, path, quality="normal", progress=lambda *a: None):
-        return self.load(path, quality, progress)
+    def reload(self, path, quality="normal", progress=lambda *a: None, config="keep"):
+        return self.load(path, quality, progress, config)
 
     def _wire_exact(self):
         """Give the model an exact face-area lookup when OpenCASCADE is behind it."""
@@ -501,14 +511,14 @@ def _dependency_stamp(path):
     return "|" + "|".join(stamps)
 
 
-def _mesh_cache_file(path, quality):
+def _mesh_cache_file(path, quality, config=None):
     try:
         import gmsh
         from .. import settings
 
         st = Path(path).stat()
         key = (f"mesh|{Path(path).resolve()}|{st.st_size}|{st.st_mtime_ns}|{quality}|{_code_stamp()}|"
-               f"{gmsh.__version__}{_dependency_stamp(path)}").lower()
+               f"{gmsh.__version__}{_dependency_stamp(path)}|config {config}").lower()
         folder = Path(os.environ.get("LOCALAPPDATA") or settings.folder()) / "SolidSmufs" / "cache"
         folder.mkdir(parents=True, exist_ok=True)
         return folder / (hashlib.sha1(key.encode()).hexdigest()[:24] + ".mesh.pkl")
@@ -516,9 +526,9 @@ def _mesh_cache_file(path, quality):
         return None
 
 
-def _mesh_cache_read(path, quality):
+def _mesh_cache_read(path, quality, config=None):
     """(model, meta, blob) from an earlier opening of this exact file at this quality, or None."""
-    f = _mesh_cache_file(path, quality)
+    f = _mesh_cache_file(path, quality, config)
     if f is None or not f.is_file():
         return None
     try:
@@ -531,8 +541,8 @@ def _mesh_cache_read(path, quality):
         return None
 
 
-def _mesh_cache_write(path, quality, model, meta, blob):
-    f = _mesh_cache_file(path, quality)
+def _mesh_cache_write(path, quality, model, meta, blob, config=None):
+    f = _mesh_cache_file(path, quality, config)
     if f is None:
         return
     clone = copy.copy(model)

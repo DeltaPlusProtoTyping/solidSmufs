@@ -253,8 +253,10 @@ export class Tools {
     const controls = h('div', { class: 'stack', style: { marginBottom: '8px' } },
       h('div', { class: 'row' }, h('span', { text: 'Selected items:', style: { minWidth: '92px' } }), scope),
       h('div', { class: 'row' }, h('span', { text: 'Material:', style: { minWidth: '92px' } }),
-        h('b', { text: mat ? materialLabel(mat) : '<not specified> — water density 1.0 g/cm³' }),
-        h('button', { class: 'btn', style: { marginLeft: 'auto' }, onclick: () => this.material() }, 'Edit…')),
+        h('b', { text: mat ? materialLabel(mat) : '<not specified>' }),
+        h('button', { class: mat ? 'btn' : 'btn primary', style: { marginLeft: 'auto' }, onclick: () => this.material() }, mat ? 'Edit…' : 'Pick Material…')),
+      // like SolidWorks, a part with no material weighs as water; say so plainly so it isn't taken as the real weight
+      mat ? null : h('div', { class: 'pm-msg', style: { margin: 0 }, text: `This ${app.isAssembly ? 'assembly' : 'part'} has no material, so the mass below is at water density (1 g/cm³), not its real weight. Pick a material to get the weight.` }),
       h('div', { class: 'row' },
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: this.massOpts.hidden, onchange: (e) => { this.massOpts.hidden = e.target.checked; this._computeMass(); } }), 'Include hidden bodies'),
         h('label', { class: 'chk', style: { marginLeft: '14px' } }, h('input', { type: 'checkbox', checked: this.massOpts.showCom, onchange: (e) => { this.massOpts.showCom = e.target.checked; this._drawMass(); } }), 'Show center of mass')),

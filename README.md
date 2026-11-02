@@ -56,11 +56,17 @@ carry a finish or material, so they keep the plain look until you pick a materia
 each one sits. The viewer finds each part the way SolidWorks does (where it was saved, next to the
 assembly, at the same relative place, then anywhere under the assembly's folder), uses the
 configuration each component calls for (a LONG and a SHORT pin show as different lengths), and opens
-sub-assemblies inside it. Parts it can't find are listed in a message, and the rest still open; a Pack
-and Go zip, unzipped, has everything. Not yet: virtual parts (stored inside the assembly), SolidWorks
-appearance colors, mates, exploded views, display states, and hidden or suppressed components (all
-show in their saved positions). The first open translates every part, which can take a minute for
-parts with many fillets; after that it opens from the cache.
+sub-assemblies inside it. Suppressed components are left out (not shown, measured or weighed), and
+components hidden in the saved display state open hidden (show them from the tree). Parts it can't find
+are listed in a message, and the rest still open; a Pack and Go zip, unzipped, has everything. Not yet:
+virtual parts (stored inside the assembly), mates, exploded views, switching display states, and a
+few parts whose offset surfaces the translator can't yet hand to OpenCASCADE (two in the Mouse sample).
+The first open translates every part, which can take a minute for parts with many fillets; after that
+it opens from the cache.
+
+**Configurations:** a SolidWorks part opens in its first configuration, named after the part in the
+FeatureManager tree (`pin (LONG)`). Right-click the part name, or open the Configurations folder and
+double-click one, to show another.
 
 **Speed:** a file you've opened before shows instantly from a cache in
 `%LOCALAPPDATA%\SolidSmufs\cache` (the exact geometry for measuring loads behind it in a second or
@@ -128,8 +134,10 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
 - `solidsmufs/formats/sldasm.py`: SolidWorks assembly reader (components, configurations, placements).
 - `solidsmufs/formats/parasolid/appearance.py`: colors, material, density and appearances in a part;
   `solidsmufs/kernel/looks.py`: the finish each body gets from them.
-- `tests/`: `smoke.py` opens every sample file; `test_sldasm.py` checks the assembly reader
-  (`.venv\Scripts\python -m unittest tests.test_sldasm`).
+- `tests/`: `smoke.py` opens every sample file; `test_measure.py` checks measuring, mass properties
+  and bounding boxes on a block with known answers; `test_sldasm.py` the assembly reader;
+  `test_looks.py` colours, materials and configurations
+  (`.venv\Scripts\python -m unittest tests.test_measure tests.test_sldasm tests.test_looks`).
 - `solidsmufs/web/`: the interface (three.js graphics, SolidWorks-style shell, Wagner theme).
 
 Settings and recent files live in `%APPDATA%\SolidSmufs`.

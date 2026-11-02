@@ -444,7 +444,7 @@ export class Viewer {
       pick.userData.sharedGeo = true;
       this.pickScene.add(pick);
       const finish = b.finish || null;
-      const body = { index: bi, meta: b, mesh, material: mat, pick, geometry: g, v0, t0, f0, fn, visible: true,
+      const body = { index: bi, meta: b, mesh, material: mat, pick, geometry: g, v0, t0, f0, fn, visible: !b.hidden, // hidden in the SolidWorks assembly
         opacity: finish?.opacity ?? 1, finish, color: b.color || null, closed: b.kind === 'solid' || b.closed };
       this._finishBody(body);
       this.bodies.push(body);
@@ -457,6 +457,7 @@ export class Viewer {
     this._buildReferences();
     this._applyStyle();
     this._rebuildCaps();
+    if (this.bodies.some((b) => !b.visible)) this._applyVisibility();
     this.fitAll(false, standardViews(this.upAxis).iso);
     this.requestRender();
   }

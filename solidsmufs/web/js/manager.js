@@ -44,6 +44,7 @@ export class Manager {
     if (this.tab === 'pm') this._renderPM();
     else if (this.tab === 'display') this._renderDisplay();
     else this._renderTree();
+    try { this.app.status?.(); } catch { /* still starting up */ } // hiding or showing bodies changes the size in the status bar
   }
 
   selectionChanged() {
@@ -165,9 +166,23 @@ export class Manager {
     const sheets = m.bodies.map((b, i) => [b, i]).filter(([b]) => b.kind === 'sheet').map(([, i]) => i);
     const meshes = m.bodies.map((b, i) => [b, i]).filter(([b]) => b.kind === 'mesh').map(([, i]) => i);
     const rootOpen = this.open.has('root');
-    add({ key: 'root', depth: 0, label: docName, note: '(Default)', icon: rootKind, children: true, open: rootOpen,
+    // the configuration shown, as SolidWorks writes it after the part name; right-click to show another
+    const configs = m.configs || [];
+    const shown = configs.find((c) => c.id === m.config) || configs[0];
+    add({ key: 'root', depth: 0, label: docName, note: `(${shown?.name || 'Default'})`, icon: rootKind, children: true, open: rootOpen,
       select: () => this.app.setSelection(m.bodies.map((_, i) => ({ kind: 'body', index: i }))),
-      title: `${m.name} — ${m.format}` });
+      title: configs.length > 1 ? `${m.name} — ${m.format}\nRight-click to show another configuration` : `${m.name} — ${m.format}`,
+      context: configs.length > 1 ? (e) => menu(null, [
+        { head: 'Configurations' },
+        ...configs.map((c) => ({ label: c.name, check: c === shown, action: () => this.app.setConfig(c.id) })),
+      ], { at: { x: e.clientX, y: e.clientY } }) : null });
+    if (rootOpen && configs.length > 1 && !q) {
+      const o = this.open.has('configs');
+      add({ key: 'configs', depth: 1, label: `Configurations(${configs.length})`, icon: 'props', children: true, open: o });
+      if (o) configs.forEach((c) => add({ key: `cfg${c.id}`, depth: 2, label: c.name, note: c === shown ? '(shown)' : '', icon: rootKind,
+        dim: c !== shown, title: 'Double-click to show this configuration', select: () => {}, dbl: () => this.app.setConfig(c.id),
+        context: (e) => menu(null, [{ label: 'Show Configuration', icon: rootKind, action: () => this.app.setConfig(c.id) }], { at: { x: e.clientX, y: e.clientY } }) }));
+    }
     if (rootOpen && !q) {
       add({ key: 'hist', depth: 1, label: 'History', icon: 'history', title: `Opened ${new Date().toLocaleTimeString()}` });
       add({ key: 'ann', depth: 1, label: 'Annotations', icon: 'annotations' });

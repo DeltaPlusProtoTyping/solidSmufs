@@ -89,6 +89,8 @@ class Model:
             "warnings": self.warnings,
             "notices": getattr(self, "notices", []),  # models cached before notices existed have none
             "material": getattr(self, "material", None),
+            "configs": getattr(self, "configs", []),  # SolidWorks part configurations [{"id", "name"}]
+            "config": getattr(self, "config", None),
             "stats": {**self.stats, "triangles": int(tri_count), "faces": len(self.face_type),
                       "edges": len(self.edge_type), "vertices": int(len(self.vertices)), "bodies": len(self.bodies)},
             "bodies": self.bodies,

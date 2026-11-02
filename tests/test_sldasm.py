@@ -166,5 +166,43 @@ class UJointAssembly(unittest.TestCase):
                 np.testing.assert_allclose(placed["center"], expected, atol=CENTER_TOLERANCE_MM)
 
 
+TREE = b"""<?xml version="1.0"?><swRoot xmlns="http://www.solidworks.com/sw2003/schema">
+<swConfigurationList><swConfiguration swID="0" swModelRef="m0"/>
+<swConfiguration swID="1" swModelRef="m1" swMostRecentConfiguration="YES"/></swConfigurationList>
+<swModel id="m0"><swReference swName="pin" swReferenceNumber="1" swSuppressed="NO" swHidden="NO"/></swModel>
+<swModel id="m1"><swReference swName="pin" swReferenceNumber="1" swSuppressed="YES" swHidden="YES"/>
+<swReference swName="cover" swReferenceNumber="2" swSuppressed="NO" swHidden="YES"/>
+<swReference swName="base" swReferenceNumber="1"/></swModel></swRoot>"""
+
+
+class ComponentStates(unittest.TestCase):
+    def test_reads_the_active_configuration(self):
+        s = sldasm._states(TREE, None)
+        self.assertEqual(s["pin-1"], {"suppressed": True, "hidden": True})
+        self.assertEqual(s["cover-2"], {"suppressed": False, "hidden": True})
+
+    def test_reads_another_configuration(self):
+        self.assertEqual(sldasm._states(TREE, 0)["pin-1"], {"suppressed": False, "hidden": False})
+
+    def test_components_without_flags_count_as_shown(self):
+        self.assertEqual(sldasm._states(TREE, None)["base-1"], {"suppressed": False, "hidden": False})
+
+
+CLAW = UJOINT.parents[2] / "tutorial" / "EDraw" / "claw" / "claw-mechanism.sldasm"
+BOWL = UJOINT.parents[2] / "tutorial" / "advdrawings" / "bowl and chute.sldasm"
+
+
+@unittest.skipUnless(CLAW.is_file() and BOWL.is_file(), "SolidWorks 2025 sample files are not installed")
+class SuppressedAndHiddenParts(unittest.TestCase):
+    def test_suppressed_parts_are_left_out(self):
+        asm = sldasm.read(CLAW)
+        self.assertEqual(asm.suppressed, ["pin-1", "pin-2", "pin-3"])
+        self.assertFalse(any(p.path[-1].startswith("pin-") for p in asm.placements))
+
+    def test_hidden_parts_are_placed_but_marked_hidden(self):
+        hidden = sorted("/".join(p.path) for p in sldasm.read(BOWL).placements if p.hidden)
+        self.assertEqual(hidden, ["base plate-1", "food chute-1", "food shover-1"])
+
+
 if __name__ == "__main__":
     unittest.main()

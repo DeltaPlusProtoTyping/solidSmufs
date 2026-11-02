@@ -181,7 +181,7 @@ class App {
       this.shell.renderDocTabs();
       if (fetching) {
         doc.rev = st.rev;
-        doc.envelope = null;
+        doc.envelope = null; doc.envelopeKey = null;
         try {
           const [meta, blob] = await fetching;
           doc.meta = meta;
@@ -261,11 +261,18 @@ class App {
     this.shell.renderDocTabs();
   }
 
-  async reload(quality = this.prefs.quality) {
+  // show another configuration of a SolidWorks part (like double-clicking one in the ConfigurationManager)
+  setConfig(id) {
+    if (!this.meta || this.meta.config === id) return;
+    this.reload(this.prefs.quality, id);
+  }
+
+  async reload(quality = this.prefs.quality, config) {
     const doc = this.active;
     if (!doc) return;
     try {
-      await api.reload(doc.id, quality);
+      await api.reload(doc.id, quality, config);
+      doc.envelope = null; doc.envelopeKey = null;
       doc.meta = null;
       doc.state = 'loading';
       doc.view = this.viewer.rig.state();
@@ -327,16 +334,25 @@ class App {
     this.quickMeasure();
   }
 
-  // the part's best-fit size and volumes, shown in the status bar whenever nothing is selected (for stock)
+  // the visible bodies' best-fit size and volumes, shown in the status bar whenever nothing is selected
+  // (for stock); worked out again when bodies are hidden or shown, like Bounding Box and Stock Size
+  visibleKey(doc = this.active) {
+    if (!doc?.meta || this.active !== doc) return '';
+    return doc.meta.bodies.map((_, i) => (this.viewer.bodies[i]?.visible === false ? 0 : 1)).join('');
+  }
+
   async envelope(doc) {
-    if (doc.envelope || !doc.meta) return;
-    const all = doc.meta.bodies.map((_, i) => i);
+    const key = this.visibleKey(doc);
+    if (!doc.meta || doc.envelopeKey === key) return;
+    doc.envelopeKey = key;
+    const shown = doc.meta.bodies.map((_, i) => i).filter((i) => key[i] !== '0');
+    if (!shown.length) { doc.envelope = null; this.status(); return; }
     try {
-      const [box, mass] = await Promise.all([api.bbox(doc.id, all, 'oriented'), api.massprops(doc.id, all, 1.0)]);
-      if (!box) return;
+      const [box, mass] = await Promise.all([api.bbox(doc.id, shown, 'oriented'), api.massprops(doc.id, shown, 1.0)]);
+      if (!box || doc.envelopeKey !== key) return;
       const size = [...box.size].sort((a, b) => b - a);
-      doc.envelope = { size, box: size[0] * size[1] * size[2], part: mass?.volume };
-    } catch { return; }
+      doc.envelope = { size, box: size[0] * size[1] * size[2], part: mass?.volume, partial: shown.length < doc.meta.bodies.length };
+    } catch { doc.envelopeKey = null; return; }
     if (this.active === doc) this.status();
   }
 
@@ -595,7 +611,8 @@ class App {
     else if (this.sel.length === 1) html = this.describe(this.sel[0]);
     else if (this.meta && this.active?.envelope) {
       const e = this.active.envelope;
-      html = `Size: <b>${e.size.map((x) => u.len(x, false)).join(' × ')} ${u.label}</b><span class="sep">|</span>Box volume: <b>${u.vol(e.box)}</b>`;
+      if (this.active.exact && this.active.envelopeKey !== this.visibleKey()) setTimeout(() => this.envelope(this.active), 0);
+      html = `${e.partial ? 'Shown bodies — size' : 'Size'}: <b>${e.size.map((x) => u.len(x, false)).join(' × ')} ${u.label}</b><span class="sep">|</span>Box volume: <b>${u.vol(e.box)}</b>`;
       if (e.part > 0) html += `<span class="sep">|</span>Part volume: <b>${u.vol(e.part)}</b> (${Math.round((100 * e.part) / e.box)}% of box)`;
     } else if (this.meta) html = this.prefs.mouse === 'sw'
       ? 'Middle-drag to rotate · Ctrl+middle to pan · Wheel to zoom · Right-drag for gestures'

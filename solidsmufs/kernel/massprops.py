@@ -76,6 +76,12 @@ def cad_mass(model, bodies, density):
         parts, density = _weighted(parts, rhos)
         if len(set(rhos)) > 1:
             notes.append("Each part weighs with its own material's density; the density shown is the average.")
+        bare = sorted({model.bodies[b]["name"].split("/")[0] for b in bodies
+                       if model.body_tag[b] is not None and not model.bodies[b].get("density")})
+        if bare:
+            listed = ", ".join(bare[:6]) + (f" and {len(bare) - 6} more" if len(bare) > 6 else "")
+            notes.append(f"{len(bare)} part{'s have' if len(bare) != 1 else ' has'} no material and "
+                         f"weigh{'' if len(bare) != 1 else 's'} as water (1 g/cm³): {listed}.")
     vol, com, inertia = combine(parts)
     if not parts:
         notes = ["No solid bodies here, only surfaces (common in IGES files), so there's no volume or mass. "
