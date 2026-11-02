@@ -19,7 +19,7 @@ export class Tools {
     this.projected = 'none';
     this.history = [];
     this.dialogs = {};
-    this.stockOpts = { allowance: null, round: true };
+    this.stockOpts = { allowance: null, round: true, align: 'best' };
   }
 
   get viewer() { return this.app.viewer; }
@@ -40,6 +40,7 @@ export class Tools {
   selectionChanged() {
     if (this.dialogs.measure && !this.dialogs.measure.closed) this._runMeasure();
     if (this.dialogs.mass && !this.dialogs.mass.closed && this.massScope === 'selected') this._computeMass();
+    if (this.dialogs.stock && !this.dialogs.stock.closed) this._stockRecalc?.();
   }
 
   _dialog(key, opts) {
@@ -367,16 +368,41 @@ export class Tools {
   async stock() {
     const app = this.app, u = this.units, o = this.stockOpts;
     if (o.allowance === null) o.allowance = u.unit === 'in' ? 0.0625 * 25.4 : 1.5;
-    const d = this._dialog('stock', { title: 'Stock Size — Wagner Tools', icon: 'stock', width: 420, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
-    let box, round;
-    try {
-      box = await api.bbox(app.active.id, this.meta.bodies.map((_, i) => i).filter((i) => this.viewer.bodies[i]?.visible), 'oriented');
-      round = roundStock(this.viewer, box);
-    } catch (e) { d.setBody(h('div', { class: 'pm-msg', text: e.message })); return; }
-    this.viewer.showBox(box);
-    app.manager.refresh();
+    const d = this._dialog('stock', { title: 'Stock Size — Wagner Tools', icon: 'stock', width: 420, body: h('div', { class: 'report' }, h('span', { class: 'spin' })),
+      onClose: () => { this._stockRefs = null; } });
+    let box = null, round = null, error = null;
+    // the block either fits tightest (best fit) or stands on picked faces, as in Bounding Box: the first face
+    // (or round face / straight edge) sets the thickness direction, a Ctrl+clicked second one the length
+    const refs = () => app.sel.filter((s) => s.kind === 'face' || s.kind === 'edge').slice(0, 2).map((s) => ({ kind: s.kind, index: s.index }));
+    const measureBox = async () => {
+      this._stockRefs = JSON.stringify(o.align === 'faces' ? refs() : []);
+      box = round = error = null;
+      if (o.align === 'faces' && !refs().length) { this.viewer.showBox(null); render(); return; }
+      d.setBody(h('div', { class: 'report' }, h('span', { class: 'spin' })));
+      try {
+        const bodies = this.meta.bodies.map((_, i) => i).filter((i) => this.viewer.bodies[i]?.visible);
+        box = await api.bbox(app.active.id, bodies, o.align === 'faces' ? 'reference' : 'oriented', o.align === 'faces' ? refs() : undefined);
+        round = roundStock(this.viewer, box);
+        this.viewer.showBox(box);
+      } catch (e) { error = e.message; }
+      app.manager.refresh();
+      render();
+    };
+    this._stockRecalc = () => { if (o.align === 'faces' && JSON.stringify(refs()) !== this._stockRefs) measureBox(); };
+    const alignRow = () => h('div', { class: 'stack', style: { gap: '4px' } },
+      h('div', { class: 'row' }, h('span', { text: 'Orientation', style: { minWidth: '160px' } }),
+        h('div', { class: 'seg' }, ...[['best', 'Best fit'], ['faces', 'Selected faces']].map(([k, label]) =>
+          h('button', { class: o.align === k ? 'on' : '', text: label, onclick: () => { o.align = k; measureBox(); } })))),
+      o.align === 'faces' ? h('div', { class: 'hint', text: refs().length
+        ? `Standing on ${refs().map((r, i) => `${app.describe(r, true)}${i ? ' (length)' : ' (thickness)'}`).join(', ')}. Ctrl+click another face to set the length.`
+        : 'Click the face the stock should sit on (or a round face or straight edge for its axis). Ctrl+click a second face to set the length direction.' }) : null);
     const render = () => {
-      const dims = [...box.size].sort((a, b) => b - a);
+      if (!box) {
+        d.setBody(h('div', { class: 'stack' }, alignRow(), error ? h('div', { class: 'pm-msg', style: { margin: 0 }, text: error }) : null));
+        return;
+      }
+      // best fit: longest first; on picked faces: length and width as fitted, thickness along the face
+      const dims = o.align === 'faces' ? [...box.size] : [...box.size].sort((a, b) => b - a);
       const step = u.unit === 'in' ? 0.125 * 25.4 : u.unit === 'mm' ? 1 : 0.001;
       const up = (v) => (o.round ? Math.ceil((v - 1e-9) / step) * step : v);
       const stock = dims.map((x) => up(x + 2 * o.allowance));
@@ -398,15 +424,15 @@ export class Tools {
         if (mat?.density != null) rows.push(['Round bar weight', u.mass(Math.PI * (dia / 2) ** 2 * len * mat.density * 1e-3)]);
       }
       const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n');
-      d.setBody(h('div', { class: 'stack' },
+      d.setBody(h('div', { class: 'stack' }, alignRow(),
         h('div', { class: 'row' }, h('span', { text: `Allowance per side (${u.label})`, style: { minWidth: '160px' } }),
           h('input', { class: 'inp', style: { width: '90px' }, value: u.num(o.allowance / u.u.factor), onchange: (e) => { o.allowance = u.toMm(parseFloat(e.target.value) || 0); render(); } })),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: o.round, onchange: (e) => { o.round = e.target.checked; render(); } }), `Round up to the next ${u.unit === 'in' ? '1/8"' : '1 mm'}`),
         h('table', { class: 'table' }, h('tbody', {}, ...rows.map(([k, v]) => h('tr', {}, h('td', { text: k }), h('td', { class: 'num', text: v }))))),
         h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => copyText(text).then(() => toast('Stock size copied')) }, 'Copy'),
-          h('span', { class: 'subtle', text: 'Smallest box from the exact surfaces; shown in the view.' }))));
+          h('span', { class: 'subtle', text: o.align === 'faces' ? 'Box on the picked faces, from the exact surfaces; shown in the view.' : 'Smallest box from the exact surfaces; shown in the view.' }))));
     };
-    render();
+    await measureBox();
   }
 
   // ================================================================== Wagner: Hole Report

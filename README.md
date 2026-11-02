@@ -123,7 +123,7 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   or aligned to selected faces: pick a flat or round face (or a straight edge) and the box stands on
   it, with length and width fitted as tight as they go; Ctrl+click a second face to set the length
   direction too. Sizes are exact, from the true surfaces.
-- **Stock Size:** smallest block (and round bar, for round parts) with allowance and rounding,
+- **Stock Size:** smallest block (or one standing on picked faces, as in Bounding Box), and round bar for round parts, with allowance and rounding,
   plus stock weight. **Hole Report:** every hole by diameter, count and depth, matched to tap
   drills, clearance holes and standard drills. **Quote Summary:** all of it in one copyable list.
 
