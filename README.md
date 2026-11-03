@@ -148,7 +148,7 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
 
 A 3Dconnexion SpaceMouse works without any extra software beyond its usual driver: the app reads the
 device directly (Windows HID). The part follows the cap: slide to pan, pull toward you to zoom in, tilt,
-twist and roll to turn it about its centre (or the entity you middle-clicked). System Options has a
+twist and roll to turn it about its centre (the entity you middle-clicked, or when zoomed in past the centre, the part at the middle of the view; a dot shows where). System Options has a
 part / camera switch and a reverse for each axis. Set `SOLIDSMURFS_SPACEMOUSE=off` to leave it to
 3DxWare.
 

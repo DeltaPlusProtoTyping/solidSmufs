@@ -347,20 +347,39 @@ export class Viewer {
     if (this.spaceEased.every((x, i) => !want[i] && Math.abs(x) < 1e-3)) {  // let go, and settled
       this.spaceEased = null;
       this.spacePivot = null;
+      this._showSpacePivot(false);
       return false;
     }
     const signs = this.spaceSigns || [1, 1, 1, 1, 1, 1];
     const [tx, ty, tz, rx, ry, rz] = this.spaceEased.map((x, i) => x * signs[i]), rig = this.rig;
     rig.anim = null;
-    if (!this.spacePivot) this.spacePivot = this.rotCenter?.point || this.visibleBox().getCenter(new THREE.Vector3());
+    if (!this.spacePivot) this.spacePivot = this._spacePivotNow();
     const PAN = 1.2 * this.height, ZOOM = 1.6, TURN = Math.PI / 0.0075;  // per second at full deflection
     rig.pan(tx * PAN * dt, tz * PAN * dt, this.height);
     rig.zoomAt(Math.exp(-ty * ZOOM * dt), 0, 0);
     rig.rotate(-rz * TURN * dt, rx * TURN * dt, this.spacePivot);
-    rig.roll(-ry * Math.PI * dt);
+    rig.roll(-ry * Math.PI * dt, this.spacePivot);
+    this._showSpacePivot(Math.abs(rx) + Math.abs(ry) + Math.abs(rz) > 0.01);
     this._spaceLeft = rig.state();
     this.viewChanged = true;
     return true;
+  }
+
+  // What the cap turns the part about: the entity last middle-clicked, else the part's centre, else (zoomed
+  // in with that centre out of view) the part at the middle of the view, so what you're looking at stays put
+  _spacePivotNow() {
+    if (this.rotCenter?.point) return this.rotCenter.point;
+    const box = this.visibleBox(), centre = box.getCenter(new THREE.Vector3()), s = this.project(centre);
+    if (!s.behind && s.x >= 0 && s.y >= 0 && s.x <= this.width && s.y <= this.height) return centre;
+    return this.pointAt(this.width / 2, this.height / 2) || box.clampPoint(this.rig.target, new THREE.Vector3());
+  }
+
+  _showSpacePivot(on) {
+    const dot = this.container.querySelector('#pivot-dot');
+    if (!dot) return;
+    if (!on || !this.spacePivot) { dot.style.display = 'none'; return; }
+    const s = this.project(this.spacePivot);
+    Object.assign(dot.style, { left: `${s.x}px`, top: `${s.y}px`, display: 'block' });
   }
 
   /** Nothing is coming to wait for: draw the empty scene. */

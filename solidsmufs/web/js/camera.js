@@ -103,10 +103,8 @@ export class CameraRig {
     this.changed();
   }
 
-  roll(angle) {
-    const q = new THREE.Quaternion().setFromAxisAngle(this.dir(), angle);
-    this.quat.premultiply(q).normalize();
-    this.changed();
+  roll(angle, pivot) {
+    this.applyRotation(new THREE.Quaternion().setFromAxisAngle(this.dir(), angle), pivot);
   }
 
   pan(dx, dy, viewH) {
