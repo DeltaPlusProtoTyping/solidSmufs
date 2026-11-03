@@ -533,7 +533,7 @@ class App {
     def('draft', { label: 'Draft Analysis', icon: 'draft', tip: 'Color faces by draft angle', toggle: () => v().analysis?.type === 'draft', run: () => this.pages.draft() });
     def('zebra', { label: 'Zebra Stripes', icon: 'zebra', tip: 'Check surface smoothness', toggle: () => v().analysis?.type === 'zebra', run: () => this.pages.zebra() });
     def('curvature', { label: 'Curvature', icon: 'curvature', tip: 'Color the model by curvature', toggle: () => v().analysis?.type === 'curvature', run: () => this.pages.curvature() });
-    // Wagner tools
+    // Tools tab (stock, holes, quote)
     def('stock', { label: 'Stock Size', icon: 'stock', tip: 'Smallest block the part fits in, with allowance', run: () => this.tools.stock() });
     def('holes', { label: 'Hole Report', icon: 'holes', tip: 'Every hole by diameter, with drill and tap matches', run: () => this.tools.holes() });
     def('quote', { label: 'Quote Summary', icon: 'quote', tip: 'Size, volume, weight and holes in one copyable list', run: () => this.tools.quote() });

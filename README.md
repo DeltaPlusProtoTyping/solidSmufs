@@ -89,7 +89,7 @@ parts. Meshes can't be saved as STEP.
 - **CommandManager** tabs: **View** (open, rebuild, zoom, orientation, normal to, section view,
   display style, hide/show, appearance, scenes, perspective, save picture), **Evaluate** (Measure,
   Mass Properties, Section Properties, Bounding Box, Statistics, Draft Analysis, Zebra Stripes,
-  Curvature, Edit Material) and **Wagner Tools** (Stock Size, Hole Report, Quote Summary).
+  Curvature, Edit Material) and **Tools** (Stock Size, Hole Report, Quote Summary).
 - **FeatureManager design tree:** History, Annotations, Solid / Surface / Graphics Bodies, Material,
   Front / Top / Right Plane, Origin, Imported1, or the component tree for assemblies. Hide, show,
   color and select from here; the filter box finds parts in big assemblies.

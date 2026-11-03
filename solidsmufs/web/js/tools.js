@@ -423,7 +423,7 @@ export class Tools {
   async stock() {
     const app = this.app, u = this.units, o = this.stockOpts;
     if (o.allowance === null) o.allowance = u.unit === 'in' ? 0.0625 * 25.4 : 1.5;
-    const d = this._dialog('stock', { title: 'Stock Size — Wagner Tools', icon: 'stock', width: 420, body: h('div', { class: 'report' }, h('span', { class: 'spin' })),
+    const d = this._dialog('stock', { title: 'Stock Size', icon: 'stock', width: 420, body: h('div', { class: 'report' }, h('span', { class: 'spin' })),
       onClose: () => { this._stockRefs = null; } });
     let box = null, round = null, error = null;
     // the block either fits tightest (best fit) or stands on picked faces, as in Bounding Box: the first face
@@ -493,7 +493,7 @@ export class Tools {
   // ================================================================== Wagner: Hole Report
   async holes() {
     const app = this.app;
-    const d = this._dialog('holes', { title: 'Hole Report — Wagner Tools', icon: 'holes', width: 600, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
+    const d = this._dialog('holes', { title: 'Hole Report', icon: 'holes', width: 600, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
     let r;
     try { r = await api.holes(app.active.id); } catch (e) { d.setBody(h('div', { class: 'pm-msg', text: e.message })); return; }
     const u = this.units;
@@ -519,7 +519,7 @@ export class Tools {
   // ================================================================== Wagner: Quote Summary
   async quote() {
     const app = this.app, u = this.units;
-    const d = this._dialog('quote', { title: 'Quote Summary — Wagner Tools', icon: 'quote', width: 480, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
+    const d = this._dialog('quote', { title: 'Quote Summary', icon: 'quote', width: 480, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
     const mat = app.active.material;
     const all = this.meta.bodies.map((_, i) => i);
     let mp, world, best, holes;

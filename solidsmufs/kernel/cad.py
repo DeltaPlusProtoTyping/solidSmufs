@@ -324,6 +324,10 @@ def _extract(gmsh, m):
             pts, tri = _face_mesh(gmsh, f, nodes)
             typ = SURFACE_TYPES.get(gmsh.model.getType(2, f), "surface")
             params = _surface_params(gmsh, f, typ, pts)
+            if params is None and typ in FITTABLE and len(tri):
+                fit = _fitted_cylinder(gmsh, f, pts, tri)
+                if fit is not None:  # a bore or boss stored as a spline / swept surface: measure it as the cylinder it is
+                    typ, params = "cylinder", fit
             normals = _face_normals(typ, params, pts, tri) if len(tri) else pts
             for c in set(int(c) for c in gmsh.model.getAdjacencies(2, f)[1]):  # a seam is listed twice
                 edge_faces.setdefault(c, []).append(fi)
@@ -451,6 +455,41 @@ def _vals(gmsh, dim, tag, pars):
     """Points at several parameter values in one call."""
     flat = [float(x) for p in pars for x in p]
     return np.asarray(gmsh.model.getValue(dim, tag, flat), np.float64).reshape(-1, 3)
+
+
+FITTABLE = {"bspline", "bezier", "revolution", "ruled", "surface"}
+
+
+def _fitted_cylinder(gmsh, f, pts, tri):
+    """Cylinder params for a face that is a cylinder in all but name, or None. Points sampled on the
+    true surface must sit at one radius from one axis to within 0.1% (and 5 microns); the axis is the direction
+    every surface normal is square to. Nearly flat faces (normals all alike) don't count."""
+    try:
+        lo, hi = (np.asarray(b, np.float64) for b in gmsh.model.getParametrizationBounds(2, f))
+        uv = [(lo[0] + (hi[0] - lo[0]) * i / 8, lo[1] + (hi[1] - lo[1]) * j / 8) for i in range(9) for j in range(9)]
+        q = _vals(gmsh, 2, f, uv)
+    except Exception:
+        q = np.asarray(pts, np.float64)
+    if len(q) < 12:
+        return None
+    nrm = vertex_normals(pts, tri)
+    ev, vec = np.linalg.eigh(nrm.T @ nrm / max(len(nrm), 1))
+    if ev[0] > 2e-3 * ev.sum() or ev[1] < 0.02 * ev.sum():  # normals not all square to one axis / all alike
+        return None
+    axis = unit(vec[:, 0])
+    x = unit(np.cross(axis, [1, 0, 0]) if abs(axis[0]) < 0.9 else np.cross(axis, [0, 1, 0]))
+    y = np.cross(axis, x)
+    p2 = np.c_[q @ x, q @ y]
+    a = np.c_[2 * p2, np.ones(len(p2))]
+    (cx, cy, _), *_ = np.linalg.lstsq(a, (p2 ** 2).sum(1), rcond=None)
+    r = np.linalg.norm(p2 - [cx, cy], axis=1)
+    rad = float(r.mean())
+    size = float(np.linalg.norm(np.ptp(q, axis=0)))
+    # spline copies of a cylinder are off by a micron or two; a real non-cylinder by far more
+    if not (0 < rad < 5 * max(size, 1e-9)) or float(np.abs(r - rad).max()) > min(1e-3 * rad, 0.005):
+        return None
+    c = cx * x + cy * y + axis * float((q @ axis).mean())  # the axis point level with the face's middle
+    return {"center": c, "axis": axis, "radius": rad, "fitted": True}
 
 
 def _surface_params(gmsh, f, typ, pts):
