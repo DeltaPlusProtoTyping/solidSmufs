@@ -38,6 +38,10 @@ def run(argv):
     snap_delay = float(argv[argv.index("--snapshot-delay") + 1]) if "--snapshot-delay" in argv else 8.0
 
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--ignore-gpu-blocklist")
+    from .gpu import prefer_discrete
+    chip = prefer_discrete()  # two-GPU laptops: draw on the discrete chip, not the flickery integrated one
+    if chip:
+        log.info("drawing on %s (adapter %s)", chip, os.environ["QT_D3D_ADAPTER_INDEX"])
     from PySide6.QtCore import QCoreApplication, QObject, Qt, QUrl, Signal, Slot, QEvent, QSettings, QByteArray
     from PySide6.QtGui import QColor, QIcon, QDesktopServices
     from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow
