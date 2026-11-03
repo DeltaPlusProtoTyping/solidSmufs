@@ -1348,6 +1348,40 @@ export class Viewer {
     this.requestRender();
   }
 
+  // Align Part's pick arrows: [{at, dir, color, widget (an element shown by the arrow's tip)}], plus
+  // thin `ghosts` [{at, dir, color, label}] for the axes that follow from them
+  showPickArrows(arrows, ghosts = []) {
+    this.clearAxesPreview();
+    const len = this.rig.radius * 0.4;
+    const arrow = (at, d, color, width, scale) => {
+      const o = new THREE.Vector3(...at), dir = new THREE.Vector3(...d).normalize(), tip = o.clone().addScaledVector(dir, len * scale);
+      this._fatLine([...o.toArray(), ...tip.toArray()], color, width, { group: this.preview, depthTest: false, noClip: true, order: 32 });
+      const head = new THREE.Mesh(new THREE.ConeGeometry(len * 0.055 * scale, len * 0.17 * scale, 18),
+        new THREE.MeshBasicMaterial({ color, depthTest: false, toneMapped: false }));
+      head.position.copy(tip);
+      head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      head.renderOrder = 33;
+      this.preview.add(head);
+      return { o, dir };
+    };
+    for (const a of arrows) {
+      if (!a.at || !a.dir) continue;
+      const { o, dir } = arrow(a.at, a.dir, a.color, 3.5, 1);
+      const el = this.addLabel(o.clone().addScaledVector(dir, len * 1.25), '', 'pickbar');
+      el.append(a.widget);
+      this.labels[this.labels.length - 1].preview = true;
+      const dot = this.annotDots([a.at], a.color, 9);
+      this.annot.remove(dot);
+      this.preview.add(dot);
+    }
+    for (const g of ghosts) {
+      const { o, dir } = arrow(g.at, g.dir, g.color, 2, 0.7);
+      this.addLabel(o.clone().addScaledVector(dir, len * 0.85), g.label, `axis ghost ${g.cls}`);
+      this.labels[this.labels.length - 1].preview = true;
+    }
+    this.requestRender();
+  }
+
   clearAxesPreview() {
     this.preview.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.preview.clear();

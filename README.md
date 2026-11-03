@@ -132,7 +132,7 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   or aligned to selected faces: pick a flat or round face (or a straight edge) and the box stands on
   it, with length and width fitted as tight as they go; Ctrl+click a second face to set the length
   direction too. Sizes are exact, from the true surfaces.
-- **Align Part:** pick a flat or round face (or a straight edge) and choose which view it faces (Top,
+- **Align Part:** pick a flat or round face (or a straight edge); an arrow on it has X / Y / Z and Flip buttons, so click the axis it should point along (a second pick sets another axis). The other method chooses which view each pick faces (Top,
   Front, Right, ...); Ctrl+click a second pick to set the turn about it, or let the part's length run
   left to right. The geometry itself turns, exactly, so views, X / Y / Z, the bounding box, Stock Size,
   mass properties and Save As STEP all follow. Reset puts it back as modelled.

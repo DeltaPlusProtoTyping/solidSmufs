@@ -237,6 +237,15 @@ class Session:
     def reload(self, path, quality="normal", progress=lambda *a: None, config="keep", orient="keep"):
         return self.load(path, quality, progress, config, orient)
 
+    def facing(self, refs):
+        """For Align Part's arrows: [{"dir": the way each pick faces (or None), "at": its middle}]."""
+        m, out = self.model, []
+        for r in refs:
+            i = int(r.get("index", -1))
+            pts = m.face_triangles(i)[0] if r.get("kind") == "face" else m.edge_points(i) if r.get("kind") == "edge" else np.zeros((0, 3))
+            out.append({"dir": _facing(m, r), "at": pts.mean(axis=0) if len(pts) else None})
+        return jsonable(out)
+
     def align(self, refs, targets):
         """The rotation (3x3, on top of the current one) that turns the picked faces / edges to face the
         given directions: refs[0] to targets[0] exactly, refs[1] (optional) as near targets[1] as it can

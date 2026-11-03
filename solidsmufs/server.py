@@ -287,6 +287,8 @@ class _Handler(BaseHTTPRequestHandler):
                        b["orient"] if "orient" in b else "keep")
             settings.set_ui({"quality": doc.quality})
             return self._json(doc.status())
+        if what == "facing":  # which way each Align Part pick faces, for its arrow
+            return self._json(doc.request("facing", timeout=60, refs=b.get("refs", [])))
         if what == "align-preview":  # the turn Align would make, without making it
             return self._json(doc.request("align", timeout=60, refs=b.get("refs", []), targets=b.get("targets", [])))
         if what == "align":  # turn the part so the picked faces face the chosen views, then read it again
