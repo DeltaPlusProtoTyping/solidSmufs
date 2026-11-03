@@ -153,7 +153,11 @@ export class Dialog {
     if (s?.w) this.el.style.width = `${s.w}px`;
     if (s?.h) this.el.style.height = `${s.h}px`;
     const fixed = this.at?.(this.el.offsetWidth, this.el.offsetHeight);
-    if (fixed) ({ x, y } = fixed);
+    if (fixed) {  // opens in its spot as tall as its contents, growing no further than fixed.bottom
+      ({ x, y } = fixed);
+      this.el.style.height = '';
+      this.el.style.maxHeight = `${Math.max(160, (fixed.bottom ?? innerHeight - 12) - y)}px`;
+    }
     x = Math.min(Math.max(0, x), innerWidth - 120);
     y = Math.min(Math.max(0, y), innerHeight - 60);
     this.el.style.left = `${x}px`;

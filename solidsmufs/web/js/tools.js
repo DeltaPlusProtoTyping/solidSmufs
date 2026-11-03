@@ -48,7 +48,9 @@ export class Tools {
 
   _dialog(key, opts) {
     if (this.dialogs[key] && !this.dialogs[key].closed) { this.dialogs[key].el.style.zIndex = 999; return this.dialogs[key]; }
-    const d = new Dialog({ key, ...opts, onClose: () => { delete this.dialogs[key]; opts.onClose?.(); } });
+    // tool windows open in the top right of the view, as tall as their contents (System Options keeps its own spot)
+    const at = opts.at === false ? null : opts.at || ((w) => this._viewTopRight(w, key));
+    const d = new Dialog({ key, ...opts, at, onClose: () => { delete this.dialogs[key]; opts.onClose?.(); } });
     this.dialogs[key] = d;
     return d;
   }
@@ -80,7 +82,6 @@ export class Tools {
     this.measureTools = tools;
     const d = this._dialog('measure', {
       title: `Measure - ${this.app.active?.name || ''}`, icon: 'measure', width: 340, tools: h('div', { class: 'row', style: { gap: '1px' } }, ...tools()), body: h('div'),
-      at: (w) => this._viewTopRight(w),
       onClose: () => { app.measuring = false; this.viewer.clearAnnotations(); app.shell.refresh(); app.status(); },
     });
     app.measuring = true;
@@ -94,17 +95,32 @@ export class Tools {
     return { arc: this.arcMode, arcs: sel.map((s) => this.arcPick.get(arcKey(s)) || null) };
   }
 
-  // The top right corner of the 3D view for a tool window w wide, clear of the view cube and the
-  // heads-up toolbar
-  _viewTopRight(w) {
+  // Where a tool window w wide opens: the top right corner of the 3D view, clear of the view cube and
+  // the heads-up toolbar, and to the left of tool windows already open there; bottom is how far down
+  // it may grow
+  _viewTopRight(w, key) {
     const v = this.viewer, c = v.canvas.getBoundingClientRect(), GAP = 10;
     if (!c.width) return null;
-    const x = Math.max(c.left + GAP, c.right - w - GAP);
-    let y = c.top + GAP;
-    if (v.showCube) { const r = v.cube.rect(v.width); y = c.top + r.y + r.h + GAP; }
+    let top = c.top + GAP;
+    if (v.showCube) { const r = v.cube.rect(v.width); top = c.top + r.y + r.h + GAP; }
+    const open = Object.entries(this.dialogs).filter(([k, d]) => k !== key && d && !d.closed && d.el.offsetWidth)
+      .map(([, d]) => d.el.getBoundingClientRect());
+    let x = c.right - w - GAP;
+    for (let moved = true; moved;) {
+      moved = false;
+      for (const r of open) {
+        if (r.left < x + w + GAP && r.right + GAP > x && r.top < top + 120) { x = r.left - w - GAP; moved = true; }
+      }
+    }
+    let y = top;
+    if (x < c.left + GAP) {  // no room to the left: under the windows in the right-hand column, else stepped down
+      x = c.right - w - GAP;
+      const below = Math.max(...open.filter((r) => r.left < x + w && r.right > x).map((r) => r.bottom)) + GAP;
+      y = c.bottom - below >= 240 ? below : top + 30 * open.length;
+    }
     const hud = v.container.querySelector('.hud')?.getBoundingClientRect();
-    if (hud?.width && hud.right + GAP > x && hud.bottom + GAP > y) y = hud.bottom + GAP;
-    return { x, y };
+    if (hud?.width && hud.right + GAP > x && hud.left < x + w && hud.bottom + GAP > y) y = hud.bottom + GAP;
+    return { x, y, bottom: c.bottom - GAP };
   }
 
   async _runMeasure() {
@@ -256,7 +272,7 @@ export class Tools {
     this.massOpts = this.massOpts || { hidden: true, showCom: true };
     const tb = (iconName, title, fn) => h('button', { class: 'icon-btn', title, html: tool(iconName), onclick: fn });
     this._dialog('mass', {
-      title: 'Mass Properties', icon: 'massProps', width: 520, height: 600,
+      title: 'Mass Properties', icon: 'massProps', width: 520,
       tools: h('div', { class: 'row', style: { gap: '1px' } },
         tb('quote', 'Copy to Clipboard', () => this._copyMass()),
         tb('reload', 'Recalculate', () => this._computeMass()),
@@ -359,7 +375,7 @@ export class Tools {
     const app = this.app;
     const f = this.meta.faces;
     const faces = app.sel.filter((s) => s.kind === 'face' && f.type[s.index] === 'plane').map((s) => s.index);
-    const d = this._dialog('section', { title: 'Section Properties', icon: 'sectionProps', width: 500, height: 480, body: h('div') });
+    const d = this._dialog('section', { title: 'Section Properties', icon: 'sectionProps', width: 500, body: h('div') });
     if (!faces.length) { d.setBody(h('div', { class: 'pm-msg', text: 'Select one or more flat faces (all in one plane), then run Section Properties again.' })); return; }
     d.setBody(h('div', { class: 'report' }, h('span', { class: 'spin' })));
     let r;
@@ -400,7 +416,7 @@ export class Tools {
         ['Faces', st.faces], ['Edges', st.edges], ['Vertices', st.vertices], ['Triangles drawn', st.triangles.toLocaleString()],
         ['Opened in', `${(st.load_s ?? 0).toFixed(2)} s${st.cached ? ' (from cache)' : ''}`]]
         .map(([k, v]) => h('tr', {}, h('td', { text: k }), h('td', { class: 'num', text: String(v) })))));
-    this._dialog('stats', { title: 'Statistics', icon: 'statistics', width: 380, height: 560, body: h('div', {}, info, table('Faces by type', count(m.faces.type)), table('Edges by type', count(m.edges.type))) });
+    this._dialog('stats', { title: 'Statistics', icon: 'statistics', width: 380, body: h('div', {}, info, table('Faces by type', count(m.faces.type)), table('Edges by type', count(m.edges.type))) });
   }
 
   // ================================================================== Wagner: Stock Size
@@ -477,7 +493,7 @@ export class Tools {
   // ================================================================== Wagner: Hole Report
   async holes() {
     const app = this.app;
-    const d = this._dialog('holes', { title: 'Hole Report — Wagner Tools', icon: 'holes', width: 600, height: 460, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
+    const d = this._dialog('holes', { title: 'Hole Report — Wagner Tools', icon: 'holes', width: 600, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
     let r;
     try { r = await api.holes(app.active.id); } catch (e) { d.setBody(h('div', { class: 'pm-msg', text: e.message })); return; }
     const u = this.units;
@@ -503,7 +519,7 @@ export class Tools {
   // ================================================================== Wagner: Quote Summary
   async quote() {
     const app = this.app, u = this.units;
-    const d = this._dialog('quote', { title: 'Quote Summary — Wagner Tools', icon: 'quote', width: 480, height: 520, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
+    const d = this._dialog('quote', { title: 'Quote Summary — Wagner Tools', icon: 'quote', width: 480, body: h('div', { class: 'report' }, h('span', { class: 'spin' })) });
     const mat = app.active.material;
     const all = this.meta.bodies.map((_, i) => i);
     let mp, world, best, holes;
@@ -646,7 +662,7 @@ export class Tools {
       return el;
     };
     draw();
-    const d = this._dialog('options', { title: 'System Options', icon: 'options', width: 640, height: 430,
+    const d = this._dialog('options', { title: 'System Options', icon: 'options', width: 640, height: 430, at: false,
       body: h('div', { style: { display: 'flex', height: '100%' } }, nav, content),
       foot: [h('button', { class: 'btn primary', text: 'OK', onclick: () => d.close() })] });
   }
