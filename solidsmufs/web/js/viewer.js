@@ -561,7 +561,7 @@ export class Viewer {
     if (!nV) { this.vertPick = null; return; }
     const cols = new Float32Array(nV * 3);
     for (let v = 0; v < nV; v++) cols.set(idColor(nF + nE + v + 1), v * 3);
-    const mat = dotMaterial({ size: 11, bias: 0.0006, vertexColor: true });
+    const mat = dotMaterial({ size: 17, bias: 0.0008, vertexColor: true });
     mat.clippingPlanes = this.clipPlanes;
     this.vertPick = new THREE.Mesh(dotGeometry(verts, cols), mat);
     this.vertPick.frustumCulled = false;
