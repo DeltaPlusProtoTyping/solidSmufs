@@ -12,6 +12,7 @@ and graphics for the view: {"type": "line" | "point" | "axis", ...}.
 
 import numpy as np
 
+from . import threads
 from .geom import angle_deg, line_line, point_line, unit
 
 PARALLEL_DEG = 1e-4  # angles closer than this to 0/180 count as parallel
@@ -157,7 +158,51 @@ def single(e, extra):
     if centroid is not None:
         rows.append({"label": "Centroid", "value": centroid, "kind": "point"})
     rows.append({"label": "Type", "value": _type_name(e.type), "kind": "text"})
+    _thread_rows(e, rows, gfx)
     return rows, gfx
+
+
+def _thread_rows(e, rows, gfx):
+    """Thread size for a round or helical face: a modelled thread's callout at the top, or for a plain
+    hole what its diameter most likely is (tap drill, clearance, drill size). Rows marked "status" also
+    show in the status bar."""
+    if e.type not in threads.FREEFORM and e.type not in ("cylinder", "cone"):
+        return
+    try:
+        th = threads.identify(e.m, e.index)
+    except Exception:  # a thread guess must never stop the measurement
+        th = None
+    if not th:
+        return
+    if th["modelled"]:
+        std = th["thread"]
+        for r in rows:
+            r["primary"] = False
+        where = "tapped hole" if th["internal"] else "external" if th["internal"] is False else ""
+        top = [{"label": "Thread", "value": f"{th['callout']} {where}".strip() if std else f"Non-standard ({th['pitch']:.3f} mm pitch)",
+                "kind": "text", "primary": True, "status": True}]
+        if std:
+            top.append({"label": "Pitch", "value": threads.describe(std), "kind": "text", "status": True})
+            if th["internal"] is not False:
+                top.append({"label": "Tap drill", "value": std["tap_name"], "kind": "text"})
+            top.append({"label": "Major diameter", "value": std["major"], "kind": "length"})
+        if th["hand"] == "left":
+            top.append({"label": "Hand", "value": "Left-hand", "kind": "text", "status": True})
+        top += [{"label": "Thread length", "value": th["length"], "kind": "length"},
+                {"label": "Modelled major", "value": th["major"], "kind": "length"},
+                {"label": "Modelled minor", "value": th["minor"], "kind": "length"}]
+        rows[:0] = top
+        gfx.append({"type": "note", "p": th["center"], "text": top[0]["value"]})
+        return
+    if th.get("taper"):
+        rows.insert(0, {"label": "Thread", "value": th["callout"], "kind": "text", "primary": True, "status": True})
+        gfx.append({"type": "note", "p": e.m.face_params[e.index]["center"], "text": th["callout"]})
+        return
+    likely = th.get("likely") or []
+    at = next((i + 1 for i, r in enumerate(rows) if r["label"] == "Radius"), 1)
+    extra = [{"label": "Likely", "value": likely[0], "kind": "text", "status": True}] if likely else []
+    extra += [{"label": "Could be", "value": x, "kind": "text"} for x in likely[1:3]]
+    rows[at:at] = extra
 
 
 def face_centroid(m, f):

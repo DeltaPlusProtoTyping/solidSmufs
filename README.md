@@ -117,8 +117,13 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   distance, normal distance, angle and Delta X / Y / Z, drawn in the graphics area. When one of the
   two is a radius (an arc edge or a hole), a Close / Center / Far toggle for each radius picks its
   close tangent, centerline or far tangent. A radius and two or more other items give the distance
-  from the radius to each of them; with two, the difference and how far off center the hole sits; Projected On (screen or a plane) and Measurement History as in
-  SolidWorks.
+  from the radius to each of them; with two, the difference and how far off center the hole sits.
+  Projected On (screen or a plane) and Measurement History as in SolidWorks.
+- **Threads:** click a tapped hole or a threaded shaft and the Measure box and status bar show its
+  size (1/4-20 UNC, M6x1, 1/4-18 NPT), pitch, tap drill and thread length. Modelled threads are read
+  off the helix, so the answer is definite; a plain hole (a cylinder at the tap drill or minor
+  diameter, as Hole Wizard and cosmetic threads leave it) gets its most likely use and the other
+  sizes it could be. Covers UNC / UNF #0 to 1", ISO metric coarse and common fine, and NPT.
 - **Mass Properties:** pick a material (or a density); the report is in SolidWorks' format: mass,
   volume, surface area, center of mass, principal axes and moments, inertia at the center of mass
   and at the origin.
@@ -128,8 +133,8 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   it, with length and width fitted as tight as they go; Ctrl+click a second face to set the length
   direction too. Sizes are exact, from the true surfaces.
 - **Stock Size:** smallest block (or one standing on picked faces, as in Bounding Box), and round bar for round parts, with allowance and rounding,
-  plus stock weight. **Hole Report:** every hole by diameter, count and depth, matched to tap
-  drills, clearance holes and standard drills. **Quote Summary:** all of it in one copyable list.
+  plus stock weight. **Hole Report:** every hole by diameter, count and depth, with modelled
+  thread sizes, and the rest matched to tap drills, minor diameters, clearance holes and drills. **Quote Summary:** all of it in one copyable list.
 
 ## How it's built
 
@@ -137,15 +142,16 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
 - `solidsmufs/server.py`: local HTTP API on 127.0.0.1 with a per-session token.
 - `solidsmufs/documents.py`: one worker process per open file.
 - `solidsmufs/kernel/`: loading (`cad.py` via gmsh/OpenCASCADE, `meshio.py`), the cache and tools
-  (`worker.py`), measuring (`measure.py`), mass properties and bounding boxes (`massprops.py`).
+  (`worker.py`), measuring (`measure.py`), thread sizes (`threads.py`), mass properties and
+  bounding boxes (`massprops.py`).
 - `solidsmufs/formats/parasolid/`: SolidWorks / Parasolid reader (Parasolid → STEP).
 - `solidsmufs/formats/sldasm.py`: SolidWorks assembly reader (components, configurations, placements).
 - `solidsmufs/formats/parasolid/appearance.py`: colors, material, density and appearances in a part;
   `solidsmufs/kernel/looks.py`: the finish each body gets from them.
 - `tests/`: `smoke.py` opens every sample file; `test_measure.py` checks measuring, mass properties
   and bounding boxes on a block with known answers; `test_sldasm.py` the assembly reader;
-  `test_looks.py` colours, materials and configurations
-  (`.venv\Scripts\python -m unittest tests.test_measure tests.test_sldasm tests.test_looks`).
+  `test_looks.py` colours, materials and configurations; `test_threads.py` thread recognition on
+  modelled M6 and 1/4-20 threads (`.venv\Scripts\python -m unittest discover -s tests`).
 - `solidsmufs/web/`: the interface (three.js graphics, SolidWorks-style shell, Wagner theme).
 
 Settings and recent files live in `%APPDATA%\SolidSmufs`.

@@ -606,7 +606,7 @@ class App {
     let html = '';
     if (this.viewer.mode === 'zoomArea') html = 'Drag a box to zoom into it.';
     else if (this.quick?.rows?.length) {
-      const rows = this.quick.rows.filter((r) => r.kind !== 'text' && r.kind !== 'vector');
+      const rows = this.quick.rows.filter((r) => r.status || (r.kind !== 'text' && r.kind !== 'vector'));
       const pick = [...rows.filter((r) => r.primary), ...rows.filter((r) => !r.primary)].slice(0, 4);
       html = pick.map((r) => `${r.label}: <b>${escapeHtml(u.value(r))}</b>`).join('<span class="sep">|</span>');
     } else if (this.sel.length > 1) html = `${this.sel.length} items selected`;

@@ -371,7 +371,9 @@ class Session:
     def holes(self):
         """Round holes: cylindrical faces whose material wraps around them, grouped by axis and
         radius into hole features, then by diameter. Depth is the length along the axis; a hole
-        with no bottom face (flat or drill point) counts as through."""
+        with no bottom face (flat or drill point) counts as through. Holes with a modelled thread
+        carry its size; the rest say what their diameter most likely is (tap drill, clearance, drill)."""
+        from . import threads
         from .geom import unit
         m = self.model
         feats = []
@@ -409,21 +411,50 @@ class Session:
                     break
             else:
                 holes.append({"r": ft["r"], "c": ft["c"], "a": ft["a"], "faces": [ft["face"]], "bins": set(ft["bins"]), "t": ft["t"]})
-        result = []
+        result, threaded = [], set()
+
+        def thread_of(faces):
+            for f in faces:
+                try:
+                    th = threads.modelled(m, f)
+                except Exception:
+                    th = None
+                if th and th["internal"] is not False and th["callout"]:
+                    return th
+            return None
+
         for hole in holes:
-            if len(hole["bins"]) < 64:  # less than ~320°: a slot end, fillet or partial bore, not a hole
+            th = thread_of(hole["faces"])
+            if len(hole["bins"]) < 64 and not th:  # less than ~320°: a slot end, fillet or partial bore, not a hole
                 continue
-            result.append({"diameter": 2 * hole["r"], "depth": hole["t"][1] - hole["t"][0], "through": not self._hole_has_bottom(hole),
-                           "faces": hole["faces"]})
+            if th and threaded & set(th["faces"]):
+                continue  # another strip of a thread already counted
+            if th:
+                threaded |= set(th["faces"])
+                hole = {**hole, "faces": sorted(set(hole["faces"]) | set(th["faces"])), "r": th["thread"]["major"] / 2}
+            result.append({"diameter": 2 * hole["r"], "depth": th["length"] if th else hole["t"][1] - hole["t"][0],
+                           "through": not self._hole_has_bottom(hole), "faces": hole["faces"], "thread": th and th["callout"]})
+        # threads modelled with no plain cylinder in them
+        for f, t in enumerate(m.face_type):
+            if t in threads.FREEFORM and f not in threaded:
+                th = thread_of([f])
+                if th and not threaded & set(th["faces"]):
+                    threaded |= set(th["faces"])
+                    hole = {"faces": th["faces"], "r": th["thread"]["major"] / 2, "a": th["axis"]}
+                    result.append({"diameter": th["thread"]["major"], "depth": th["length"], "through": not self._hole_has_bottom(hole),
+                                   "faces": th["faces"], "thread": th["callout"]})
         groups = {}
         for r in result:
-            g = groups.setdefault(round(r["diameter"], 3), {"diameter": r["diameter"], "count": 0, "depths": [], "through": True, "faces": []})
+            g = groups.setdefault((r["thread"], round(r["diameter"], 3)), {"diameter": r["diameter"], "count": 0, "depths": [], "through": True,
+                                                                         "faces": [], "thread": r["thread"]})
             g["count"] += 1
             g["depths"].append(r["depth"])
             g["through"] = g["through"] and r["through"]
             g["faces"] += r["faces"]
         out = [{"diameter": g["diameter"], "count": g["count"], "depth_min": min(g["depths"]), "depth_max": max(g["depths"]),
-                "through": g["through"], "faces": g["faces"]} for g in sorted(groups.values(), key=lambda g: g["diameter"])]
+                "through": g["through"], "faces": g["faces"], "thread": g["thread"],
+                "likely": [f"{g['thread']} tapped (modelled thread)"] if g["thread"] else threads.likely(g["diameter"])}
+               for g in sorted(groups.values(), key=lambda g: g["diameter"])]
         return jsonable({"groups": out, "holes": len(result)})
 
     def _hole_has_bottom(self, hole):

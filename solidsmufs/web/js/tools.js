@@ -218,6 +218,8 @@ export class Tools {
             if (val >= dist * 0.02) v.addLabel(s.clone().add(e).multiplyScalar(0.5), `d${ax.toUpperCase()} ${escapeHtml(u.len(val, false))}`, `small ${ax}`);
           });
         }
+      } else if (g.type === 'note') {
+        v.addLabel(new THREE.Vector3(...g.p), escapeHtml(g.text), 'primary thread');
       } else if (g.type === 'point') {
         v.annotDots([g.p], g.style === 'center' ? center : main, 7);
         if (g.style === 'center') v.addLabel(new THREE.Vector3(...g.p), 'Center', 'small');
@@ -481,10 +483,7 @@ export class Tools {
     const u = this.units;
     const groups = r.groups || [];
     if (!groups.length) { d.setBody(h('div', { class: 'pm-msg', text: 'No round holes found (holes are cylindrical faces that go into the material).' })); return; }
-    const rows = groups.map((g) => {
-      const match = holeMatch(g.diameter);
-      return { g, match };
-    });
+    const rows = groups.map((g) => ({ g, match: (g.likely || [])[0] || '' }));
     const text = ['Ø\tQty\tDepth\tLikely'].concat(rows.map(({ g, match }) => `${u.len(g.diameter)}\t${g.count}\t${g.through ? 'Thru' : u.len(g.depth_max)}\t${match}`)).join('\n');
     const total = groups.reduce((s, g) => s + g.count, 0);
     d.setBody(h('div', { style: { display: 'flex', flexDirection: 'column', height: '100%', gap: '6px' } },
@@ -496,9 +495,9 @@ export class Tools {
           h('td', { text: `Ø${u.len(g.diameter)}` }),
           h('td', { class: 'num', text: String(g.count) }),
           h('td', { class: 'num', text: g.through ? 'Thru' : g.depth_min && Math.abs(g.depth_max - g.depth_min) > 1e-6 ? `${u.len(g.depth_min, false)}–${u.len(g.depth_max)}` : u.len(g.depth_max) }),
-          h('td', { text: match }),
+          h('td', { text: match, title: (g.likely || []).join('\n') }),
           h('td', {}, h('button', { class: 'btn', onclick: () => app.setSelection(g.faces.map((f) => ({ kind: 'face', index: f }))) }, 'Select'))))))),
-      h('div', { class: 'subtle', text: 'Groups coaxial cylindrical faces that go into the material. "Likely" compares the diameter with tap drills, clearance holes and standard drills.' })));
+      h('div', { class: 'subtle', text: 'Groups coaxial cylindrical faces that go into the material. "Likely" reads modelled threads off the geometry; otherwise it compares the diameter with tap drills, minor diameters, clearance holes and standard drills (hover for other matches).' })));
   }
 
   // ================================================================== Wagner: Quote Summary
@@ -532,7 +531,7 @@ export class Tools {
       `Envelope (L × W × T): ${dims.map((x) => u.len(x, false)).join(' × ')} ${u.label}`,
       '',
       `Holes: ${(holes.groups || []).reduce((s, g) => s + g.count, 0)}`,
-      ...(holes.groups || []).map((g) => `  ${g.count} × Ø${u.len(g.diameter)} ${g.through ? 'thru' : `× ${u.len(g.depth_max)} deep`} — ${holeMatch(g.diameter)}`),
+      ...(holes.groups || []).map((g) => `  ${g.count} × Ø${u.len(g.diameter)} ${g.through ? 'thru' : `× ${u.len(g.depth_max)} deep`} — ${(g.likely || [])[0] || ''}`),
       '',
       `Bodies: ${st.bodies} · Faces: ${st.faces} · Edges: ${st.edges}`,
       `Faces by type: ${Object.entries(this.meta.faces.type.reduce((o, t) => { o[t] = (o[t] || 0) + 1; return o; }, {})).map(([k, v]) => `${k} ${v}`).join(', ')}`,
@@ -759,46 +758,6 @@ function minCircle(points) {
     }
   }
   return c;
-}
-
-// what a hole of this diameter (mm) most likely is: tap drill, clearance hole or a standard drill
-const IN = 25.4;
-const TAPS = [['#0-80', 0.0469], ['#2-56', 0.07], ['#4-40', 0.089], ['#6-32', 0.1065], ['#8-32', 0.136], ['#10-24', 0.1495], ['#10-32', 0.159],
-  ['1/4-20', 0.201], ['1/4-28', 0.213], ['5/16-18', 0.257], ['5/16-24', 0.272], ['3/8-16', 0.3125], ['3/8-24', 0.332], ['7/16-14', 0.368],
-  ['1/2-13', 0.4219], ['1/2-20', 0.4531], ['5/8-11', 0.5312], ['3/4-10', 0.6562]].map(([n, d]) => [n, d * IN])
-  .concat([['M2x0.4', 1.6], ['M2.5x0.45', 2.05], ['M3x0.5', 2.5], ['M4x0.7', 3.3], ['M5x0.8', 4.2], ['M6x1', 5.0], ['M8x1.25', 6.8], ['M10x1.5', 8.5], ['M12x1.75', 10.2], ['M16x2', 14.0]]);
-const CLEAR = [['#4', 0.116, 0.12], ['#6', 0.144, 0.15], ['#8', 0.169, 0.177], ['#10', 0.196, 0.201], ['1/4', 0.257, 0.266], ['5/16', 0.323, 0.332],
-  ['3/8', 0.386, 0.397], ['1/2', 0.516, 0.531], ['5/8', 0.641, 0.656]].map(([n, a, b]) => [n, a * IN, b * IN])
-  .concat([['M3', 3.2, 3.4], ['M4', 4.3, 4.5], ['M5', 5.3, 5.5], ['M6', 6.4, 6.6], ['M8', 8.4, 9.0], ['M10', 10.5, 11.0], ['M12', 13.0, 13.5]]);
-const NUMBER_DRILLS = [0.228, 0.221, 0.213, 0.209, 0.2055, 0.204, 0.201, 0.199, 0.196, 0.1935, 0.191, 0.189, 0.185, 0.182, 0.18, 0.177, 0.173, 0.1695, 0.166, 0.161,
-  0.159, 0.157, 0.154, 0.152, 0.1495, 0.147, 0.144, 0.1405, 0.136, 0.1285, 0.12, 0.116, 0.113, 0.111, 0.11, 0.1065, 0.104, 0.1015, 0.0995, 0.098, 0.096, 0.0935,
-  0.089, 0.086, 0.082, 0.081, 0.0785, 0.076, 0.073, 0.07, 0.067, 0.0635, 0.0595, 0.055, 0.052, 0.0465, 0.043, 0.042, 0.041, 0.04];
-const LETTER_DRILLS = [0.234, 0.238, 0.242, 0.246, 0.25, 0.257, 0.261, 0.266, 0.272, 0.277, 0.281, 0.29, 0.295, 0.302, 0.316, 0.323, 0.332, 0.339, 0.348, 0.358, 0.368, 0.377, 0.386, 0.397, 0.404, 0.413];
-
-export function holeMatch(d) {
-  const tolTap = Math.max(0.03, d * 0.006);
-  const tap = TAPS.map(([n, td]) => [n, Math.abs(td - d)]).filter(([, e]) => e <= tolTap).sort((a, b) => a[1] - b[1])[0];
-  if (tap) return `Tap drill for ${tap[0]}`;
-  const clr = CLEAR.find(([, a, b]) => Math.abs(d - a) <= 0.03 || Math.abs(d - b) <= 0.03);
-  if (clr) return `Clearance for ${clr[0]} screw (${Math.abs(d - clr[1]) <= Math.abs(d - clr[2]) ? 'close' : 'free'} fit)`;
-  const inch = d / IN;
-  const frac64 = Math.round(inch * 64);
-  if (frac64 > 0 && Math.abs(frac64 / 64 - inch) < 0.0006) return `${fraction(frac64)}" drill`;
-  const num = NUMBER_DRILLS.findIndex((x) => Math.abs(x - inch) < 0.0006);
-  if (num >= 0) return `#${num + 1} drill (${inch.toFixed(4)}")`;
-  const let_ = LETTER_DRILLS.findIndex((x) => Math.abs(x - inch) < 0.0006);
-  if (let_ >= 0) return `Letter ${String.fromCharCode(65 + let_)} drill (${inch.toFixed(4)}")`;
-  const mm = Math.round(d * 10) / 10;
-  if (Math.abs(mm - d) < 0.01) return `${mm} mm drill`;
-  return 'Bored / non-standard';
-}
-
-function fraction(n64) {
-  let n = n64, dnm = 64;
-  while (n % 2 === 0 && dnm > 1) { n /= 2; dnm /= 2; }
-  const whole = Math.floor(n / dnm);
-  const rest = n % dnm;
-  return whole ? (rest ? `${whole}-${rest}/${dnm}` : `${whole}`) : `${rest}/${dnm}`;
 }
 
 void icon;
