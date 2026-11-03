@@ -53,6 +53,73 @@ def _build_block(path, turn):
     gmsh.finalize()
 
 
+def _build_bends(path):
+    """An elliptical tube (semi-axes 20 and 10, 30 long) and a spline through points on a 5 mm circle."""
+    import gmsh
+
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    gmsh.model.add("bends")
+    occ = gmsh.model.occ
+    loop = occ.addCurveLoop([occ.addEllipse(0, 0, 0, 20, 10)])
+    occ.extrude([(2, occ.addPlaneSurface([loop]))], 0, 0, 30)
+    pts = [occ.addPoint(100 + 5 * math.cos(t), 5 * math.sin(t), 0) for t in np.linspace(0, 2.5, 41)]
+    occ.extrude([(2, occ.addPlaneSurface([occ.addCurveLoop([occ.addSpline(pts), occ.addLine(pts[-1], pts[0])])]))], 0, 0, 5)
+    occ.synchronize()
+    gmsh.write(str(path))
+    gmsh.finalize()
+
+
+class BentFacesAndEdges(unittest.TestCase):
+    """Smooth bends with no radius of their own in the file still show one, from the exact curvature."""
+
+    @classmethod
+    def setUpClass(cls):
+        import multiprocessing as mp
+
+        from solidsmufs.kernel.worker import Session
+
+        cls.dir = Path(tempfile.mkdtemp(prefix="solidsmufs-test-"))
+        step = cls.dir / "bends.brep"
+        p = mp.get_context("spawn").Process(target=_build_bends, args=(str(step),))
+        p.start()
+        p.join(120)
+        cls.s = Session()
+        cls.s.load(str(step), "normal")
+        cls.m = cls.s.model
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def rows(self, sel):
+        return {r["label"]: r["value"] for r in self.s.measure([sel])["rows"]}
+
+    def wall(self):  # the elliptical tube's
+        return next(f for f, t in enumerate(self.m.face_type) if t != "plane" and self.m.face_triangles(f)[0][0][0] < 90)
+
+    def test_elliptical_wall_gives_the_range_and_the_spot(self):
+        f = self.wall()
+        r = self.rows({"kind": "face", "index": f})
+        self.assertAlmostEqual(r["Smallest radius"], 10 * 10 / 20, delta=0.2)  # b^2 / a, at the long ends
+        self.assertAlmostEqual(r["Largest radius"], 20 * 20 / 10, delta=2)  # a^2 / b, on the flat sides
+        at_end = self.rows({"kind": "face", "index": f, "point": [20.0, 0.0, 15.0]})
+        self.assertAlmostEqual(at_end["Radius here"], 5.0, delta=0.01)
+        at_side = self.rows({"kind": "face", "index": f, "point": [0.0, 10.0, 15.0]})
+        self.assertAlmostEqual(at_side["Radius here"], 40.0, delta=0.05)
+
+    def test_spline_on_a_circle_reads_one_radius(self):
+        e = next(i for i, t in enumerate(self.m.edge_type) if t == "bspline" and self.m.edge_points(i)[0][0] > 90)
+        r = self.s.measure([{"kind": "edge", "index": e}])
+        rows = {x["label"]: x["value"] for x in r["rows"]}
+        self.assertAlmostEqual(rows["Radius"], 5.0, delta=0.05)
+        self.assertTrue(any(g["type"] == "radius" for g in r["graphics"]))
+
+    def test_flat_face_and_straight_edge_show_no_radius(self):
+        f = next(i for i, t in enumerate(self.m.face_type) if t == "plane")
+        self.assertFalse({"Radius", "Radius here"} & set(self.rows({"kind": "face", "index": f})))
+
+
 class BlockWithHoles(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

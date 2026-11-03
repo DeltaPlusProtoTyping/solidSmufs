@@ -316,8 +316,20 @@ class Session:
             except Exception:
                 return None
 
+        def exact_curvature(kind, i, pts):
+            """Curvatures at points on a face ((tightest, gentlest) per point) or an edge (per point)."""
+            flat = np.asarray(pts, np.float64).ravel().tolist()
+            if kind == "face":
+                tag = int(m.face_tag[i])
+                k1, k2, _d1, _d2 = gmsh.model.getPrincipalCurvatures(tag, gmsh.model.getParametrization(2, tag, flat))
+                k1, k2 = np.abs(np.asarray(k1, np.float64)), np.abs(np.asarray(k2, np.float64))
+                return np.maximum(k1, k2), np.minimum(k1, k2)
+            tag = int(m.edge_tag[i])
+            return np.abs(np.asarray(gmsh.model.getCurvature(1, tag, gmsh.model.getParametrization(1, tag, flat)), np.float64))
+
         m.exact_area = exact_area
         m.exact_centroid = exact_centroid
+        m.exact_curvature = exact_curvature
 
     # ------------------------------------------------------------------ tools
     def measure(self, selection, options=None):

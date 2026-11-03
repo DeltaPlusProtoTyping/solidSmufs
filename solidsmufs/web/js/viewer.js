@@ -329,9 +329,15 @@ export class Viewer {
     const v = this.space;
     if (!v || !this.model) { this._spaceLast = now; return false; }
     const DEAD = 10, FULL = 350, EASE = 0.05;  // seconds: eases out a stray value or a late report
-    const dt = Math.min(Math.max(now - (this._spaceLast ?? now), 0) / 1000, 0.05);
+    const gap = now - (this._spaceLast ?? now);
+    const dt = Math.min(Math.max(gap, 0) / 1000, 0.05);
     this._spaceLast = now;
     if (!dt) return false;
+    if (this.spaceEased && gap > 40) console.info(`[space] slow frame: ${gap.toFixed(0)} ms`);
+    if (this.spaceEased && this._spaceLeft && (this._spaceLeft.quat.angleTo(this.rig.quat) > 1e-6
+      || this._spaceLeft.target.distanceTo(this.rig.target) > 1e-6 * this.rig.height || this._spaceLeft.height !== this.rig.height)) {
+      console.info('[space] something else moved the camera between frames');  // nothing should
+    }
     const quiet = now - this.spaceAt > 400;  // the device has gone quiet: glide to a stop
     const want = v.map((x) => (quiet || Math.abs(x) < DEAD ? 0 : (x - Math.sign(x) * DEAD) / (FULL - DEAD)));
     const k = 1 - Math.exp(-dt / EASE);
@@ -349,6 +355,7 @@ export class Viewer {
     rig.zoomAt(Math.exp(ty * ZOOM * dt), 0, 0);
     rig.rotate(rz * TURN * dt, rx * TURN * dt, this.spacePivot);
     rig.roll(-ry * Math.PI * dt);
+    this._spaceLeft = rig.state();
     this.viewChanged = true;
     return true;
   }
@@ -938,7 +945,7 @@ export class Viewer {
     if (!id) return null;
     const { nF, nE } = this.model;
     if (id <= nF) return { kind: 'face', index: id - 1, point: this._hitPoint(id - 1, x, y) };
-    if (id <= nF + nE) return { kind: 'edge', index: id - nF - 1 };
+    if (id <= nF + nE) return { kind: 'edge', index: id - nF - 1, point: this._edgeHitPoint(id - nF - 1, x, y) };
     return { kind: 'vertex', index: id - nF - nE - 1 };
   }
 
@@ -962,6 +969,19 @@ export class Viewer {
     const rc = new THREE.Raycaster();
     rc.setFromCamera(new THREE.Vector2((x / this.width) * 2 - 1, -(y / this.height) * 2 + 1), this.rig.camera);
     return rc.ray;
+  }
+
+  // the spot on an edge nearest the click, for its radius there
+  _edgeHitPoint(edge, x, y) {
+    const ray = this.ray(x, y), pts = this.entityPoints({ kind: 'edge', index: edge });
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), on = new THREE.Vector3();
+    let best = null, bestD = Infinity;
+    for (let i = 0; i + 5 < pts.length; i += 6) {
+      a.fromArray(pts, i); b.fromArray(pts, i + 3);
+      const d = ray.distanceSqToSegment(a, b, null, on);
+      if (d < bestD) { bestD = d; best = on.toArray(); }
+    }
+    return best;
   }
 
   _hitPoint(face, x, y) {

@@ -234,6 +234,9 @@ export class Tools {
             if (val >= dist * 0.02) v.addLabel(s.clone().add(e).multiplyScalar(0.5), `d${ax.toUpperCase()} ${escapeHtml(u.len(val, false))}`, `small ${ax}`);
           });
         }
+      } else if (g.type === 'radius') {
+        v.annotDots([g.p], main, 7);
+        v.addLabel(new THREE.Vector3(...g.p), `R ${escapeHtml(u.len(g.value))}`, 'primary');
       } else if (g.type === 'note') {
         v.addLabel(new THREE.Vector3(...g.p), escapeHtml(g.text), 'primary thread');
       } else if (g.type === 'point') {

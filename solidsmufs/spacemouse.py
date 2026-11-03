@@ -145,7 +145,7 @@ class Reader:
             return
         self.handles.append(h)
         buf, got, state = ctypes.create_string_buffer(length), wintypes.DWORD(), [0] * 6
-        last, before = time.monotonic(), [0] * 6
+        last, before, run = time.monotonic(), [0] * 6, None
         while not self.stopped:
             if not k32.ReadFile(h, buf, length, ctypes.byref(got), None):
                 if not self.stopped:
@@ -157,6 +157,17 @@ class Reader:
                 if held and (now - last > GAP or step > SPIKE):  # for telling device hiccups from view ones
                     log.info("SpaceMouse: %.0f ms since the last report, biggest change %d: %s -> %s",
                              1000 * (now - last), step, before, state)
+                flipped = [i for i in range(6) if state[i] * before[i] < 0 and min(abs(state[i]), abs(before[i])) > 10]
+                if flipped:  # the cap's value reversing outright between two reports
+                    log.info("SpaceMouse: axis %s reversed: %s -> %s", flipped, before, state)
+                moving = any(state)
+                if moving and not run:
+                    run = [now, 0]
+                if run:
+                    run[1] += 1
+                if run and not moving:
+                    log.info("SpaceMouse: a move of %.1f s, %d reports", now - run[0], run[1])
+                    run = None
                 last, before = now, list(state)
                 try:
                     self.on_motion(list(state))

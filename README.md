@@ -119,6 +119,10 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   close tangent, centerline or far tangent. A radius and two or more other items give the distance
   from the radius to each of them; with two, the difference and how far off center the hole sits.
   Projected On (screen or a plane) and Measurement History as in SolidWorks.
+- **Radius of a smooth bend:** click a curved face or edge that has no radius of its own in the file
+  (a spline or swept surface, a fillet, a spline or elliptical edge) and it shows its radius, from the
+  exact curvature: one Radius when it's constant, otherwise the radius where you clicked and the
+  smallest and largest.
 - **Threads:** click a tapped hole or a threaded shaft and the Measure box and status bar show its
   size (1/4-20 UNC, M6x1, 1/4-18 NPT), pitch, tap drill and thread length. Modelled threads are read
   off the helix, so the answer is definite; a plain hole (a cylinder at the tap drill or minor

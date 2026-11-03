@@ -164,6 +164,7 @@ def single(e, extra):
                          {"label": "dY", "value": abs(d[1]), "kind": "length"},
                          {"label": "dZ", "value": abs(d[2]), "kind": "length"}]
         rows.append({"label": "Type", "value": _type_name(e.type), "kind": "text"})
+        _radius_rows(e, rows, gfx)
         return rows, gfx
     # face
     p = e.params or {}
@@ -198,7 +199,81 @@ def single(e, extra):
         rows.append({"label": "Centroid", "value": centroid, "kind": "point"})
     rows.append({"label": "Type", "value": _type_name(e.type), "kind": "text"})
     _thread_rows(e, rows, gfx)
+    if not any(r["label"] == "Thread" for r in rows):
+        _radius_rows(e, rows, gfx)
     return rows, gfx
+
+
+def _radius_rows(e, rows, gfx):
+    """The radius of a smooth bend that has no radius of its own in the file: a spline, swept or offset
+    face or edge, from the exact curvature (a fillet's spline is one radius all along; otherwise the
+    radius at the picked spot and the range), a torus's tube (a fillet round a bend) or a cone at the
+    picked height. Flat and straight things, and anything with no exact geometry, add nothing."""
+    p = e.params or {}
+    if e.kind == "face" and e.type == "torus" and p.get("minor_radius"):
+        _lead_radius(rows, gfx, e, "Radius", float(p["minor_radius"]))
+        return
+    if e.kind == "face" and e.type == "cone":
+        if e.pick is not None:
+            _lead_radius(rows, gfx, e, "Radius here", float(e.radius_at(e.pick)))
+        return
+    bends = e.kind == "face" and e.type in ("bspline", "bezier", "surface", "revolution", "ruled") or \
+        e.kind == "edge" and e.type not in (None, "line", "circle")
+    if not bends or not hasattr(e.m, "exact_curvature"):
+        return
+    pts = e.m.face_triangles(e.index)[0] if e.kind == "face" else e.m.edge_points(e.index)
+    if not len(pts):
+        return
+    size = float(np.linalg.norm(np.ptp(pts, axis=0))) or 1.0
+    pts = pts[np.linspace(0, len(pts) - 1, min(len(pts), 80)).astype(int)]
+    try:
+        k = e.m.exact_curvature(e.kind, e.index, pts)
+        other = None
+        if e.kind == "face":
+            k, other = k
+        here = None
+        if e.pick is not None:
+            kp = e.m.exact_curvature(e.kind, e.index, e.pick[None, :])
+            here = float(kp[0][0] if e.kind == "face" else kp[0])
+    except Exception:  # a curvature gmsh can't work out must never stop the measurement
+        return
+    k = k[np.isfinite(k)]
+    if not len(k):
+        return
+    FLAT = 1 / (1000 * size)  # gentler than this is straight, for this size of thing
+    lo, hi = float(np.percentile(k, 2)), float(np.percentile(k, 98))  # the very ends can be noisy
+    if hi < FLAT:
+        return
+    if hi - lo <= 0.01 * hi:  # one radius all along
+        _lead_radius(rows, gfx, e, "Radius", 1 / float(np.median(k)))
+    else:
+        extra = [{"label": "Smallest radius", "value": 1 / hi, "kind": "length"}]
+        if lo >= FLAT:
+            extra.append({"label": "Largest radius", "value": 1 / lo, "kind": "length"})
+        rows[0:0] = extra
+        if here is not None and here >= FLAT:
+            _lead_radius(rows, gfx, e, "Radius here", 1 / here)
+        else:
+            rows[0]["primary"] = True
+            for r in rows[1:]:
+                r["primary"] = False
+    if other is not None:  # curved both ways: its gentler bend, unless it's a ball
+        o = float(np.median(other[np.isfinite(other)]))
+        if o >= 10 * FLAT and o < 0.99 * float(np.median(k)):
+            rows.insert(1, {"label": "Other-way radius", "value": 1 / o, "kind": "length"})
+
+
+def _lead_radius(rows, gfx, e, label, r):
+    """Put a radius at the top of the rows, as the main answer, with its value on the part."""
+    for row in rows:
+        row["primary"] = False
+    rows.insert(0, {"label": label, "value": r, "kind": "length", "primary": True})
+    at = e.pick
+    if at is None:
+        pts = e.m.face_triangles(e.index)[0] if e.kind == "face" else e.m.edge_points(e.index)
+        at = pts[int(np.argmin(np.linalg.norm(pts - pts.mean(axis=0), axis=1)))] if len(pts) else None
+    if at is not None:
+        gfx.append({"type": "radius", "p": at, "value": r})
 
 
 def _thread_rows(e, rows, gfx):
