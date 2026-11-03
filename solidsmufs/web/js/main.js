@@ -365,7 +365,7 @@ class App {
     this.quick = null;
     if (!sel.length || !this.active?.meta) { this.status(); return; }
     try {
-      const r = await api.measure(this.active.id, sel.map(clean), { arc: this.tools.arcMode || 'center' });
+      const r = await api.measure(this.active.id, sel.map(clean), this.tools.measureOpts(sel));
       if (token !== this._qm) return;
       this.quick = r;
     } catch { if (token !== this._qm) return; }

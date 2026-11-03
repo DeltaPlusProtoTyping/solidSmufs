@@ -8,12 +8,14 @@ import { h, Dialog, menu, toast, copyText, modal } from './ui.js';
 import { PRODUCT, MATERIALS, escapeHtml, clean, materialLabel } from './consts.js';
 
 const AXIS = { x: 0xd93a3a, y: 0x2f9e46, z: 0x2c63d6 };
+const arcKey = (s) => `${s.kind}:${s.index}`;
 const KIND_ICON = { face: 'face', edge: 'edge', vertex: 'vertex', point: 'point', body: 'body', plane: 'plane', origin: 'origin' };
 
 export class Tools {
   constructor(app) {
     this.app = app;
     this.arcMode = 'center';
+    this.arcPick = new Map();  // per picked radius: 'min' (close tangent) | 'center' | 'max' (far tangent)
     this.pointToPoint = false;
     this.showXYZ = true;
     this.projected = 'none';
@@ -35,6 +37,7 @@ export class Tools {
   closeDocDialogs() {
     for (const k of Object.keys(this.dialogs)) this.dialogs[k]?.close();
     this.dialogs = {};
+    this.arcPick.clear();
   }
 
   selectionChanged() {
@@ -56,10 +59,9 @@ export class Tools {
     const app = this.app;
     const tb = (iconName, title, on, fn) => h('button', { class: `icon-btn${on ? ' on' : ''}`, title, html: tool(iconName), onclick: fn });
     const tools = () => [
-      tb('measure', 'Arc/Circle measurements', false, (e) => menu(e.currentTarget, [
-        { label: 'Center to Center', check: this.arcMode === 'center', action: () => { this.arcMode = 'center'; this._runMeasure(); } },
-        { label: 'Minimum Distance', check: this.arcMode === 'min', action: () => { this.arcMode = 'min'; this._runMeasure(); } },
-        { label: 'Maximum Distance', check: this.arcMode === 'max', action: () => { this.arcMode = 'max'; this._runMeasure(); } },
+      tb('measure', 'Arc/Circle measurements (all radii)', false, (e) => menu(e.currentTarget, [
+        ...[['center', 'Center to Center'], ['min', 'Minimum Distance'], ['max', 'Maximum Distance']].map(([k, label]) =>
+          ({ label, check: this.arcMode === k, action: () => { this.arcMode = k; this.arcPick.clear(); this._runMeasure(); app.quickMeasure(); } })),
       ])),
       tb('options', 'Units/Precision', false, (e) => menu(e.currentTarget, [
         ...Object.entries(SYSTEMS).map(([k, s]) => ({ label: s.name, check: app.units.system === k, action: () => app.setSystem(k) })),
@@ -86,6 +88,11 @@ export class Tools {
     return d;
   }
 
+  // How round items are measured: the toolbar default, and each picked radius's close / center / far
+  measureOpts(sel) {
+    return { arc: this.arcMode, arcs: sel.map((s) => this.arcPick.get(arcKey(s)) || null) };
+  }
+
   async _runMeasure() {
     const app = this.app;
     const sel = app.sel.filter((s) => !['body', 'plane', 'origin'].includes(s.kind));
@@ -94,7 +101,7 @@ export class Tools {
     this.mbusy = true;
     this._renderMeasure();
     try {
-      const r = await api.measure(app.active.id, sel.map(clean), { arc: this.arcMode });
+      const r = await api.measure(app.active.id, sel.map(clean), this.measureOpts(sel));
       if (token !== this._mt) return;
       this.mresult = r;
       const primary = (r.rows || []).find((x) => x.primary);
@@ -138,8 +145,23 @@ export class Tools {
         res.append(el);
       }
     }
-    d.setBody(selbox, h('div', { style: { height: '6px' } }), res);
+    d.setBody(selbox, this._arcToggles(sel, r), h('div', { style: { height: '6px' } }), res);
     this._drawMeasure();
+  }
+
+  // Close tangent / centerline / far tangent for each radius (arc edge or hole) in a two-item measurement
+  _arcToggles(sel, r) {
+    const modes = r?.arcs;
+    if (sel.length !== 2 || !modes || modes.length !== 2 || !modes.some(Boolean)) return null;
+    const both = modes.every(Boolean);
+    return h('div', { class: 'arcbox' }, ...sel.map((s, i) => {
+      if (!modes[i]) return null;
+      const pick = (k) => { this.arcPick.set(arcKey(s), k); this._runMeasure(); this.app.quickMeasure(); };
+      return h('div', { class: 'arcrow' },
+        h('span', { class: 'ak', title: this.app.describe(s, true), text: both ? `${this.app.describe(s, true)}:` : 'Measure from:' }),
+        h('div', { class: 'seg' }, ...[['min', 'Close', 'Close tangent'], ['center', 'Center', 'Centerline'], ['max', 'Far', 'Far tangent']].map(([k, label, title]) =>
+          h('button', { class: modes[i] === k ? 'on' : '', text: label, title, onclick: () => pick(k) }))));
+    }));
   }
 
   _displayRows(r) {

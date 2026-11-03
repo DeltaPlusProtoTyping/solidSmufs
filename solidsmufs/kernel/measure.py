@@ -10,8 +10,6 @@ Results are in mm and degrees; the browser formats them in the user's units. Eac
 and graphics for the view: {"type": "line" | "point" | "axis", ...}.
 """
 
-import math
-
 import numpy as np
 
 from .geom import angle_deg, line_line, point_line, unit
@@ -77,6 +75,13 @@ class Entity:
     def radius(self):
         p = self.params or {}
         return p.get("radius")
+
+    def round(self):
+        """A radius the measure tool can measure to its centre or either tangent: a circle / arc edge
+        or a cylindrical face."""
+        if not self.radius():
+            return False
+        return (self.type == "circle" and self.centre() is not None) or (self.type == "cylinder" and self.axis() is not None)
 
 
 # ---------------------------------------------------------------------------------------------- one entity
@@ -202,32 +207,22 @@ def _face_extent(m, f):
 def pair(a, b, opts, exact_distance):
     """Rows and graphics for two entities. exact_distance(a, b) → (d, p1, p2) or None."""
     rows, gfx = [], []
-    arc_mode = opts.get("arc", "center")  # how circles / arcs are measured: center | min | max
-
     pa, pb = a.point(), b.point()
-    ca, cb = a.centre(), b.centre()
-    # SolidWorks measures circles and arcs centre to centre unless told otherwise
-    use_centre_a = ca is not None and a.kind == "edge" and arc_mode == "center"
-    use_centre_b = cb is not None and b.kind == "edge" and arc_mode == "center"
+    modes = arc_modes((a, b), opts)
 
     # 1. the main distance
-    main = None
-    if pa is not None and pb is not None:
+    main = _arc_distance(a, b, modes) if any(modes) else None
+    if main is None and pa is not None and pb is not None:
         main = ("Distance", pa, pb)
-    elif (use_centre_a or pa is not None) and (use_centre_b or pb is not None) and (use_centre_a or use_centre_b):
-        main = ("Center distance", ca if use_centre_a else pa, cb if use_centre_b else pb)
     if main is None:
         res = exact_distance(a, b)
         if res is not None:
             d, p1, p2 = res
             main = ("Distance", p1, p2)
-    if main is not None and arc_mode == "max" and (a.type == "circle" or b.type == "circle"):
-        main = _max_distance(a, b) or main
     if main is not None:
         label, p1, p2 = main
         d = float(np.linalg.norm(p2 - p1))
-        rows.append({"label": label if arc_mode != "max" or label != "Distance" else "Max distance", "value": d,
-                     "kind": "length", "primary": True})
+        rows.append({"label": label, "value": d, "kind": "length", "primary": True})
         delta = p2 - p1
         rows += [{"label": "dX", "value": abs(delta[0]), "kind": "length", "axis": "x"},
                  {"label": "dY", "value": abs(delta[1]), "kind": "length", "axis": "y"},
@@ -306,72 +301,116 @@ def _anchor(e):
     return ax[0] if ax is not None else None
 
 
+def arc_modes(ents, opts):
+    """Where each round item is measured from: "center" (centreline), "min" (close tangent) or "max"
+    (far tangent); None for items that aren't round. opts["arcs"] picks per item; otherwise
+    opts["arc"] applies, except that holes (cylinder faces) start at the close tangent, the way
+    SolidWorks measures faces, while arcs start at the centre."""
+    picked = list(opts.get("arcs") or [])
+    default = opts.get("arc", "center")
+    out = []
+    for i, e in enumerate(ents):
+        if not e.round():
+            out.append(None)
+            continue
+        mode = picked[i] if i < len(picked) else None
+        if mode not in ("center", "min", "max"):
+            mode = "min" if e.type == "cylinder" and default == "center" else default
+        out.append(mode)
+    return out
+
+
+def _as_geom(e):
+    """The entity as a point ("p"), line ("l") or plane ("pl") for centre measurements, else None."""
+    if e.centre() is not None:
+        return "p", e.centre(), None
+    if e.type in ("cylinder", "cone") and e.axis() is not None:
+        return "l", *e.axis()
+    if e.point() is not None:
+        return "p", e.point(), None
+    if e.plane() is not None:
+        return "pl", *e.plane()
+    if e.line() is not None:
+        return "l", *e.line()
+    return None
+
+
+def _closest(ga, gb):
+    """Closest points between two of _as_geom's points / lines / planes, or None (a plane and a line
+    or plane that crosses it)."""
+    (ka, xa, da), (kb, xb, db) = ga, gb
+    if ka == "p" and kb == "p":
+        return xa, xb
+    if ka == "p" and kb == "l":
+        return xa, point_line(xa, xb, db)
+    if ka == "l" and kb == "p":
+        return point_line(xb, xa, da), xb
+    if ka == "l" and kb == "l":
+        return line_line(xa, da, xb, db)
+    if ka == "p" and kb == "pl":
+        return xa, xa - db * float((xa - xb) @ db)
+    if ka == "pl" and kb == "p":
+        return xb - da * float((xb - xa) @ da), xb
+    if ka == "l" and kb == "pl" and abs(float(da @ db)) < 1e-9:
+        return xa, xa - db * float((xa - xb) @ db)
+    if ka == "pl" and kb == "l" and abs(float(db @ da)) < 1e-9:
+        return xb - da * float((xb - xa) @ da), xb
+    return None
+
+
+def _foot(g, q):
+    """The point of geometry g nearest to q."""
+    k, x, d = g
+    if k == "p":
+        return x
+    if k == "l":
+        return point_line(q, x, d)
+    return q - d * float((q - x) @ d)
+
+
 def _centre_distance(a, b):
     """Centre-to-centre / axis-to-axis / centre-to-plane distance when either side is round."""
     ra = a.centre() is not None or (a.axis() is not None and a.type in ("cylinder", "cone"))
     rb = b.centre() is not None or (b.axis() is not None and b.type in ("cylinder", "cone"))
     if not (ra or rb):
         return None
-
-    def as_geom(e):
-        if e.centre() is not None:
-            return "p", e.centre(), None
-        if e.type in ("cylinder", "cone") and e.axis() is not None:
-            return "l", *e.axis()
-        if e.point() is not None:
-            return "p", e.point(), None
-        if e.plane() is not None:
-            return "pl", *e.plane()
-        if e.line() is not None:
-            return "l", *e.line()
-        return None
-
-    ga, gb = as_geom(a), as_geom(b)
+    ga, gb = _as_geom(a), _as_geom(b)
     if ga is None or gb is None:
         return None
-    (ka, xa, da), (kb, xb, db) = ga, gb
-    if ka == "p" and kb == "p":
-        p1, p2 = xa, xb
-    elif ka == "p" and kb == "l":
-        p1, p2 = xa, point_line(xa, xb, db)
-    elif ka == "l" and kb == "p":
-        p1, p2 = point_line(xb, xa, da), xb
-    elif ka == "l" and kb == "l":
-        p1, p2 = line_line(xa, da, xb, db)
-    elif ka == "p" and kb == "pl":
-        p1, p2 = xa, xa - db * float((xa - xb) @ db)
-    elif ka == "pl" and kb == "p":
-        p1, p2 = xb - da * float((xb - xa) @ da), xb
-    elif ka == "l" and kb == "pl" and abs(float(da @ db)) < 1e-9:
-        p1, p2 = xa, xa - db * float((xa - xb) @ db)
-    elif ka == "pl" and kb == "l" and abs(float(db @ da)) < 1e-9:
-        p1, p2 = xb - da * float((xb - xa) @ da), xb
-    else:
+    res = _closest(ga, gb)
+    if res is None:
         return None
+    p1, p2 = res
     return float(np.linalg.norm(p2 - p1)), p1, p2
 
 
-def _max_distance(a, b):
-    """Largest distance between two circles / a circle and a point, sampled finely."""
-    def samples(e):
-        if e.type == "circle" and e.params:
-            p = e.params
-            n = unit(p["normal"])
-            x = unit(np.asarray(p["start"]) - p["center"]) if not p.get("closed") else unit(np.cross(n, [1, 0, 0]) if abs(n[0]) < 0.9 else np.cross(n, [0, 1, 0]))
-            y = np.cross(n, x)
-            span = math.radians(p["angle"])
-            t = np.linspace(0, span, 721)
-            return p["center"] + p["radius"] * (np.outer(np.cos(t), x) + np.outer(np.sin(t), y))
-        if e.point() is not None:
-            return e.point()[None, :]
+def _arc_distance(a, b, modes):
+    """The distance with each round item measured from its centreline, close tangent or far tangent.
+    Starts from the centre / axis measurement, then slides each tangent end out by the radius, across
+    the circle's plane or the hole's axis, towards (close) or away from (far) the other end. For two
+    holes side by side that's the centre distance minus or plus each radius."""
+    ga, gb = _as_geom(a), _as_geom(b)
+    if ga is None or gb is None:
         return None
-
-    sa, sb = samples(a), samples(b)
-    if sa is None or sb is None:
+    res = _closest(ga, gb)
+    if res is None:
         return None
-    d = np.linalg.norm(sa[:, None, :] - sb[None, :, :], axis=2)
-    i, j = np.unravel_index(int(d.argmax()), d.shape)
-    return "Max distance", sa[i], sb[j]
+    centres, ends = list(res), list(res)
+    geoms, ents = (ga, gb), (a, b)
+    for _ in range(4 if any(m in ("min", "max") for m in modes) else 0):  # skewed circles take a few rounds
+        for i in (0, 1):
+            if modes[i] not in ("min", "max"):
+                continue
+            e, j = ents[i], 1 - i
+            n = e.axis()[1]
+            v = ends[j] - centres[i]
+            v = v - n * float(v @ n)
+            if np.linalg.norm(v) > 1e-12:
+                ends[i] = centres[i] + (1 if modes[i] == "min" else -1) * e.radius() * unit(v)
+            if modes[j] is None or (modes[j] == "center" and geoms[j][0] == "l"):
+                ends[j] = _foot(geoms[j], ends[i])  # the other side's nearest point to the new end
+    label = "Center distance" if all(m in (None, "center") for m in modes) else "Distance"
+    return label, ends[0], ends[1]
 
 
 # ---------------------------------------------------------------------------------------------- many entities
@@ -403,6 +442,7 @@ def measure(model, selection, opts, exact_distance):
         rows, gfx = pair(ents[0], ents[1], opts, exact_distance)
         if not rows:
             rows = [{"label": "Distance", "value": None, "kind": "text"}]
+        return {"rows": rows, "graphics": gfx, "labels": [e.label for e in ents], "arcs": arc_modes(ents, opts)}
     else:
         rows, gfx = many(ents)
     return {"rows": rows, "graphics": gfx, "labels": [e.label for e in ents]}

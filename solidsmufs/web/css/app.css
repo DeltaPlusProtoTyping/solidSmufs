@@ -522,6 +522,10 @@ input[type="range"] { accent-color: var(--accent); width: 100%; }
 .report { font: 12px/1.6 var(--ui); white-space: pre; user-select: text; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; overflow: auto; tab-size: 4; }
 .report .r-key { color: var(--ink-2); }
 .report b { font-weight: 600; }
+.arcbox { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.arcrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.arcrow .ak { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
+.arcrow .seg { flex: none; }
 .mres { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); min-height: 120px; overflow: auto; }
 .mres .mr { display: flex; justify-content: space-between; gap: 12px; padding: 3px 9px; cursor: copy; }
 .mres .mr:hover { background: var(--row-hover); }

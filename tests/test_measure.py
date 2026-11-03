@@ -138,6 +138,33 @@ class BlockWithHoles(unittest.TestCase):
         r = self.rows(self.circle(8), self.circle(6))
         self.assertAlmostEqual(r["Center distance"], 20.0, delta=TOL)
 
+    def arcs(self, a, b, modes):
+        res = self.s.measure([a, b], {"arcs": modes})
+        return {r["label"]: r["value"] for r in res["rows"]}, res["arcs"]
+
+    def test_hole_to_hole_close_center_and_far_tangents(self):
+        # centres 20 apart, radii 4 and 3
+        for a, b in ((self.hole(8), self.hole(6)), (self.circle(8), self.circle(6))):
+            for modes, expected in ((["min", "min"], 13.0), (["center", "center"], 20.0), (["max", "max"], 27.0),
+                                    (["min", "max"], 19.0), (["center", "max"], 23.0), (["max", "min"], 21.0)):
+                r, used = self.arcs(a, b, modes)
+                self.assertEqual(used, modes)
+                label = "Center distance" if modes == ["center", "center"] else "Distance"
+                self.assertAlmostEqual(r[label], expected, delta=TOL, msg=f"{a['kind']} {modes}")
+
+    def test_hole_to_side_face_tangents(self):
+        side = self.plane((1, 0, 0), 0)  # x = 0, hole centre at x = 10, radius 4
+        for mode, expected in (("min", 6.0), ("center", 10.0), ("max", 14.0)):
+            r, used = self.arcs(self.hole(8), side, [mode, None])
+            self.assertEqual(used, [mode, None])
+            self.assertAlmostEqual(r["Distance" if mode != "center" else "Center distance"], expected, delta=TOL)
+
+    def test_point_to_arc_tangents(self):
+        spot = {"kind": "point", "point": [0.0, 10.0, H]}  # on the top edge, level with the 8 mm hole, 10 mm away
+        for mode, expected in (("min", 6.0), ("center", 10.0), ("max", 14.0)):
+            r, _ = self.arcs(spot, self.circle(8), [None, mode])
+            self.assertAlmostEqual(r["Distance" if mode != "center" else "Center distance"], expected, delta=TOL)
+
     def test_corner_to_corner_distance_and_deltas(self):
         r = self.rows(self.vertex((0, 0, 0)), self.vertex((L, W, H)))
         self.assertAlmostEqual(r["Distance"], math.sqrt(L * L + W * W + H * H), delta=TOL)
