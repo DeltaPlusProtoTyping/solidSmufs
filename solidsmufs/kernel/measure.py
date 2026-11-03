@@ -46,20 +46,43 @@ class Entity:
         return None
 
     def centre(self):
-        """A circle / arc / sphere centre, else None."""
+        """A circle / arc / sphere centre, or a round flat face's (a disk or ring), else None."""
         p = self.params or {}
         if self.type in ("circle", "ellipse", "sphere") and p.get("center") is not None:
             return np.asarray(p["center"], np.float64)
-        return None
+        ring = self.ring()
+        return ring[0] if ring else None
 
     def axis(self):
-        """(point, direction) of a cylinder / cone / torus axis, or a circle's axis, else None."""
+        """(point, direction) of a cylinder / cone / torus axis, or a circle's or ring's axis, else None."""
         p = self.params or {}
         if self.type in ("cylinder", "cone", "torus") and p.get("axis") is not None:
             return np.asarray(p["center"], np.float64), unit(p["axis"])
         if self.type in ("circle", "ellipse") and p.get("normal") is not None:
             return np.asarray(p["center"], np.float64), unit(p["normal"])
-        return None
+        ring = self.ring()
+        return (ring[0], ring[1]) if ring else None
+
+    def ring(self):
+        """(centre, normal, radius) of a flat face whose edge is mostly circles round one centre (a disk, or
+        a ring such as a bore's rim, where the radius is the inner circle's; small notches don't matter),
+        else None."""
+        if self.kind != "face" or self.type != "plane":
+            return None
+        cache = self.m.__dict__.setdefault("_rings", {})
+        if self.index not in cache:
+            m, found = self.m, None
+            edges = [e for e, fs in enumerate(m.edge_faces) if self.index in fs and not m.edge_seam[e]]
+            circles = [e for e in edges if m.edge_type[e] == "circle" and m.edge_params[e]]
+            if circles:
+                big = max(circles, key=lambda e: m.edge_params[e]["radius"])
+                c0 = np.asarray(m.edge_params[big]["center"], np.float64)
+                tol = 1e-4 * max(m.edge_params[big]["radius"], 1)
+                ring = [e for e in circles if np.linalg.norm(np.asarray(m.edge_params[e]["center"], np.float64) - c0) < tol]
+                if sum(m.edge_length[e] for e in ring) >= 0.75 * sum(m.edge_length[e] for e in edges):
+                    found = (c0, unit(self.params["normal"]), float(min(m.edge_params[e]["radius"] for e in ring)))
+            cache[self.index] = found
+        return cache[self.index]
 
     def plane(self):
         """(point, unit normal) of a planar face, else None."""
@@ -75,14 +98,30 @@ class Entity:
 
     def radius(self):
         p = self.params or {}
-        return p.get("radius")
+        if self.type == "cone":
+            return p.get("radius_max")
+        ring = self.ring()
+        return ring[2] if ring else p.get("radius")
+
+    def radius_at(self, q):
+        """The radius level with point q along the axis: a cone's grows from its apex (within the face's
+        own range); everything else has one radius."""
+        p = self.params or {}
+        if self.type == "cone" and p.get("apex") is not None and p.get("half_angle"):
+            r = float((np.asarray(q, np.float64) - p["apex"]) @ unit(p["axis"])) * np.tan(np.radians(p["half_angle"]))
+            return float(np.clip(r, p.get("radius_min", r), p.get("radius_max", r)))
+        return self.radius()
 
     def round(self):
-        """A radius the measure tool can measure to its centre or either tangent: a circle / arc edge
-        or a cylindrical face."""
+        """A radius the measure tool can measure to its centre or either tangent: a circle / arc edge, a
+        cylindrical or conical face, or a flat disk or ring."""
         if not self.radius():
             return False
-        return (self.type == "circle" and self.centre() is not None) or (self.type == "cylinder" and self.axis() is not None)
+        if self.type == "circle":
+            return self.centre() is not None
+        if self.type in ("cylinder", "cone"):
+            return self.axis() is not None
+        return self.ring() is not None
 
 
 # ---------------------------------------------------------------------------------------------- one entity
@@ -349,18 +388,20 @@ def _anchor(e):
 def arc_modes(ents, opts):
     """Where each round item is measured from: "center" (centreline), "min" (close tangent) or "max"
     (far tangent); None for items that aren't round. opts["arcs"] picks per item; otherwise
-    opts["arc"] applies, except that holes (cylinder faces) start at the close tangent, the way
-    SolidWorks measures faces, while arcs start at the centre."""
+    opts["arc"] applies, except that round faces start at the close tangent, the way SolidWorks
+    measures faces, while arcs start at the centre. A flat disk or ring (a bore's rim) only counts as
+    round next to another round item; against a corner or a flat face it measures as the face it is."""
     picked = list(opts.get("arcs") or [])
     default = opts.get("arc", "center")
+    other_round = [e.round() and e.ring() is None for e in ents]
     out = []
     for i, e in enumerate(ents):
-        if not e.round():
+        if not e.round() or (e.ring() is not None and not any(r for j, r in enumerate(other_round) if j != i)):
             out.append(None)
             continue
         mode = picked[i] if i < len(picked) else None
         if mode not in ("center", "min", "max"):
-            mode = "min" if e.type == "cylinder" and default == "center" else default
+            mode = "min" if e.kind == "face" and default == "center" else default
         out.append(mode)
     return out
 
@@ -451,7 +492,7 @@ def _arc_distance(a, b, modes):
             v = ends[j] - centres[i]
             v = v - n * float(v @ n)
             if np.linalg.norm(v) > 1e-12:
-                ends[i] = centres[i] + (1 if modes[i] == "min" else -1) * e.radius() * unit(v)
+                ends[i] = centres[i] + (1 if modes[i] == "min" else -1) * e.radius_at(centres[i]) * unit(v)
             if modes[j] is None or (modes[j] == "center" and geoms[j][0] == "l"):
                 ends[j] = _foot(geoms[j], ends[i])  # the other side's nearest point to the new end
     label = "Center distance" if all(m in (None, "center") for m in modes) else "Distance"

@@ -353,6 +353,10 @@ def _extract(gmsh, m):
                 fit = _fitted_cylinder(gmsh, f, pts, tri)
                 if fit is not None:  # a bore or boss stored as a spline / swept surface: measure it as the cylinder it is
                     typ, params = "cylinder", fit
+                else:
+                    fit = _fitted_cone(pts, tri)
+                    if fit is not None:  # likewise a drafted bore or boss: a cone
+                        typ, params = "cone", fit
             normals = _face_normals(typ, params, pts, tri) if len(tri) else pts
             for c in set(int(c) for c in gmsh.model.getAdjacencies(2, f)[1]):  # a seam is listed twice
                 edge_faces.setdefault(c, []).append(fi)
@@ -515,6 +519,52 @@ def _fitted_cylinder(gmsh, f, pts, tri):
         return None
     c = cx * x + cy * y + axis * float((q @ axis).mean())  # the axis point level with the face's middle
     return {"center": c, "axis": axis, "radius": rad, "fitted": True}
+
+
+def _fitted_cone(pts, tri):
+    """Cone params (as _surface_params gives them) for a face that is a cone in all but name, typically
+    a drafted bore or boss, or None. Every normal of a cone leans the same way off its axis and passes
+    through it: the axis is the direction the normals all make one angle with, its position the point
+    their lines meet at, and the radius must then grow in a straight line along it (to 0.1%)."""
+    pts = np.asarray(pts, np.float64)
+    if len(pts) < 12:
+        return None
+    nrm = vertex_normals(pts, tri)
+    cov = np.cov((nrm - nrm.mean(axis=0)).T)
+    ev, vec = np.linalg.eigh(cov)
+    if ev[0] > 2e-4 * ev.sum() or ev[1] < 0.02 * ev.sum():
+        return None
+    a = unit(vec[:, 0])
+    x = unit(np.cross(a, [1, 0, 0]) if abs(a[0]) < 0.9 else np.cross(a, [0, 1, 0]))
+    y = np.cross(a, x)
+    p2, n2 = np.c_[pts @ x, pts @ y], np.c_[nrm @ x, nrm @ y]
+    n2 = n2 / np.maximum(np.linalg.norm(n2, axis=1), 1e-12)[:, None]
+    m = np.eye(2)[None] - n2[:, :, None] * n2[:, None, :]  # each normal line's "distance to it" projector
+    try:
+        cxy = np.linalg.solve(m.sum(axis=0), np.einsum("nij,nj->i", m, p2))
+    except np.linalg.LinAlgError:
+        return None
+    z = pts @ a
+    if np.ptp(z) < 1e-9:
+        return None
+    for _ in range(6):  # refine: radius straight along the axis, centre where every point fits that radius
+        r = np.linalg.norm(p2 - cxy, axis=1)
+        k, b = np.polyfit(z, r, 1)
+        lhs = np.c_[2 * p2, np.ones(len(p2))]
+        sol, *_ = np.linalg.lstsq(lhs, (p2 ** 2).sum(1) - (k * z + b) ** 2, rcond=None)
+        cxy = sol[:2]
+    r = np.linalg.norm(p2 - cxy, axis=1)
+    k, b = np.polyfit(z, r, 1)
+    if float(np.abs(r - (k * z + b)).max()) > 1e-3 * float(r.mean()) or abs(k) < math.tan(math.radians(0.05)):
+        return None
+    if k < 0:  # point the axis away from the apex
+        a, z, k, b = -a, -z, -k, b
+    base = cxy[0] * x + cxy[1] * y  # the axis where it crosses the plane through the origin (z = 0 along a)
+    if float(base @ a) != 0:
+        base = base - a * float(base @ a)
+    z0, z1 = float(z.min()), float(z.max())
+    return {"center": base + a * z0, "axis": a, "half_angle": math.degrees(math.atan(k)), "apex": base + a * (-b / k),
+            "radius_min": float(k * z0 + b), "radius_max": float(k * z1 + b), "fitted": True}
 
 
 def _surface_params(gmsh, f, typ, pts):

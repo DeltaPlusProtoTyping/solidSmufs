@@ -204,5 +204,38 @@ class SuppressedAndHiddenParts(unittest.TestCase):
         self.assertEqual(hidden, ["base plate-1", "food chute-1", "food shover-1"])
 
 
+@unittest.skipUnless(BOWL.is_file(), "SolidWorks 2025 sample files are not installed")
+class RoundFacesInTheBowl(unittest.TestCase):
+    """The bowl's drafted centre boss comes out of the translator as a plain "surface"; it must still
+    measure as round (a cone), against the bowl's rim (a flat ring), with close / center / far."""
+
+    @classmethod
+    def setUpClass(cls):
+        from solidsmufs.kernel import measure
+        from solidsmufs.kernel.worker import Session
+
+        cls.s = Session()
+        cls.s.load(str(BOWL), "normal")
+        m = cls.s.model
+        ent = lambda f: measure.Entity(m, {"kind": "face", "index": f})  # noqa: E731
+        cls.rim = next(f for f, t in enumerate(m.face_type) if t == "plane" and ent(f).ring() and abs(ent(f).ring()[2] - 52.697) < 0.01)
+        cls.boss = next(f for f, t in enumerate(m.face_type) if t == "cone" and (m.face_params[f] or {}).get("fitted")
+                        and abs(m.face_params[f]["radius_max"] - 8.456) < 0.01)
+
+    def measure(self, modes):
+        r = self.s.measure([{"kind": "face", "index": self.rim}, {"kind": "face", "index": self.boss}], {"arcs": modes})
+        self.assertEqual(r["arcs"], modes)
+        return next(x["value"] for x in r["rows"] if x.get("primary"))
+
+    def test_boss_is_a_drafted_cone(self):
+        p = self.s.model.face_params[self.boss]
+        self.assertAlmostEqual(p["half_angle"], 0.94, delta=0.02)
+
+    def test_close_center_and_far(self):
+        self.assertAlmostEqual(self.measure(["center", "center"]), 0.0, delta=0.01)  # the boss is on the bowl's axis
+        self.assertAlmostEqual(self.measure(["min", "min"]), 45.196, delta=0.01)
+        self.assertAlmostEqual(self.measure(["max", "max"]), 60.197, delta=0.01)
+
+
 if __name__ == "__main__":
     unittest.main()
