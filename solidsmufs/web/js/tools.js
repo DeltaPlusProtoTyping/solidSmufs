@@ -196,11 +196,12 @@ export class Tools {
         v.addLabel(p1.clone().add(p2).multiplyScalar(0.5), escapeHtml(u.len(g.value)), g.style ? 'small' : 'primary');
         if (g.xyz && this.showXYZ) {
           const a = p1, b = new THREE.Vector3(p2.x, p1.y, p1.z), c = new THREE.Vector3(p2.x, p2.y, p1.z), d = p2;
-          const tiny = (p1.distanceTo(p2) || 1) * 1e-4;
+          const dist = p1.distanceTo(p2) || 1;
           [[a, b, 'x', Math.abs(p2.x - p1.x)], [b, c, 'y', Math.abs(p2.y - p1.y)], [c, d, 'z', Math.abs(p2.z - p1.z)]].forEach(([s, e, ax, val]) => {
-            if (val < tiny) return;
+            if (val < dist * 1e-4) return;
             v.annotLine(s.toArray(), e.toArray(), AXIS[ax], 1.3, { dashed: true, dashSize: v.rig.radius * 0.02, gapSize: v.rig.radius * 0.012 });
-            v.addLabel(s.clone().add(e).multiplyScalar(0.5), `d${ax.toUpperCase()} ${escapeHtml(u.len(val, false))}`, `small ${ax}`);
+            // a sliver of the distance gets no bubble of its own (it's still in the Measure box)
+            if (val >= dist * 0.02) v.addLabel(s.clone().add(e).multiplyScalar(0.5), `d${ax.toUpperCase()} ${escapeHtml(u.len(val, false))}`, `small ${ax}`);
           });
         }
       } else if (g.type === 'point') {

@@ -1241,9 +1241,11 @@ export class Viewer {
     return el;
   }
 
-  // Labels sit on their points unless that would cover another label: the most important go first
-  // (the measured value, then other values, then the small dX / dY / dZ and notes), and each later one
-  // moves to the nearest free spot around its point, with a thin leader line back to it.
+  // Labels sit on their points unless that would cover another label or something on screen (the
+  // heads-up toolbar, view cube, triad, a tool window over the view). The most important go first (the
+  // measured value, then other values, then the small dX / dY / dZ and notes); each later one keeps the
+  // spot it had last frame if that's still free, so labels don't jump about while the view turns, and
+  // otherwise moves to the nearest free spot around its point, with a thin leader line back to it.
   _placeLabels() {
     const rank = (l) => (l.el.classList.contains('primary') ? 0 : l.el.classList.contains('small') ? 2 : 1);
     if (this.shownBox && this.labels.some((l) => l.boxBit)) {
@@ -1257,41 +1259,68 @@ export class Viewer {
       l.el.style.display = '';
       items.push({ l, s, w: l.el.offsetWidth, h: l.el.offsetHeight, rank: rank(l) });
     }
+    if (!items.length) return;
     items.sort((a, b) => a.rank - b.rank);
-    const PAD = 3, placed = [];
-    const hud = this.container.querySelector('.hud'); // labels keep clear of the heads-up toolbar too
-    if (hud && hud.offsetWidth) {
-      const r = hud.getBoundingClientRect(), c = this.canvas.getBoundingClientRect();
-      placed.push({ x: r.left - c.left + r.width / 2, y: r.top - c.top + r.height / 2, w: r.width, h: r.height });
-    }
-    const hits = (x, y, w, h) => placed.some((r) => Math.abs(x - r.x) * 2 < w + r.w + PAD * 2 && Math.abs(y - r.y) * 2 < h + r.h + PAD * 2);
+    const PAD = 3, placed = this._labelObstacles();
+    const overlap = (x, y, w, h) => {
+      let sum = 0;
+      for (const r of placed) {
+        const ox = (w + r.w) / 2 + PAD - Math.abs(x - r.x), oy = (h + r.h) / 2 + PAD - Math.abs(y - r.y);
+        if (ox > 0 && oy > 0) sum += ox * oy;
+      }
+      return sum;
+    };
+    const clampX = (x, w) => Math.min(Math.max(x, w / 2), this.width - w / 2);
+    const clampY = (y, h) => Math.min(Math.max(y, h / 2), this.height - h / 2);
     for (const it of items) {
-      let x = it.s.x, y = it.s.y;
-      if (hits(x, y, it.w, it.h)) {
+      const l = it.l, ax = it.s.x, ay = it.s.y;
+      let x = clampX(ax, it.w), y = clampY(ay, it.h);
+      if (overlap(x, y, it.w, it.h) > 0) {
+        const tries = [];
+        if (l.off) tries.push(l.off);
         const step = it.h + PAD * 2;
-        let best = null;
-        for (let ring = 1; ring <= 8 && !best; ring++) {
+        for (let ring = 1; ring <= 12; ring++) {
           // below / above first (labels are wide), then sideways, then the corners
           const d = ring * step, dx = (it.w / 2 + PAD) * ring;
-          for (const [ox, oy] of [[0, d], [0, -d], [dx + it.w / 2, 0], [-dx - it.w / 2, 0], [dx, d], [-dx, d], [dx, -d], [-dx, -d]]) {
-            const cx = Math.min(Math.max(it.s.x + ox, it.w / 2), this.width - it.w / 2);
-            const cy = Math.min(Math.max(it.s.y + oy, it.h / 2), this.height - it.h / 2);
-            if (!hits(cx, cy, it.w, it.h)) { best = [cx, cy]; break; }
-          }
+          tries.push([0, d], [0, -d], [dx + it.w / 2, 0], [-dx - it.w / 2, 0], [dx, d], [-dx, d], [dx, -d], [-dx, -d]);
         }
-        if (best) [x, y] = best;
+        let best = null, bestCost = Infinity;
+        for (const [ox, oy] of tries) {
+          const cx = clampX(ax + ox, it.w), cy = clampY(ay + oy, it.h);
+          const cost = overlap(cx, cy, it.w, it.h);
+          if (cost === 0) { best = [cx, cy]; break; }
+          if (cost < bestCost) { bestCost = cost; best = [cx, cy]; }  // no free spot: the least covered one
+        }
+        [x, y] = best;
       }
+      l.off = x === ax && y === ay ? null : [x - ax, y - ay];
       placed.push({ x, y, w: it.w, h: it.h });
-      const l = it.l;
       l.el.style.left = `${x}px`;
       l.el.style.top = `${y}px`;
-      const len = Math.hypot(x - it.s.x, y - it.s.y);
+      const len = Math.hypot(x - ax, y - ay);
       if (len > it.h * 0.6) {
         if (!l.lead) { l.lead = document.createElement('div'); l.lead.className = 'mlead'; this.labelLayer.prepend(l.lead); }
-        Object.assign(l.lead.style, { display: '', left: `${it.s.x}px`, top: `${it.s.y}px`, width: `${len}px`,
-          transform: `rotate(${Math.atan2(y - it.s.y, x - it.s.x)}rad)` });
+        Object.assign(l.lead.style, { display: '', left: `${ax}px`, top: `${ay}px`, width: `${len}px`,
+          transform: `rotate(${Math.atan2(y - ay, x - ax)}rad)` });
       } else if (l.lead) l.lead.style.display = 'none';
     }
+  }
+
+  // What labels keep clear of, as centre / size boxes in viewport pixels
+  _labelObstacles() {
+    const out = [];
+    const c = this.canvas.getBoundingClientRect();
+    const add = (r) => {
+      const x0 = Math.max(r.left, c.left), x1 = Math.min(r.right, c.right), y0 = Math.max(r.top, c.top), y1 = Math.min(r.bottom, c.bottom);
+      if (x1 > x0 && y1 > y0) out.push({ x: (x0 + x1) / 2 - c.left, y: (y0 + y1) / 2 - c.top, w: x1 - x0, h: y1 - y0 });
+    };
+    const hud = this.container.querySelector('.hud');
+    if (hud && hud.offsetWidth) add(hud.getBoundingClientRect());
+    for (const d of document.querySelectorAll('.dialog')) if (d.offsetWidth) add(d.getBoundingClientRect());  // tool windows over the view
+    const box = (r) => out.push({ x: r.x + r.w / 2, y: r.y + r.h / 2, w: r.w, h: r.h });
+    box(this.cube.triRect(this.height));
+    if (this.showCube) box(this.cube.rect(this.width));
+    return out;
   }
 
   annotLine(p1, p2, color, width = 2, opts = {}) {
