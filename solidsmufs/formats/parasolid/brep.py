@@ -335,8 +335,7 @@ class BodyWriter:
             mate = m[hp["other"]]
             if mate is not None and mate["sense"] == "+":
                 hp = mate
-        back = m[hp["backward"]]
-        vs_idx = back["vertex"] if back is not None else 0
+        vs_idx = self._start_vertex(hp)
         ve_idx = hp["vertex"]
         ps, pe = self._vpoint(vs_idx), self._vpoint(ve_idx)
         try:
@@ -374,6 +373,24 @@ class BodyWriter:
         else:  # a ring edge: one vertex of our own, where the curve starts
             v0 = v1 = w.add(f"VERTEX_POINT('',{w.point(p_from)})")
         return w.add(f"EDGE_CURVE('',{v0},{v1},{cref},{'.T.' if same else '.F.'})")
+
+    def _start_vertex(self, hp):
+        """The vertex a halfedge starts at: where the one before it in its loop ends. Some files leave the
+        backward link out (seen in sheet bodies); then the mate halfedge, which runs the other way and so
+        ends there, or the loop walked forwards to whichever halfedge leads into this one."""
+        m = self.m
+        back = m[hp["backward"]]
+        if back is not None and back["vertex"]:
+            return back["vertex"]
+        mate = m[hp["other"]]
+        if mate is not None and mate.idx != hp.idx and mate["vertex"]:
+            return mate["vertex"]
+        lp = m[hp["loop"]]
+        if lp is not None:
+            for h in self._halfedges(lp):
+                if h["forward"] == hp.idx and h["vertex"]:
+                    return h["vertex"]
+        return 0
 
     def _edge_curve(self, e, hp, ps, pe):
         """('exact' | 'fit', (STEP curve, same sense, start point)) or ('poly', points)."""

@@ -107,7 +107,9 @@ def insert_knot(deg, U, P, t, r=1):
     if r <= 0:
         return U, P
     k = int(np.searchsorted(U, t, side="right") - 1)
-    k = min(max(k, deg), n)
+    # the span t starts: up to n + s, so a knot already at the domain's end (an unclamped, periodic
+    # spline's U[n + 1]) is raised there rather than in the span before it
+    k = min(max(k, deg), n + s)
     Q = np.zeros((n + 1 + r, P.shape[1]))
     Q[:k - deg + 1] = P[:k - deg + 1]
     Q[k - s + r:] = P[k - s:]
