@@ -317,9 +317,11 @@ export class Viewer {
     }
   }
 
-  // SpaceMouse: the app hands over the cap's latest [tx, ty, tz, rx, ry, rz] (about ±350 each); the view
-  // moves by them every frame, scaled by the frame's time, the way 3Dconnexion's object mode works: slide
-  // to pan, push / pull to zoom, tilt, twist and roll to turn about the model's centre (as SolidWorks)
+  // SpaceMouse: the app hands over the cap's latest [tx, ty, tz, rx, ry, rz] (about ±350 each; x left to
+  // right, y far to near, z high to low, rotations right-handed); the view moves by them every frame,
+  // scaled by the frame's time, the way 3Dconnexion's object mode works: the part follows the cap. Slide
+  // to pan, pull to bring it closer, tilt, twist and roll to turn about the model's centre (as SolidWorks).
+  // spaceSigns (Options) reverses any axis.
   spaceNav(v) {
     this.space = v;
     this.spaceAt = performance.now();
@@ -347,13 +349,14 @@ export class Viewer {
       this.spacePivot = null;
       return false;
     }
-    const [tx, ty, tz, rx, ry, rz] = this.spaceEased, rig = this.rig;
+    const signs = this.spaceSigns || [1, 1, 1, 1, 1, 1];
+    const [tx, ty, tz, rx, ry, rz] = this.spaceEased.map((x, i) => x * signs[i]), rig = this.rig;
     rig.anim = null;
     if (!this.spacePivot) this.spacePivot = this.rotCenter?.point || this.visibleBox().getCenter(new THREE.Vector3());
     const PAN = 1.2 * this.height, ZOOM = 1.6, TURN = Math.PI / 0.0075;  // per second at full deflection
-    rig.pan(tx * PAN * dt, -tz * PAN * dt, this.height);
-    rig.zoomAt(Math.exp(ty * ZOOM * dt), 0, 0);
-    rig.rotate(rz * TURN * dt, rx * TURN * dt, this.spacePivot);
+    rig.pan(tx * PAN * dt, tz * PAN * dt, this.height);
+    rig.zoomAt(Math.exp(-ty * ZOOM * dt), 0, 0);
+    rig.rotate(-rz * TURN * dt, rx * TURN * dt, this.spacePivot);
     rig.roll(-ry * Math.PI * dt);
     this._spaceLeft = rig.state();
     this.viewChanged = true;

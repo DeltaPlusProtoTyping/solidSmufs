@@ -3,7 +3,8 @@
 No 3Dconnexion SDK or library is needed: the SpaceMouse is a HID "multi-axis controller" (usage page 1,
 usage 8) and sends its six axes as plain input reports. Newer devices send one report (id 1) with
 all six as little-endian int16s (tx, ty, tz, rx, ry, rz); older ones send translation (id 1) and
-rotation (id 2) separately, and buttons as id 3. Values run about ±350.
+rotation (id 2) separately, and buttons as id 3. Values run about ±350. Directions, from 3Dconnexion's
+own definitions: x left to right, y far to near, z high to low; rotations by the right-hand rule.
 
 Reader(on_motion).start() reads every SpaceMouse it finds in a thread of its own and calls
 on_motion([tx, ty, tz, rx, ry, rz]) with the latest values (all zeros when the cap is let go).
@@ -110,6 +111,25 @@ def parse(report, state):
     return False  # buttons (id 3) and anything else
 
 
+class Despike:
+    """Drops one-report outliers. The device now and then sends a single report with the signs flipped
+    ([0, -22, 0, -32, 0, 0] -> [0, 24, 0, 30, 0, 0] -> [0, -14, 0, -27, 0, 0], 11 ms apart), which on a
+    slow move sends the view backwards for a frame. Each axis gives the middle of its last three
+    reports; letting go (all zeros) passes straight through, since no more reports may follow it."""
+
+    def __init__(self):
+        self.last = []
+
+    def push(self, state):
+        if not any(state):
+            self.last = []
+            return list(state)
+        self.last = [*self.last[-2:], list(state)]
+        if len(self.last) < 3:
+            return list(state)
+        return [sorted(vals)[1] for vals in zip(*self.last)]
+
+
 class Reader:
     """Reads the SpaceMice in background threads; on_motion([tx, ty, tz, rx, ry, rz]) on each change."""
 
@@ -145,7 +165,7 @@ class Reader:
             return
         self.handles.append(h)
         buf, got, state = ctypes.create_string_buffer(length), wintypes.DWORD(), [0] * 6
-        last, before, run = time.monotonic(), [0] * 6, None
+        last, before, despike = time.monotonic(), [0] * 6, Despike()
         while not self.stopped:
             if not k32.ReadFile(h, buf, length, ctypes.byref(got), None):
                 if not self.stopped:
@@ -160,17 +180,9 @@ class Reader:
                 flipped = [i for i in range(6) if state[i] * before[i] < 0 and min(abs(state[i]), abs(before[i])) > 10]
                 if flipped:  # the cap's value reversing outright between two reports
                     log.info("SpaceMouse: axis %s reversed: %s -> %s", flipped, before, state)
-                moving = any(state)
-                if moving and not run:
-                    run = [now, 0]
-                if run:
-                    run[1] += 1
-                if run and not moving:
-                    log.info("SpaceMouse: a move of %.1f s, %d reports", now - run[0], run[1])
-                    run = None
                 last, before = now, list(state)
                 try:
-                    self.on_motion(list(state))
+                    self.on_motion(despike.push(state))
                 except Exception:
                     log.exception("SpaceMouse: motion handler failed")
 

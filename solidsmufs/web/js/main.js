@@ -82,9 +82,16 @@ class App {
     this.viewer.showCube = !!p.viewCube;
     this.viewer.mouseMode = p.mouse;
     this.viewer.wheelReverse = !!p.wheelReverse;
+    this.applySpace();
     this.$('workspace').style.setProperty('--mgr-w', `${p.mgrWidth || 270}px`);
     this.shell.selectTab(p.cmTab || 'view', false);
     this.viewer.requestRender();
+  }
+
+  // SpaceMouse directions from Options: camera mode reverses everything, then each axis its own way
+  applySpace() {
+    const p = this.prefs, all = p.spaceCamera ? -1 : 1, rev = p.spaceReverse || [];
+    this.viewer.spaceSigns = [0, 1, 2, 3, 4, 5].map((i) => all * (rev[i] ? -1 : 1));
   }
 
   save(patch) {

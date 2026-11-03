@@ -644,6 +644,15 @@ export class Tools {
           ? 'Middle-drag rotates, Ctrl+middle-drag pans, Shift+middle-drag zooms. Left-drag draws a selection box (left-to-right: window, right-to-left: crossing). Right-drag shows mouse gestures.'
           : 'Left-drag rotates, right-drag pans, middle-drag rotates. Good for laptops without a middle button.' }),
         chk('Reverse wheel zoom direction (roll away from you to zoom in)', p.wheelReverse, (on) => { app.save({ wheelReverse: on }); v.wheelReverse = on; }),
+        h('div', { class: 'fx-section', text: 'SpaceMouse', style: { marginTop: '12px' } }),
+        field('The cap moves', seg([['object', 'The part'], ['camera', 'The camera']], p.spaceCamera ? 'camera' : 'object', (k) => { app.save({ spaceCamera: k === 'camera' }); app.applySpace(); })),
+        ...[[0, 'Pan left / right'], [2, 'Pan up / down'], [1, 'Zoom'], [3, 'Tilt'], [5, 'Spin'], [4, 'Roll']].map(([i, label]) =>
+          chk(`Reverse ${label.toLowerCase()}`, !!(p.spaceReverse || [])[i], (on) => {
+            const rev = [...(p.spaceReverse || [false, false, false, false, false, false])];
+            rev[i] = on;
+            app.save({ spaceReverse: rev });
+            app.applySpace();
+          })),
       ];
       else if (cur === 'performance') body = [
         field('Image quality', seg([['coarse', 'Coarse (fast)'], ['normal', 'Normal'], ['fine', 'Fine (smooth)']], p.quality, (k) => { app.save({ quality: k }); if (app.meta?.kind === 'brep') app.reload(k); })),
