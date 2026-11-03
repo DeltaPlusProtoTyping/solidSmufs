@@ -165,6 +165,24 @@ class BlockWithHoles(unittest.TestCase):
             r, _ = self.arcs(spot, self.circle(8), [None, mode])
             self.assertAlmostEqual(r["Distance" if mode != "center" else "Center distance"], expected, delta=TOL)
 
+    def test_hole_centred_between_two_faces(self):
+        # the 8 mm hole sits at x = 10 on a 40 mm block: 10 from one end, 30 from the other
+        left, right, front, back = (self.plane((1, 0, 0), 0), self.plane((1, 0, 0), L),
+                                    self.plane((0, 1, 0), 0), self.plane((0, 1, 0), W))
+        for mode, near, far in (("center", 10.0, 30.0), ("min", 6.0, 26.0), ("max", 14.0, 34.0)):
+            res = self.s.measure([self.hole(8), left, right], {"arcs": [mode, None, None]})
+            vals = [r["value"] for r in res["rows"] if r["label"].startswith("To ")]
+            np.testing.assert_allclose(vals, [near, far], atol=TOL)
+            self.assertEqual(res["arcs"], [mode, None, None])
+            r = {x["label"]: x["value"] for x in res["rows"]}
+            self.assertAlmostEqual(r["Off center"], 10.0, delta=TOL)
+        r = {x["label"]: x["value"] for x in self.s.measure([front, self.circle(8), back], {"arcs": [None, "center", None]})["rows"]}
+        self.assertAlmostEqual(r["Off center"], 0.0, delta=TOL)  # centred across the 20 mm width
+
+    def test_three_flat_faces_still_total(self):
+        r = self.rows(self.plane((1, 0, 0), 0), self.plane((1, 0, 0), L), self.plane((0, 0, 1), H))
+        self.assertIn("Total area", r)
+
     def test_corner_to_corner_distance_and_deltas(self):
         r = self.rows(self.vertex((0, 0, 0)), self.vertex((L, W, H)))
         self.assertAlmostEqual(r["Distance"], math.sqrt(L * L + W * W + H * H), delta=TOL)

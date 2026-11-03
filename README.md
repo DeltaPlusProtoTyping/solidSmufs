@@ -116,7 +116,8 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
 - **Measure:** faces, edges, vertices, or any point on a face. One item gives its size; two give the
   distance, normal distance, angle and Delta X / Y / Z, drawn in the graphics area. When one of the
   two is a radius (an arc edge or a hole), a Close / Center / Far toggle for each radius picks its
-  close tangent, centerline or far tangent; Projected On (screen or a plane) and Measurement History as in
+  close tangent, centerline or far tangent. A radius and two or more other items give the distance
+  from the radius to each of them; with two, the difference and how far off center the hole sits; Projected On (screen or a plane) and Measurement History as in
   SolidWorks.
 - **Mass Properties:** pick a material (or a density); the report is in SolidWorks' format: mass,
   volume, surface area, center of mass, principal axes and moments, inertia at the center of mass

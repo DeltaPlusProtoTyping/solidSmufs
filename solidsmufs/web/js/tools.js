@@ -149,11 +149,11 @@ export class Tools {
     this._drawMeasure();
   }
 
-  // Close tangent / centerline / far tangent for each radius (arc edge or hole) in a two-item measurement
+  // Close tangent / centerline / far tangent for each radius (arc edge or hole) measured to other items
   _arcToggles(sel, r) {
     const modes = r?.arcs;
-    if (sel.length !== 2 || !modes || modes.length !== 2 || !modes.some(Boolean)) return null;
-    const both = modes.every(Boolean);
+    if (sel.length < 2 || !modes || modes.length !== sel.length || !modes.some(Boolean)) return null;
+    const both = modes.filter(Boolean).length > 1;
     return h('div', { class: 'arcbox' }, ...sel.map((s, i) => {
       if (!modes[i]) return null;
       const pick = (k) => { this.arcPick.set(arcKey(s), k); this._runMeasure(); this.app.quickMeasure(); };

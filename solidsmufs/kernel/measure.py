@@ -414,6 +414,36 @@ def _arc_distance(a, b, modes):
 
 
 # ---------------------------------------------------------------------------------------------- many entities
+def from_radius(ents, opts, exact_distance):
+    """A hole or arc and two or more other items: the distance from the radius (its close tangent,
+    centerline or far tangent) to each of the others, and with two others how far off centre it
+    sits between them. None when nothing in the selection is round."""
+    modes = arc_modes(ents, opts)
+    hub = next((i for i, mo in enumerate(modes) if mo), None)
+    if hub is None:
+        return None
+    rows, gfx, dists = [], [], []
+    for j, e in enumerate(ents):
+        if j == hub:
+            continue
+        main = _arc_distance(ents[hub], e, [modes[hub], modes[j]])
+        if main is None:
+            res = exact_distance(ents[hub], e)
+            main = res and ("Distance", res[1], res[2])
+        if main is None:
+            rows.append({"label": f"To {e.label}", "value": "—", "kind": "text"})
+            continue
+        _, p1, p2 = main
+        d = float(np.linalg.norm(p2 - p1))
+        dists.append(d)
+        rows.append({"label": f"To {e.label}", "value": d, "kind": "length", "primary": True})
+        gfx.append({"type": "line", "p1": p1, "p2": p2, "value": d})
+    if len(dists) == 2 and len(ents) == 3:
+        rows.append({"label": "Difference", "value": abs(dists[0] - dists[1]), "kind": "length"})
+        rows.append({"label": "Off center", "value": abs(dists[0] - dists[1]) / 2, "kind": "length"})
+    return rows, gfx
+
+
 def many(ents):
     rows = []
     edges = [e for e in ents if e.kind == "edge"]
@@ -438,11 +468,15 @@ def measure(model, selection, opts, exact_distance):
         return {"rows": [], "graphics": []}
     if len(ents) == 1:
         rows, gfx = single(ents[0], opts)
-    elif len(ents) == 2:
+        return {"rows": rows, "graphics": gfx, "labels": [e.label for e in ents]}
+    if len(ents) == 2:
         rows, gfx = pair(ents[0], ents[1], opts, exact_distance)
         if not rows:
             rows = [{"label": "Distance", "value": None, "kind": "text"}]
         return {"rows": rows, "graphics": gfx, "labels": [e.label for e in ents], "arcs": arc_modes(ents, opts)}
-    else:
-        rows, gfx = many(ents)
+    res = from_radius(ents, opts, exact_distance)
+    if res is not None:
+        rows, gfx = res
+        return {"rows": rows, "graphics": gfx, "labels": [e.label for e in ents], "arcs": arc_modes(ents, opts)}
+    rows, gfx = many(ents)
     return {"rows": rows, "graphics": gfx, "labels": [e.label for e in ents]}
