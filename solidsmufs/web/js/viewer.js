@@ -328,20 +328,27 @@ export class Viewer {
   _spaceStep(now) {
     const v = this.space;
     if (!v || !this.model) { this._spaceLast = now; return false; }
-    const DEAD = 10, FULL = 350;
-    const a = v.map((x) => (Math.abs(x) < DEAD ? 0 : (x - Math.sign(x) * DEAD) / (FULL - DEAD)));
-    const dt = Math.min((now - (this._spaceLast ?? now)) / 1000, 0.05);
+    const DEAD = 10, FULL = 350, EASE = 0.05;  // seconds: eases out a stray value or a late report
+    const dt = Math.min(Math.max(now - (this._spaceLast ?? now), 0) / 1000, 0.05);
     this._spaceLast = now;
-    if (now - this.spaceAt > 400 || a.every((x) => x === 0)) { this.spacePivot = null; return false; }  // let go, or gone quiet
     if (!dt) return false;
-    const [tx, ty, tz, rx, ry, rz] = a, rig = this.rig;
-    this.rig.anim = null;
+    const quiet = now - this.spaceAt > 400;  // the device has gone quiet: glide to a stop
+    const want = v.map((x) => (quiet || Math.abs(x) < DEAD ? 0 : (x - Math.sign(x) * DEAD) / (FULL - DEAD)));
+    const k = 1 - Math.exp(-dt / EASE);
+    this.spaceEased = (this.spaceEased || [0, 0, 0, 0, 0, 0]).map((x, i) => x + (want[i] - x) * k);
+    if (this.spaceEased.every((x, i) => !want[i] && Math.abs(x) < 1e-3)) {  // let go, and settled
+      this.spaceEased = null;
+      this.spacePivot = null;
+      return false;
+    }
+    const [tx, ty, tz, rx, ry, rz] = this.spaceEased, rig = this.rig;
+    rig.anim = null;
     if (!this.spacePivot) this.spacePivot = this.rotCenter?.point || this.visibleBox().getCenter(new THREE.Vector3());
     const PAN = 1.2 * this.height, ZOOM = 1.6, TURN = Math.PI / 0.0075;  // per second at full deflection
-    if (tx || tz) rig.pan(tx * PAN * dt, -tz * PAN * dt, this.height);
-    if (ty) rig.zoomAt(Math.exp(ty * ZOOM * dt), 0, 0);
-    if (rx || rz) rig.rotate(rz * TURN * dt, rx * TURN * dt, this.spacePivot);
-    if (ry) rig.roll(-ry * Math.PI * dt);
+    rig.pan(tx * PAN * dt, -tz * PAN * dt, this.height);
+    rig.zoomAt(Math.exp(ty * ZOOM * dt), 0, 0);
+    rig.rotate(rz * TURN * dt, rx * TURN * dt, this.spacePivot);
+    rig.roll(-ry * Math.PI * dt);
     this.viewChanged = true;
     return true;
   }

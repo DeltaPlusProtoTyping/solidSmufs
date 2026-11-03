@@ -19,6 +19,7 @@ from ctypes import wintypes
 log = logging.getLogger("solidsmufs")
 
 VENDORS = {0x256F, 0x046D}  # 3Dconnexion, and Logitech (the older 3Dconnexion devices)
+GAP, SPIKE = 0.15, 150  # seconds between reports, and change in one report, worth noting in the log
 _LOGITECH_SPACE = range(0xC600, 0xC700)  # Logitech's 3Dconnexion product ids (C6xx); its other devices are ignored
 
 
@@ -144,12 +145,19 @@ class Reader:
             return
         self.handles.append(h)
         buf, got, state = ctypes.create_string_buffer(length), wintypes.DWORD(), [0] * 6
+        last, before = time.monotonic(), [0] * 6
         while not self.stopped:
             if not k32.ReadFile(h, buf, length, ctypes.byref(got), None):
                 if not self.stopped:
                     log.info("SpaceMouse: reading stopped (error %d)", k32.GetLastError())
                 return
             if parse(buf.raw[:got.value], state):
+                now = time.monotonic()
+                held, step = any(abs(x) > 20 for x in before), max(abs(a - b) for a, b in zip(state, before))
+                if held and (now - last > GAP or step > SPIKE):  # for telling device hiccups from view ones
+                    log.info("SpaceMouse: %.0f ms since the last report, biggest change %d: %s -> %s",
+                             1000 * (now - last), step, before, state)
+                last, before = now, list(state)
                 try:
                     self.on_motion(list(state))
                 except Exception:

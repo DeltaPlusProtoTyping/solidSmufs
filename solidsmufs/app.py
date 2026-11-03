@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -295,12 +296,30 @@ def run(argv):
     class SpaceBridge(QObject):  # lives on the GUI thread, so the reader thread's emits are queued to it
         moved = Signal(list)
 
+        def __init__(self):
+            super().__init__()
+            self.latest, self.sent_at, self.busy = None, 0.0, False
+
         @Slot(list)
-        def send(self, v):
-            window.page.runJavaScript(f"window.SS && SS.viewer.spaceNav({json.dumps(v)})")
+        def take(self, v):
+            self.latest = v
+            self.send()
+
+        def send(self):
+            # one call in the page at a time, always the newest values: a busy page must not build up a
+            # backlog of old motion that then plays out all at once
+            if self.latest is None or (self.busy and time.monotonic() - self.sent_at < 0.25):
+                return
+            v, self.latest = self.latest, None
+            self.busy, self.sent_at = True, time.monotonic()
+            window.page.runJavaScript(f"window.SS && SS.viewer.spaceNav({json.dumps(v)})", 0, self.done)
+
+        def done(self, _result=None):
+            self.busy = False
+            self.send()
 
     space = SpaceBridge()
-    space.moved.connect(space.send)
+    space.moved.connect(space.take)
     reader = None
     if sys.platform == "win32" and os.environ.get("SOLIDSMURFS_SPACEMOUSE") != "off":
         try:
