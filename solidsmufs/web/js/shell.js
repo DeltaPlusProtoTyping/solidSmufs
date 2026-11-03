@@ -10,7 +10,7 @@ import { STYLES, PRODUCT, escapeHtml } from './consts.js';
 const TABS = [
   { id: 'view', label: 'View', items: ['open', 'reload', '|', 'zoomFit', 'zoomArea', 'prevView', '|', 'orientation', 'normalTo', 'sectionView', '|', 'displayStyle', 'hideShow', 'appearance', 'scene', 'perspective', '|', 'savePicture'] },
   { id: 'evaluate', label: 'Evaluate', items: ['measure', 'massProps', 'sectionProps', 'bbox', 'statistics', '|', 'draft', 'zebra', 'curvature', '|', 'material'] },
-  { id: 'wagner', label: 'Tools', items: ['stock', 'holes', 'quote', '|', 'massProps', 'measure', '|', 'explorer'] },
+  { id: 'wagner', label: 'Tools', items: ['stock', 'holes', 'quote', '|', 'align', 'massProps', 'measure', '|', 'explorer'] },
 ];
 const HUD = ['zoomFit', 'zoomArea', 'prevView', 'sectionView', '|', 'orientation', 'displayStyle', 'hideShow', 'appearance', 'scene', 'viewSettings'];
 const QAT = ['open', 'reload', 'savePicture', '|', 'select', 'options'];
@@ -63,7 +63,7 @@ const MENUS = {
     { sep: true },
     ...['draft', 'zebra', 'curvature'].map((id) => app.shell.menuItem(id)),
     { head: 'Tools' },
-    ...['stock', 'holes', 'quote'].map((id) => app.shell.menuItem(id)),
+    ...['stock', 'holes', 'quote', 'align'].map((id) => app.shell.menuItem(id)),
     { sep: true },
     app.shell.menuItem('options'),
   ],

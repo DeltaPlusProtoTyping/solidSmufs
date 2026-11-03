@@ -27,6 +27,8 @@ export const api = {
   mesh: (id) => call('GET', `/api/docs/${id}/mesh`, undefined, true),
   close: (id) => call('POST', `/api/docs/${id}/close`, {}),
   reload: (id, quality, config) => call('POST', `/api/docs/${id}/reload`, config === undefined ? { quality } : { quality, config }),
+  align: (id, refs, targets) => call('POST', `/api/docs/${id}/align`, { refs, targets }),
+  unalign: (id, quality) => call('POST', `/api/docs/${id}/reload`, { quality, orient: null }),
   measure: (id, selection, options) => call('POST', `/api/docs/${id}/measure`, { selection, options }),
   massprops: (id, bodies, density) => call('POST', `/api/docs/${id}/massprops`, { bodies, density }),
   bbox: (id, bodies, mode, refs) => call('POST', `/api/docs/${id}/bbox`, { bodies, mode, refs }),

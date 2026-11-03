@@ -20,9 +20,10 @@ def save_step(session, out):
     src = Path(session.path)
     ext = src.suffix.lower()
     out = Path(out)
-    if CAD_FORMATS.get(ext) == "STEP":
+    turned = session.orient is not None  # realigned: write the turned geometry, not the file as it came
+    if CAD_FORMATS.get(ext) == "STEP" and not turned:
         shutil.copyfile(src, out)
-    elif ext in PARASOLID_FORMATS:
+    elif ext in PARASOLID_FORMATS and not turned:
         step, _info, cleanup = session._parasolid_step(str(src), ext, lambda *a: None)
         try:
             shutil.copyfile(step, out)

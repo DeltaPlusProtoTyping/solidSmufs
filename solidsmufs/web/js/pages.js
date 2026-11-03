@@ -2,6 +2,7 @@
 // Curvature. Each opens in the left panel with OK / Cancel, like SolidWorks.
 import * as THREE from 'three';
 import { api } from './api.js';
+import { standardViews } from './camera.js';
 import { tool } from './icons.js';
 import { h, spinBox, toast, copyText } from './ui.js';
 
@@ -16,6 +17,7 @@ export class Pages {
     this.draftOpts = { dir: 'top', custom: null, angle: 1, reverse: false };
     this.zebraOpts = { count: 14, width: 0.5 };
     this.bboxOpts = { mode: 'oriented', hidden: false };
+    this.alignOpts = { first: 'top', second: 'right' };
   }
 
   get viewer() { return this.app.viewer; }
@@ -231,6 +233,72 @@ export class Pages {
     };
     this.mgr.openPM(page);
     compute();
+  }
+
+  // ================================================================== align part
+  // Turn the part so a picked face (or round face's axis, or straight edge) faces a standard view, and a
+  // second pick faces another; with one pick its length runs left to right. The geometry itself turns,
+  // so views, X / Y / Z, the bounding box, stock size and Save As STEP all follow.
+  alignPart() {
+    if (!this.meta) return;
+    const app = this.app, o = this.alignOpts;
+    const VIEWS = [['top', 'Top'], ['front', 'Front'], ['right', 'Right'], ['bottom', 'Bottom'], ['back', 'Back'], ['left', 'Left']];
+    const opposite = { top: 'bottom', bottom: 'top', front: 'back', back: 'front', right: 'left', left: 'right' };
+    const square = (a) => VIEWS.map(([k]) => k).filter((k) => k !== a && k !== opposite[a]);
+    const picks = () => app.sel.filter((s) => s.kind === 'face' || s.kind === 'edge').slice(0, 2).map((s) => ({ kind: s.kind, index: s.index }));
+    let busy = false, error = null;
+    const choose = (key, options, value, fn) => h('select', { class: 'input', onchange: (e) => { fn(e.target.value); this.mgr.updatePM(); } },
+      ...options.map((k) => h('option', { value: k, selected: k === value, text: VIEWS.find(([v]) => v === k)[1] })));
+    const turned = () => !!this.meta?.orient;
+    const page = {
+      id: 'align', title: 'Align Part', icon: 'normalTo',
+      groups: () => {
+        const ps = picks();
+        if (!square(o.first).includes(o.second)) o.second = square(o.first)[0];
+        return [
+          { title: 'Faces / Edges', body: [
+            h('div', { class: 'selbox active' }, ...(ps.length ? ps.map((r, i) => h('div', { class: 'si' },
+              h('span', { html: tool(r.kind), style: { width: '13px', height: '13px', display: 'inline-flex' } }),
+              h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                text: `${app.describe(r, true)} → ${VIEWS.find(([k]) => k === (i ? o.second : o.first))[1]}` })))
+              : [h('div', { class: 'hint', style: { padding: '4px 6px' }, text: 'Click a flat or round face (or a straight edge). Ctrl+click a second one to set the turn around it.' })])),
+          ] },
+          { title: 'Directions', body: [
+            h('div', { class: 'pm-row' }, h('label', { text: 'First faces' }), choose('first', VIEWS.map(([k]) => k), o.first, (v) => { o.first = v; })),
+            h('div', { class: 'pm-row' }, h('label', { text: ps.length > 1 ? 'Second faces' : 'Length runs to' }),
+              choose('second', square(o.first), o.second, (v) => { o.second = v; })),
+            h('div', { class: 'hint', text: ps.length > 1 ? 'The second pick turns the part about the first.' : 'With one pick, the part turns about it so its length runs this way (the same fit as Bounding Box).' }),
+          ] },
+          { title: 'Orientation', body: [
+            busy ? h('div', { class: 'row' }, h('span', { class: 'spin' }), h('span', { class: 'hint', text: 'Turning the part…' }))
+              : error ? h('div', { class: 'hint', style: { color: 'var(--bad)' }, text: error })
+                : h('div', { class: 'hint', text: turned() ? 'Turned from how it was modelled.' : 'As modelled.' }),
+            h('div', { class: 'row' },
+              h('button', { class: 'btn primary', disabled: busy || !ps.length, onclick: () => apply() }, 'Align'),
+              h('button', { class: 'btn', title: 'Back to how the part was modelled', disabled: busy || !turned(), onclick: () => reset() }, 'Reset')),
+          ] },
+        ];
+      },
+      onOK: () => (picks().length ? apply() : null),
+      onCancel: () => {},
+      onSelection: () => this.mgr.updatePM(),
+    };
+    const views = () => standardViews(this.viewer.upAxis);
+    const apply = async () => {
+      const ps = picks();
+      if (!ps.length) return;
+      busy = true; error = null; this.mgr.updatePM();
+      try {
+        await app.realign(ps, [views()[o.first].dir.toArray(), views()[o.second].dir.toArray()]);
+      } catch (e) { error = e.message; }
+      busy = false; this.mgr.updatePM();
+    };
+    const reset = async () => {
+      busy = true; error = null; this.mgr.updatePM();
+      try { await app.realign(null); } catch (e) { error = e.message; }
+      busy = false; this.mgr.updatePM();
+    };
+    this.mgr.openPM(page);
   }
 
   // ================================================================== analyses

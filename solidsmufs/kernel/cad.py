@@ -54,12 +54,15 @@ class CadModel(Model):
         self.area_cache = {}
 
 
-def load(path, name, fmt, quality="normal", progress=lambda *a: None, source=None, sew=False, importer=None):
+def load(path, name, fmt, quality="normal", progress=lambda *a: None, source=None, sew=False, importer=None,
+         orient=None):
     """Read path (or `source`, an already translated STEP; or whatever `importer()` puts in gmsh, for
-    assemblies) into a CadModel."""
+    assemblies) into a CadModel, turned by the 3x3 rotation `orient` when one is given (Align Part)."""
     t0 = time.perf_counter()
     progress("Reading " + fmt, 0.05)
     gmsh = importer() if importer else import_only(path, source, sew)
+    if orient is not None:
+        turn(gmsh, orient)
     t1 = time.perf_counter()
 
     progress("Tessellating", 0.4)
@@ -145,6 +148,28 @@ def import_assembly(parts, top, failed=None):
     if not gmsh.model.getEntities(2):
         raise ValueError("No surfaces or solids found in this assembly.")
     return gmsh
+
+
+def turn(gmsh, rot):
+    """Turn the whole model by the 3x3 rotation `rot` about the origin, exactly (see _move), keeping the
+    names and colours the file gave it (moving a shape drops them). Entity numbers don't change."""
+    occ = gmsh.model.occ
+    vols = gmsh.model.getEntities(3)
+    in_vol = {abs(t) for _d, t in gmsh.model.getBoundary(vols, combined=False, oriented=False)} if vols else set()
+    tops = vols + [(2, t) for _d, t in gmsh.model.getEntities(2) if t not in in_vol]
+    looks = [_looks(gmsh, d, t) for d, t in tops]
+    m = np.eye(4)
+    m[:3, :3] = np.asarray(rot, np.float64)
+    _move(occ, tops, m)
+    occ.synchronize()
+    for (d, t), (name, color, face_colors) in zip(tops, looks):
+        if name:
+            gmsh.model.setEntityName(d, t, name)
+        if color:
+            gmsh.model.setColor([(d, t)], *color)
+        for f, col in zip(_faces_of(gmsh, d, t), face_colors):
+            if col:
+                gmsh.model.setColor([(2, f)], *col)
 
 
 def _remove_new(occ, before):

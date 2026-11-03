@@ -283,8 +283,13 @@ class _Handler(BaseHTTPRequestHandler):
             self.ctx.docs.close(doc_id)
             return self._json({"ok": True})
         if what == "reload":
-            doc.reload(b.get("quality", doc.quality), b["config"] if "config" in b else "keep")
+            doc.reload(b.get("quality", doc.quality), b["config"] if "config" in b else "keep",
+                       b["orient"] if "orient" in b else "keep")
             settings.set_ui({"quality": doc.quality})
+            return self._json(doc.status())
+        if what == "align":  # turn the part so the picked faces face the chosen views, then read it again
+            r = doc.request("align", timeout=120, refs=b.get("refs", []), targets=b.get("targets", []))
+            doc.reload(doc.quality, orient=r["orient"])
             return self._json(doc.status())
         if what == "measure":
             return self._json(doc.request("measure", timeout=120, selection=b.get("selection", []),

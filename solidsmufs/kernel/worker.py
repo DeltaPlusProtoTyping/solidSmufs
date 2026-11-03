@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from . import looks, massprops, measure
+from .geom import unit
 from .formats import ALL_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, MESH_FORMATS, PARASOLID_FORMATS  # noqa: F401
 from .model import jsonable
 
@@ -29,19 +30,21 @@ class Session:
         self.exact = False  # is the exact OpenCASCADE model loaded (not just a cached tessellation)?
         self.path = self.quality = None
         self.config = None  # SolidWorks part configuration shown (its Config-<n> id); None: the file's first
+        self.orient = None  # 3x3 rotation the part is turned by (Align Part); None: as modelled
         self.post = None  # work to do after the answer has gone out (writing the cache)
 
     # ------------------------------------------------------------------ loading
-    def open(self, path, quality="normal", progress=lambda *a: None, config=None):
+    def open(self, path, quality="normal", progress=lambda *a: None, config=None, orient=None):
         """First look at a file: a cached tessellation when there is one (instant), else a full load.
         {"meta", "blob", "exact"}; when exact is False, ensure_exact() loads the real geometry."""
-        self.path, self.quality, self.config = path, quality, config
-        hit = _mesh_cache_read(path, quality, config)
+        self.path, self.quality, self.config, self.orient = path, quality, config, _rotation(orient)
+        hit = _mesh_cache_read(path, quality, config, self.orient)
         if hit is not None:
             progress("Opening from cache", 0.5)
             self.model, meta, blob = hit
             self.exact = self.model.kind != "brep"
             meta["stats"]["cached"] = True
+            meta["orient"] = None if self.orient is None else self.orient.tolist()
             return {"meta": meta, "blob": blob, "exact": self.exact}
         meta, blob = self.load(path, quality, progress)
         return {"meta": meta, "blob": blob, "exact": True}
@@ -65,6 +68,8 @@ class Session:
                 gmsh, _asm = self._assembly_import(path, progress)
             else:
                 gmsh = cad.import_only(path, sew=CAD_FORMATS.get(ext) == "IGES")
+            if self.orient is not None:
+                cad.turn(gmsh, self.orient)
             m = self.model
             faces = {t for _, t in gmsh.model.getEntities(2)}
             curves = {t for _, t in gmsh.model.getEntities(1)}
@@ -80,9 +85,11 @@ class Session:
         meta, blob = self.load(path, quality, progress)  # the cache didn't match: start over
         return {"changed": True, "meta": meta, "blob": blob}
 
-    def load(self, path, quality="normal", progress=lambda *a: None, config="keep"):
+    def load(self, path, quality="normal", progress=lambda *a: None, config="keep", orient="keep"):
         if config != "keep":
             self.config = config
+        if orient != "keep":
+            self.orient = _rotation(orient)
         ext = Path(path).suffix.lower()
         name = Path(path).name
         if ext not in ALL_FORMATS:
@@ -91,7 +98,8 @@ class Session:
         t0 = time.perf_counter()
         if ext in CAD_FORMATS:
             from . import cad
-            self.model = cad.load(path, name, CAD_FORMATS[ext], quality, progress, sew=CAD_FORMATS[ext] == "IGES")
+            self.model = cad.load(path, name, CAD_FORMATS[ext], quality, progress, sew=CAD_FORMATS[ext] == "IGES",
+                                  orient=self.orient)
         elif ext in PARASOLID_FORMATS:
             self.model = self._load_parasolid(path, name, ext, quality, progress)
         elif ext in ASSEMBLY_FORMATS:
@@ -99,15 +107,18 @@ class Session:
         else:
             from . import meshio
             self.model = meshio.load(path, name, MESH_FORMATS[ext], progress)
+            if self.orient is not None:
+                _turn_mesh(self.model, self.orient)
         self._wire_exact()
         self.exact = True
         self.model.stats["load_s"] = round(time.perf_counter() - t0, 3)
         progress("Sending to the view", 0.95)
         meta, blob = self.model.payload()
+        meta["orient"] = None if self.orient is None else self.orient.tolist()  # turned by Align Part
         meta = jsonable(meta)
         if self.model.kind == "brep":
-            model, config = self.model, self.config
-            self.post = lambda: _mesh_cache_write(path, quality, model, meta, blob, config)
+            model, config, orient = self.model, self.config, self.orient
+            self.post = lambda: _mesh_cache_write(path, quality, model, meta, blob, config, orient)
         return meta, blob
 
     def _parasolid_step(self, path, ext, progress, config=None):
@@ -143,7 +154,8 @@ class Session:
         from . import cad
         step, info, cleanup = self._parasolid_step(path, ext, progress, self.config)
         try:
-            m = cad.load(path, name, info.get("format") or PARASOLID_FORMATS[ext], quality, progress, source=step)
+            m = cad.load(path, name, info.get("format") or PARASOLID_FORMATS[ext], quality, progress, source=step,
+                         orient=self.orient)
         finally:
             cleanup()
         if info.get("app"):
@@ -197,7 +209,7 @@ class Session:
     def _load_assembly(self, path, name, quality, progress):
         from . import cad
         found = {}
-        m = cad.load(path, name, ASSEMBLY_FORMATS[".sldasm"], quality, progress,
+        m = cad.load(path, name, ASSEMBLY_FORMATS[".sldasm"], quality, progress, orient=self.orient,
                      importer=lambda: found.setdefault("gmsh", self._assembly_import(path, progress))[0])
         asm = found["gmsh"][1]
         m.info["Components"] = str(len(asm.placements))
@@ -222,8 +234,41 @@ class Session:
             m.notices.append(_missing_text(asm.missing))
         return m
 
-    def reload(self, path, quality="normal", progress=lambda *a: None, config="keep"):
-        return self.load(path, quality, progress, config)
+    def reload(self, path, quality="normal", progress=lambda *a: None, config="keep", orient="keep"):
+        return self.load(path, quality, progress, config, orient)
+
+    def align(self, refs, targets):
+        """The rotation (3x3, on top of the current one) that turns the picked faces / edges to face the
+        given directions: refs[0] to targets[0] exactly, refs[1] (optional) as near targets[1] as it can
+        go. With one pick the part also turns about it so its length runs along targets[1], the way the
+        Bounding Box fits. Returns {"orient": 3x3}; reload with it to turn the part."""
+        m = self.model
+        if not refs:
+            raise ValueError("Pick a flat face, a round face or a straight edge to align to.")
+        t1 = unit(np.asarray(targets[0], np.float64))
+        t2 = np.asarray(targets[1], np.float64) if len(targets) > 1 else (np.eye(3)[0] if abs(t1[0]) < 0.9 else np.eye(3)[2])
+        t2 = unit(t2 - t1 * float(t2 @ t1))
+        d1 = _facing(m, refs[0])
+        if d1 is None:
+            raise ValueError("The first pick has no direction: use a flat face, a round face or a straight edge.")
+        if len(refs) > 1:
+            d2 = _facing(m, refs[1])
+            if d2 is None:
+                raise ValueError("The second pick has no direction: use a flat face, a round face or a straight edge.")
+            d2 = d2 - d1 * float(d2 @ d1)
+            if np.linalg.norm(d2) < 1e-6:
+                raise ValueError("The second pick lines up with the first; pick one that points another way.")
+        else:  # the part's length, square to the first pick, pointing the way nearer the target
+            pts = np.concatenate([np.asarray(m.positions, np.float64), np.asarray(m.vertices, np.float64)])
+            d2 = np.asarray(massprops.reference_axes(pts, [d1])[0], np.float64)
+            d2 = d2 - d1 * float(d2 @ d1)
+            if float(d2 @ t2) < 0:
+                d2 = -d2
+        d2 = unit(d2)
+        frame_now = np.stack([d1, d2, np.cross(d1, d2)], axis=1)
+        frame_then = np.stack([t1, t2, np.cross(t1, t2)], axis=1)
+        cur = self.orient if self.orient is not None else np.eye(3)
+        return jsonable({"orient": frame_then @ frame_now.T @ cur})
 
     def _wire_exact(self):
         """Give the model an exact face-area lookup when OpenCASCADE is behind it."""
@@ -518,6 +563,49 @@ def _direction(m, ent):
     return None if d is None else np.asarray(d, np.float64)
 
 
+def _rotation(orient):
+    """A 3x3 rotation from a request (None, or the identity, means as modelled)."""
+    if orient is None:
+        return None
+    r = np.asarray(orient, np.float64).reshape(3, 3)
+    u, _s, vt = np.linalg.svd(r)  # the nearest true rotation, so rounding in transit can't skew the part
+    r = u @ vt
+    if np.linalg.det(r) < 0:
+        raise ValueError("That orientation would mirror the part.")
+    return None if np.abs(r - np.eye(3)).max() < 1e-12 else r
+
+
+def _facing(m, ent):
+    """The way a pick faces: a flat face's outward normal (from its triangles), a round face's axis, an
+    edge's direction; None when it has none."""
+    d = _direction(m, ent)
+    if d is None:
+        return None
+    d = unit(d)
+    if ent.get("kind") == "face" and m.face_type[int(ent["index"])] == "plane":
+        pts, tri = m.face_triangles(int(ent["index"]))
+        if len(tri):
+            n = np.cross(pts[tri[:, 1]] - pts[tri[:, 0]], pts[tri[:, 2]] - pts[tri[:, 0]]).sum(axis=0)
+            if float(n @ d) < 0:
+                d = -d
+    return d
+
+
+def _turn_mesh(m, rot):
+    """Turn a mesh model (no exact geometry behind it) by a rotation about the origin."""
+    r = np.asarray(rot, np.float64)
+    m.positions = (np.asarray(m.positions, np.float64) @ r.T).astype(m.positions.dtype)
+    m.normals = (np.asarray(m.normals, np.float64) @ r.T).astype(m.normals.dtype)
+    if len(m.segments):
+        m.segments = (np.asarray(m.segments, np.float64) @ r.T).astype(m.segments.dtype)
+    m.vertices = np.asarray(m.vertices, np.float64) @ r.T
+    for params in (m.face_params, m.edge_params):
+        for p in params:
+            for k, v in list((p or {}).items()):
+                if k in ("center", "origin", "start", "end", "apex", "axis", "normal", "dir") and v is not None and np.size(v) == 3:
+                    p[k] = r @ np.asarray(v, np.float64)
+
+
 def _set_material(m):
     """The model's material for the tree and Mass Properties: the one its bodies share, or "Mixed"
     (each body then weighs with its own density). None when the file names no materials."""
@@ -588,14 +676,15 @@ def _dependency_stamp(path):
     return "|" + "|".join(stamps)
 
 
-def _mesh_cache_file(path, quality, config=None):
+def _mesh_cache_file(path, quality, config=None, orient=None):
     try:
         import gmsh
         from .. import settings
 
         st = Path(path).stat()
         key = (f"mesh|{Path(path).resolve()}|{st.st_size}|{st.st_mtime_ns}|{quality}|{_code_stamp()}|"
-               f"{gmsh.__version__}{_dependency_stamp(path)}|config {config}").lower()
+               f"{gmsh.__version__}{_dependency_stamp(path)}|config {config}"
+               + ("" if orient is None else "|turn " + ",".join(f"{x:.9f}" for x in np.ravel(orient)))).lower()
         folder = Path(os.environ.get("LOCALAPPDATA") or settings.folder()) / "SolidSmufs" / "cache"
         folder.mkdir(parents=True, exist_ok=True)
         return folder / (hashlib.sha1(key.encode()).hexdigest()[:24] + ".mesh.pkl")
@@ -603,9 +692,9 @@ def _mesh_cache_file(path, quality, config=None):
         return None
 
 
-def _mesh_cache_read(path, quality, config=None):
+def _mesh_cache_read(path, quality, config=None, orient=None):
     """(model, meta, blob) from an earlier opening of this exact file at this quality, or None."""
-    f = _mesh_cache_file(path, quality, config)
+    f = _mesh_cache_file(path, quality, config, orient)
     if f is None or not f.is_file():
         return None
     try:
@@ -618,8 +707,8 @@ def _mesh_cache_read(path, quality, config=None):
         return None
 
 
-def _mesh_cache_write(path, quality, model, meta, blob, config=None):
-    f = _mesh_cache_file(path, quality, config)
+def _mesh_cache_write(path, quality, model, meta, blob, config=None, orient=None):
+    f = _mesh_cache_file(path, quality, config, orient)
     if f is None:
         return
     clone = copy.copy(model)

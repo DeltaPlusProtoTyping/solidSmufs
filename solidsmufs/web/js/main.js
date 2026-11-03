@@ -283,6 +283,21 @@ class App {
     } catch (e) { toast(e.message, 'error'); }
   }
 
+  // Align Part: turn the part so the picks face the given directions (refs null: back to as modelled)
+  async realign(refs, targets) {
+    const doc = this.active;
+    if (!doc) return;
+    if (refs) await api.align(doc.id, refs, targets);
+    else await api.unalign(doc.id, this.prefs.quality);
+    doc.envelope = null; doc.envelopeKey = null;
+    doc.meta = null;
+    doc.state = 'loading';
+    doc.view = null;  // a fresh fit of the turned part
+    this.setSelection([]);
+    this.activate(doc);
+    this.poll(doc);
+  }
+
   // ================================================================== selection
   _wireViewer() {
     const v = this.viewer;
@@ -534,6 +549,7 @@ class App {
     def('zebra', { label: 'Zebra Stripes', icon: 'zebra', tip: 'Check surface smoothness', toggle: () => v().analysis?.type === 'zebra', run: () => this.pages.zebra() });
     def('curvature', { label: 'Curvature', icon: 'curvature', tip: 'Color the model by curvature', toggle: () => v().analysis?.type === 'curvature', run: () => this.pages.curvature() });
     // Tools tab (stock, holes, quote)
+    def('align', { label: 'Align Part', icon: 'normalTo', tip: 'Turn the part so picked faces face Top / Front / Right', run: () => this.pages.alignPart() });
     def('stock', { label: 'Stock Size', icon: 'stock', tip: 'Smallest block the part fits in, with allowance', run: () => this.tools.stock() });
     def('holes', { label: 'Hole Report', icon: 'holes', tip: 'Every hole by diameter, with drill and tap matches', run: () => this.tools.holes() });
     def('quote', { label: 'Quote Summary', icon: 'quote', tip: 'Size, volume, weight and holes in one copyable list', run: () => this.tools.quote() });

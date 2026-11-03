@@ -42,6 +42,7 @@ class Document:
         self.name = display_name or Path(path).name
         self.quality = quality
         self.config = None  # SolidWorks part configuration to show; None: the file's first
+        self.orient = None  # 3x3 rotation from Align Part; None: as modelled
         self.state, self.stage, self.fraction, self.error = "loading", "Starting the geometry engine", 0.0, None
         self.meta, self.blob = None, None
         self.exact = False  # exact geometry loaded (a cached tessellation can show before it is)
@@ -71,7 +72,7 @@ class Document:
     def _load(self, cmd):
         try:
             if cmd == "load":  # first open: show a cached tessellation at once, then load the exact geometry
-                r = self.request("open", path=self.path, quality=self.quality, config=self.config)
+                r = self.request("open", path=self.path, quality=self.quality, config=self.config, orient=self.orient)
                 log.info("[timing] %s tessellation ready (cached=%s)", self.name, not r["exact"])
                 self._publish(r["meta"], r["blob"])
                 self.exact = r["exact"]
@@ -85,7 +86,7 @@ class Document:
                     self.exact = True
                     log.info("[timing] %s exact geometry ready", self.name)
             else:
-                meta, blob = self.request(cmd, path=self.path, quality=self.quality, config=self.config)
+                meta, blob = self.request(cmd, path=self.path, quality=self.quality, config=self.config, orient=self.orient)
                 self._publish(meta, blob)
                 self.exact = True
         except WorkerGone:
@@ -94,11 +95,14 @@ class Document:
         except Exception as e:
             self.state, self.error = "error", str(e)
 
-    def reload(self, quality, config="keep"):
-        """Read the file again (at another tessellation quality, or showing another configuration)."""
+    def reload(self, quality, config="keep", orient="keep"):
+        """Read the file again (at another tessellation quality, showing another configuration, or turned
+        to another orientation)."""
         self.quality = quality
         if config != "keep":
             self.config = config
+        if orient != "keep":
+            self.orient = orient
         self.exact = False
         self.state, self.stage, self.fraction, self.error = "loading", "Reloading", 0.0, None
         self.opened = time.time()

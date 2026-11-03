@@ -262,5 +262,56 @@ class BoxAlignedToPickedFaces(unittest.TestCase):
             self.s.bbox(None, "reference", [])
 
 
+class AlignPart(unittest.TestCase):
+    """Turning the block so picked faces face chosen views: the geometry itself turns, exactly."""
+
+    @classmethod
+    def setUpClass(cls):
+        from solidsmufs.kernel.worker import Session
+
+        cls.dir = Path(tempfile.mkdtemp(prefix="solidsmufs-test-"))
+        cls.step = str(cls.dir / "block.step")
+        _make_block(cls.step)
+        cls.s = Session()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def setUp(self):
+        self.s.load(self.step, "normal", orient=None)
+
+    def face_along(self, n):
+        m = self.s.model
+        return next({"kind": "face", "index": f} for f, t in enumerate(m.face_type)
+                    if t == "plane" and abs(abs(np.dot(m.face_params[f]["normal"], n)) - 1) < 1e-9)
+
+    def turned(self, refs, targets):
+        r = self.s.align(refs, targets)
+        self.s.load(self.step, "normal", orient=r["orient"])
+        return np.asarray(self.s.bbox(None, "world")["size"])
+
+    def test_one_face_up_and_length_left_to_right(self):
+        size = self.turned([self.face_along((1, 0, 0))], [[0, 1, 0]])  # an end face to Top
+        np.testing.assert_allclose(size, [W, L, H], atol=1e-6)
+
+    def test_two_faces_set_the_whole_orientation(self):
+        size = self.turned([self.face_along((0, 0, 1)), self.face_along((1, 0, 0))], [[0, 0, 1], [0, 1, 0]])
+        np.testing.assert_allclose(size, [W, L, H], atol=1e-6)  # top stays facing front, the end now up
+
+    def test_turning_keeps_the_geometry_exact(self):
+        self.turned([self.face_along((0, 1, 0))], [[1, 0, 0]])
+        m = self.s.model
+        dias = sorted(2 * m.face_params[f]["radius"] for f, t in enumerate(m.face_type) if t == "cylinder")
+        np.testing.assert_allclose(dias, [6.0, 8.0], atol=1e-9)
+        vol = L * W * H - sum(math.pi * (d / 2) ** 2 * H for _c, d in HOLES)
+        self.assertAlmostEqual(self.s.massprops(None, 1.0)["volume"], vol, delta=1e-4)
+
+    def test_reset(self):
+        self.turned([self.face_along((1, 0, 0))], [[0, 1, 0]])
+        self.s.load(self.step, "normal", orient=None)
+        np.testing.assert_allclose(self.s.bbox(None, "world")["size"], [L, W, H], atol=1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()
