@@ -241,7 +241,8 @@ class Session:
         """The rotation (3x3, on top of the current one) that turns the picked faces / edges to face the
         given directions: refs[0] to targets[0] exactly, refs[1] (optional) as near targets[1] as it can
         go. With one pick the part also turns about it so its length runs along targets[1], the way the
-        Bounding Box fits. Returns {"orient": 3x3}; reload with it to turn the part."""
+        Bounding Box fits. Returns {"orient": 3x3 total, "turn": 3x3 this step}; reload with orient to
+        turn the part (turn's rows are where the new X / Y / Z point on the part as it is now)."""
         m = self.model
         if not refs:
             raise ValueError("Pick a flat face, a round face or a straight edge to align to.")
@@ -268,7 +269,8 @@ class Session:
         frame_now = np.stack([d1, d2, np.cross(d1, d2)], axis=1)
         frame_then = np.stack([t1, t2, np.cross(t1, t2)], axis=1)
         cur = self.orient if self.orient is not None else np.eye(3)
-        return jsonable({"orient": frame_then @ frame_now.T @ cur})
+        turn = frame_then @ frame_now.T
+        return jsonable({"orient": turn @ cur, "turn": turn})
 
     def _wire_exact(self):
         """Give the model an exact face-area lookup when OpenCASCADE is behind it."""

@@ -206,7 +206,8 @@ export class Viewer {
     this.selGroup = new THREE.Group(); // view selector cube
     this.overlay = new THREE.Group();
     this.annot = new THREE.Group();
-    this.scene.add(this.modelGroup, this.edgeGroup, this.silGroup, this.capGroup, this.refGroup, this.boxGroup, this.selGroup, this.overlay, this.annot);
+    this.preview = new THREE.Group(); // Align Part's axis triad (kept apart from measurement annotations)
+    this.scene.add(this.modelGroup, this.edgeGroup, this.silGroup, this.capGroup, this.refGroup, this.boxGroup, this.selGroup, this.overlay, this.annot, this.preview);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -1227,7 +1228,7 @@ export class Viewer {
   clearAnnotations() {
     this.annot.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.annot.clear();
-    this.labels = this.labels.filter((l) => { if (!l.ref && !l.box) { l.el.remove(); l.lead?.remove(); return false; } return true; });
+    this.labels = this.labels.filter((l) => { if (!l.ref && !l.box && !l.preview) { l.el.remove(); l.lead?.remove(); return false; } return true; });
     this.requestRender();
   }
 
@@ -1321,6 +1322,37 @@ export class Viewer {
     box(this.cube.triRect(this.height));
     if (this.showCube) box(this.cube.rect(this.width));
     return out;
+  }
+
+  // Align Part: arrows from `origin` along each of `axes` (unit [x, y, z]s) in `colors`, labelled
+  showAxesPreview(origin, axes, colors, labels) {
+    this.clearAxesPreview();
+    if (!origin) return;
+    const o = new THREE.Vector3(...origin), len = this.rig.radius * 0.45;
+    axes.forEach((d, i) => {
+      const dir = new THREE.Vector3(...d).normalize(), tip = o.clone().addScaledVector(dir, len);
+      this._fatLine([...o.toArray(), ...tip.toArray()], colors[i], 3, { group: this.preview, depthTest: false, noClip: true, order: 32 });
+      const head = new THREE.Mesh(new THREE.ConeGeometry(len * 0.06, len * 0.18, 18),
+        new THREE.MeshBasicMaterial({ color: colors[i], depthTest: false, toneMapped: false }));
+      head.position.copy(tip);
+      head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      head.renderOrder = 33;
+      this.preview.add(head);
+      const el = this.addLabel(o.clone().addScaledVector(dir, len * 1.22), labels[i], `axis ${'xyz'[i]}`);
+      this.labels[this.labels.length - 1].preview = true;
+      void el;
+    });
+    const dot = this.annotDots([origin], 0x14265a, 8);
+    this.annot.remove(dot);
+    this.preview.add(dot);
+    this.requestRender();
+  }
+
+  clearAxesPreview() {
+    this.preview.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    this.preview.clear();
+    this.labels = this.labels.filter((l) => { if (l.preview) { l.el.remove(); l.lead?.remove(); return false; } return true; });
+    this.requestRender();
   }
 
   annotLine(p1, p2, color, width = 2, opts = {}) {

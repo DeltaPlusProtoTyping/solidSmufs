@@ -246,8 +246,8 @@ export class Pages {
     const opposite = { top: 'bottom', bottom: 'top', front: 'back', back: 'front', right: 'left', left: 'right' };
     const square = (a) => VIEWS.map(([k]) => k).filter((k) => k !== a && k !== opposite[a]);
     const picks = () => app.sel.filter((s) => s.kind === 'face' || s.kind === 'edge').slice(0, 2).map((s) => ({ kind: s.kind, index: s.index }));
-    let busy = false, error = null;
-    const choose = (key, options, value, fn) => h('select', { class: 'input', onchange: (e) => { fn(e.target.value); this.mgr.updatePM(); } },
+    let busy = false, error = null, token = 0;
+    const choose = (key, options, value, fn) => h('select', { class: 'input', onchange: (e) => { fn(e.target.value); this.mgr.updatePM(); preview(); } },
       ...options.map((k) => h('option', { value: k, selected: k === value, text: VIEWS.find(([v]) => v === k)[1] })));
     const turned = () => !!this.meta?.orient;
     const page = {
@@ -279,26 +279,49 @@ export class Pages {
           ] },
         ];
       },
-      onOK: () => (picks().length ? apply() : null),
-      onCancel: () => {},
-      onSelection: () => this.mgr.updatePM(),
+      onOK: () => { this.viewer.clearAxesPreview(); return picks().length ? apply() : null; },
+      onCancel: () => this.viewer.clearAxesPreview(),
+      onSelection: () => { this.mgr.updatePM(); preview(); },
     };
     const views = () => standardViews(this.viewer.upAxis);
+    // the triad at the first pick: where X / Y / Z (and so Right / Top / Front) will point once aligned
+    const COLORS = [0xd93a3a, 0x2f9e46, 0x2c63d6];
+    const preview = async () => {
+      const ps = picks(), t = ++token, v = this.viewer;
+      if (!ps.length || busy) { v.clearAxesPreview(); return; }
+      let r;
+      try { r = await api.alignPreview(app.active.id, ps, [views()[o.first].dir.toArray(), views()[o.second].dir.toArray()]); } catch (e) {
+        if (t !== token) return;
+        error = e.message; v.clearAxesPreview(); this.mgr.updatePM(); return;
+      }
+      if (t !== token) return;
+      if (error) { error = null; this.mgr.updatePM(); }
+      const pts = v.entityPoints(ps[0]);
+      if (!pts?.length) { v.clearAxesPreview(); return; }
+      const at = [0, 0, 0];
+      for (let i = 0; i < pts.length; i += 3) { at[0] += pts[i]; at[1] += pts[i + 1]; at[2] += pts[i + 2]; }
+      const n = pts.length / 3;
+      const viewOf = (k) => Object.entries(views()).find(([name, s]) => ['top', 'front', 'right', 'bottom', 'back', 'left'].includes(name)
+        && s.dir.x === (k === 0 ? 1 : 0) && s.dir.y === (k === 1 ? 1 : 0) && s.dir.z === (k === 2 ? 1 : 0))?.[0];
+      const name = (k) => { const vw = viewOf(k); return `${'XYZ'[k]}${vw ? ` · ${vw[0].toUpperCase()}${vw.slice(1)}` : ''}`; };
+      v.showAxesPreview(at.map((x) => x / n), r.turn, COLORS, [0, 1, 2].map(name));
+    };
     const apply = async () => {
       const ps = picks();
       if (!ps.length) return;
-      busy = true; error = null; this.mgr.updatePM();
+      busy = true; error = null; this.viewer.clearAxesPreview(); this.mgr.updatePM();
       try {
         await app.realign(ps, [views()[o.first].dir.toArray(), views()[o.second].dir.toArray()]);
       } catch (e) { error = e.message; }
       busy = false; this.mgr.updatePM();
     };
     const reset = async () => {
-      busy = true; error = null; this.mgr.updatePM();
+      busy = true; error = null; this.viewer.clearAxesPreview(); this.mgr.updatePM();
       try { await app.realign(null); } catch (e) { error = e.message; }
       busy = false; this.mgr.updatePM();
     };
     this.mgr.openPM(page);
+    preview();
   }
 
   // ================================================================== analyses

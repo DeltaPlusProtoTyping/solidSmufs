@@ -370,6 +370,7 @@ input[type="range"] { accent-color: var(--accent); width: 100%; }
 .mlead::before { content: ""; position: absolute; left: -2px; top: -2px; width: 5px; height: 5px; border-radius: 50%; background: inherit; box-shadow: inherit; }
 .mlabel.com { background: #fde7f6; border-color: #b04a96; color: #6a1f57; }
 .mlabel.plane { background: rgba(255, 255, 255, .85); border-color: #7891c4; color: #213367; font-weight: 600; }
+.mlabel.axis { font-weight: 700; } .mlabel.axis.x { color: #c22d2d; } .mlabel.axis.y { color: #23843a; } .mlabel.axis.z { color: #2453b8; } /* Align Part preview */
 .mlabel.thread { background: #e8f0ff; border-color: #3b64c8; color: #14265a; } /* thread size on a hole or shaft */
 .mlabel.box { background: #fff6e3; border-color: #d99a1c; color: #5a3d05; } /* bounding box sizes, in the box's amber */
 
