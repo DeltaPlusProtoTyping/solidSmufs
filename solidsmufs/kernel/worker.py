@@ -166,6 +166,10 @@ class Session:
             m.info["Created by"] = info["app"]
         m.warnings += list(info.get("warnings") or [])
         m.configs, m.config = info.get("configurations") or [], info.get("config")
+        m.hole_wizard = list(info.get("hole_wizard") or [])  # SolidWorks Hole Wizard types, e.g. "M10x1.5 Tapped Hole"
+        if m.hole_wizard:
+            from collections import Counter
+            m.info["Hole Wizard"] = ", ".join(f"{n}× {t}" if n > 1 else t for t, n in Counter(m.hole_wizard).items())
         looks.apply(m, info)
         _set_material(m)
         return m
@@ -517,10 +521,13 @@ class Session:
             g["depths"].append(r["depth"])
             g["through"] = g["through"] and r["through"]
             g["faces"] += r["faces"]
-        out = [{"diameter": g["diameter"], "count": g["count"], "depth_min": min(g["depths"]), "depth_max": max(g["depths"]),
-                "through": g["through"], "faces": g["faces"], "thread": g["thread"],
-                "likely": [f"{g['thread']} tapped (modelled thread)"] if g["thread"] else threads.likely(g["diameter"])}
-               for g in sorted(groups.values(), key=lambda g: g["diameter"])]
+        out = []
+        for g in sorted(groups.values(), key=lambda g: g["diameter"]):
+            hw = None if g["thread"] else threads.hole_wizard_thread(m, g["diameter"])  # a plain hole the Hole Wizard taps
+            likely = ([f"{g['thread']} tapped (modelled thread)"] if g["thread"]
+                      else [f"{hw['callout']} tapped (Hole Wizard)"] if hw else threads.likely(g["diameter"]))
+            out.append({"diameter": g["diameter"], "count": g["count"], "depth_min": min(g["depths"]), "depth_max": max(g["depths"]),
+                        "through": g["through"], "faces": g["faces"], "thread": g["thread"] or (hw and hw["callout"]), "likely": likely})
         return jsonable({"groups": out, "holes": len(result)})
 
     def _hole_has_bottom(self, hole):

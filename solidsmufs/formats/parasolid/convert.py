@@ -80,7 +80,7 @@ def convert(src_path, out_path, config=None):
         ver = parasolid_version(chosen[0][1].version, src.header)
         if ver:
             fmt = f"{fmt} ({ver})"
-    looks = {"material": None, "density": None, "appearances": [], "configurations": []}
+    looks = {"material": None, "density": None, "appearances": [], "configurations": [], "hole_wizard": []}
     shown = config  # the SolidWorks configuration shown: the one asked for, else the first that has the part
     if shown is None:
         ids = [int(m.group(1)) for n, _m in chosen for m in [re.search(r"Config-(\d+)-", n)] if m]

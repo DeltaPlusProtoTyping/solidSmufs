@@ -233,6 +233,17 @@ def _thread_rows(e, rows, gfx):
         rows[:0] = top
         gfx.append({"type": "note", "p": th["center"], "text": top[0]["value"]})
         return
+    if th.get("hole_wizard"):
+        std = th["thread"]
+        rows.insert(0, {"label": "Thread", "value": f"{std['callout']} tapped hole (Hole Wizard)", "kind": "text",
+                        "primary": True, "status": True})
+        for r in rows[1:]:
+            r["primary"] = False
+        at = next((i + 1 for i, r in enumerate(rows) if r["label"] == "Radius"), 1)
+        rows[at:at] = [{"label": "Pitch", "value": threads.describe(std), "kind": "text", "status": True},
+                       {"label": "Tap drill", "value": std["tap_name"], "kind": "text"}]
+        gfx.append({"type": "note", "p": e.m.face_params[e.index]["center"], "text": f"{std['callout']} tapped"})
+        return
     if th.get("taper"):
         rows.insert(0, {"label": "Thread", "value": th["callout"], "kind": "text", "primary": True, "status": True})
         gfx.append({"type": "note", "p": e.m.face_params[e.index]["center"], "text": th["callout"]})

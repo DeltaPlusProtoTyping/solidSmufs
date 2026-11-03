@@ -59,7 +59,7 @@ def solidworks(path, config=None):
     configuration `config` (its Config-<n> id; else the first). Empty values when the file has none."""
     from .containers import sw_streams
 
-    out = {"material": None, "density": None, "appearances": [], "configurations": []}
+    out = {"material": None, "density": None, "appearances": [], "configurations": [], "hole_wizard": []}
     try:
         streams = sw_streams(path, keep=lambda n: n == "swXmlContents/KeyWords"
                              or re.fullmatch(r"Contents/Config-\d+", n) is not None)
@@ -67,6 +67,7 @@ def solidworks(path, config=None):
         return out
     out["material"] = _material(streams.get("swXmlContents/KeyWords", b""), config)
     out["configurations"] = configurations(streams.get("swXmlContents/KeyWords", b""))
+    out["hole_wizard"] = hole_wizard(streams.get("swXmlContents/KeyWords", b""))
     ids = sorted(int(n.rsplit("-", 1)[1]) for n in streams if n.startswith("Contents/Config-"))
     if not ids:
         return out
@@ -107,6 +108,20 @@ def density_for(material, stored):
     if stored is None or (stored == 1000.0 and family is not None and abs(family - 1000) > 100):
         return float(family) if family else stored
     return stored
+
+
+def hole_wizard(keywords):
+    """The part's Hole Wizard holes as SolidWorks names their type: ["M10x1.5 Tapped Hole",
+    "1/4-20 Tapped Hole", "CBORE for 1/4 Socket Head Cap Screw", ...], one per feature (a feature
+    named "M5x0.8 Tapped Hole1" counts as "M5x0.8 Tapped Hole")."""
+    text = keywords.decode("utf-8", "replace")
+    unescape = lambda s: s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&amp;", "&")
+    out = []
+    for tag in re.findall(r"<HoleWizard\b[^>]*>", text):  # newer files give Type; older ones only the feature's Name
+        kind = re.search(r'\bType="([^"]*)"', tag) or re.search(r'\bName="([^"]*?)\d*"', tag)
+        if kind:
+            out.append(unescape(kind.group(1)).strip())
+    return out
 
 
 def configurations(keywords):

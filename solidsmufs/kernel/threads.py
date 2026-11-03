@@ -184,6 +184,32 @@ def likely(d, internal=True):
     return out
 
 
+def _size_key(text):
+    """"1/4-20", "#10-32", "M10x1.5" from a callout or a SolidWorks Hole Wizard type, numbers tidied so
+    "M6x1.0" and "M6x1" agree; None when it names no thread size."""
+    import re
+    m = re.match(r"\s*(#?\d+(?:/\d+)?)\s*-\s*(\d+(?:\.\d+)?)", text)
+    if m:
+        return f"{m.group(1)}-{float(m.group(2)):g}"
+    m = re.match(r"\s*M\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)", text)
+    if m:
+        return f"M{float(m.group(1)):g}x{float(m.group(2)):g}"
+    return None
+
+
+def hole_wizard_thread(model, d, internal=True):
+    """The tapped size a plain hole of diameter d is, when the part's SolidWorks Hole Wizard says it has
+    tapped holes of a size the diameter fits (tap drill, minor or major diameter): the THREADS entry, or None."""
+    names = [t for t in getattr(model, "hole_wizard", []) or [] if "tap" in t.lower() or "thread" in t.lower()]
+    keys = {_size_key(t) for t in names} - {None}
+    if not keys or not internal:
+        return None
+    for m in thread_matches(d, internal):
+        if _size_key(m["callout"]) in keys:
+            return m["thread"]
+    return None
+
+
 def npt_size(d_large):
     """The NPT size a tapered hole whose large end is d_large (mm) fits, or None."""
     for t in THREADS:
@@ -404,6 +430,10 @@ def identify(m, f):
         c, a = np.asarray(p["center"], np.float64), unit(np.asarray(p["axis"], np.float64))
         d = 2 * float(p["radius"])
         internal = _internal(m, f, c, a)
+        hw = hole_wizard_thread(m, d, internal is not False)
+        if hw is not None:  # the part's Hole Wizard has a tapped hole of a size this fits: say so outright
+            return {"modelled": False, "hole_wizard": True, "internal": True, "diameter": d, "callout": hw["callout"],
+                    "thread": hw, "likely": [f"{hw['callout']} tapped (Hole Wizard)"], "matches": []}
         return {"modelled": False, "internal": internal, "diameter": d, "likely": likely(d, internal is not False),
                 "matches": [{"callout": x["callout"], "how": x["how"]} for x in thread_matches(d, internal is not False)]}
     if t == "cone" and p.get("half_angle") is not None and abs(float(p["half_angle"]) - NPT_HALF_ANGLE) < 0.05:

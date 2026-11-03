@@ -93,6 +93,23 @@ class Tables(unittest.TestCase):
         self.assertEqual(threads.npt_size(0.45 * IN)["callout"], "1/4-18 NPT")
 
 
+class HoleWizard(unittest.TestCase):
+    """A SolidWorks part's Hole Wizard types settle what a plain hole is."""
+
+    def test_keywords(self):
+        from solidsmufs.formats.parasolid.appearance import hole_wizard
+        xml = (b'<HoleWizard id="56" Name="M10x1.5 Tapped Hole1" Type="M10x1.5 Tapped Hole"/>'
+               b'<HoleWizard id="128" Name="M5x0.8 Tapped Hole1" Dissectable="true"/>')
+        self.assertEqual(hole_wizard(xml), ["M10x1.5 Tapped Hole", "M5x0.8 Tapped Hole"])
+
+    def test_plain_hole_named_by_the_hole_wizard(self):
+        class Part:
+            hole_wizard = ["M8x1.0 Tapped Hole", "M5 Clearance Hole"]
+        self.assertEqual(threads.hole_wizard_thread(Part, 7.0)["callout"], "M8x1")  # its tap drill
+        self.assertEqual(threads.hole_wizard_thread(Part, 8.0)["callout"], "M8x1")  # cosmetic thread at the major
+        self.assertIsNone(threads.hole_wizard_thread(Part, 4.2))  # an M5 tap drill, but this part taps no M5
+
+
 class ModelledThreads(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

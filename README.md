@@ -123,7 +123,7 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   size (1/4-20 UNC, M6x1, 1/4-18 NPT), pitch, tap drill and thread length. Modelled threads are read
   off the helix, so the answer is definite; a plain hole (a cylinder at the tap drill or minor
   diameter, as Hole Wizard and cosmetic threads leave it) gets its most likely use and the other
-  sizes it could be. Covers UNC / UNF #0 to 1", ISO metric coarse and common fine, and NPT.
+  sizes it could be, unless the SolidWorks part's Hole Wizard says it has tapped holes of a size it fits, which then names it outright. Covers UNC / UNF #0 to 1", ISO metric coarse and common fine, and NPT.
 - **Mass Properties:** pick a material (or a density); the report is in SolidWorks' format: mass,
   volume, surface area, center of mass, principal axes and moments, inertia at the center of mass
   and at the origin.
