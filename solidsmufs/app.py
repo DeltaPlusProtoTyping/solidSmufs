@@ -291,6 +291,25 @@ def run(argv):
     window.show()
     log.info("[timing] window shown")
 
+    # a 3Dconnexion SpaceMouse, read straight from the device; motion goes to the page on the GUI thread
+    class SpaceBridge(QObject):  # lives on the GUI thread, so the reader thread's emits are queued to it
+        moved = Signal(list)
+
+        @Slot(list)
+        def send(self, v):
+            window.page.runJavaScript(f"window.SS && SS.viewer.spaceNav({json.dumps(v)})")
+
+    space = SpaceBridge()
+    space.moved.connect(space.send)
+    reader = None
+    if sys.platform == "win32" and os.environ.get("SOLIDSMURFS_SPACEMOUSE") != "off":
+        try:
+            from .spacemouse import Reader
+            reader = Reader(space.moved.emit)
+            reader.start()
+        except Exception:
+            log.exception("SpaceMouse: not started")
+
     def handoff():
         conn = listener.nextPendingConnection()
 
@@ -314,5 +333,7 @@ def run(argv):
     listener.listen(instance_key)
 
     code = qapp.exec()
+    if reader is not None:
+        reader.stop()
     app.stop()
     return code

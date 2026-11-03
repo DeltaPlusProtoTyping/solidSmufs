@@ -305,6 +305,7 @@ export class Viewer {
 
   _loop(now) {
     requestAnimationFrame(this._loop);
+    if (this._spaceStep(now)) this.needsRender = true;
     if (this.rig.tick(now)) this.needsRender = true;
     if (!this.needsRender) return;
     if (!this.model && performance.now() < this.holdUntil) return;
@@ -314,6 +315,35 @@ export class Viewer {
       this.canvas.style.visibility = '';
       console.info(`[timing] first frame drawn (${this.model ? 'with the part' : 'empty'})`);
     }
+  }
+
+  // SpaceMouse: the app hands over the cap's latest [tx, ty, tz, rx, ry, rz] (about ±350 each); the view
+  // moves by them every frame, scaled by the frame's time, the way 3Dconnexion's object mode works: slide
+  // to pan, push / pull to zoom, tilt, twist and roll to turn about the model's centre (as SolidWorks)
+  spaceNav(v) {
+    this.space = v;
+    this.spaceAt = performance.now();
+  }
+
+  _spaceStep(now) {
+    const v = this.space;
+    if (!v || !this.model) { this._spaceLast = now; return false; }
+    const DEAD = 10, FULL = 350;
+    const a = v.map((x) => (Math.abs(x) < DEAD ? 0 : (x - Math.sign(x) * DEAD) / (FULL - DEAD)));
+    const dt = Math.min((now - (this._spaceLast ?? now)) / 1000, 0.05);
+    this._spaceLast = now;
+    if (now - this.spaceAt > 400 || a.every((x) => x === 0)) { this.spacePivot = null; return false; }  // let go, or gone quiet
+    if (!dt) return false;
+    const [tx, ty, tz, rx, ry, rz] = a, rig = this.rig;
+    this.rig.anim = null;
+    if (!this.spacePivot) this.spacePivot = this.rotCenter?.point || this.visibleBox().getCenter(new THREE.Vector3());
+    const PAN = 1.2 * this.height, ZOOM = 1.6, TURN = Math.PI / 0.0075;  // per second at full deflection
+    if (tx || tz) rig.pan(tx * PAN * dt, -tz * PAN * dt, this.height);
+    if (ty) rig.zoomAt(Math.exp(ty * ZOOM * dt), 0, 0);
+    if (rx || rz) rig.rotate(rz * TURN * dt, rx * TURN * dt, this.spacePivot);
+    if (ry) rig.roll(-ry * Math.PI * dt);
+    this.viewChanged = true;
+    return true;
   }
 
   /** Nothing is coming to wait for: draw the empty scene. */

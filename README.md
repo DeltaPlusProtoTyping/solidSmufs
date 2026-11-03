@@ -140,6 +140,13 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   plus stock weight. **Hole Report:** every hole by diameter, count and depth, with modelled
   thread sizes, and the rest matched to tap drills, minor diameters, clearance holes and drills. **Quote Summary:** all of it in one copyable list.
 
+## SpaceMouse
+
+A 3Dconnexion SpaceMouse works without any extra software beyond its usual driver: the app reads the
+device directly (Windows HID). Slide the cap to pan, push / pull to zoom, tilt, twist and roll to turn
+the part about its centre (or the entity you middle-clicked). Set `SOLIDSMURFS_SPACEMOUSE=off` to
+leave it to 3DxWare.
+
 ## How it's built
 
 - `solidsmufs/app.py`: the Qt window (PySide6 WebEngine), file dialogs, dropped files, single instance.
