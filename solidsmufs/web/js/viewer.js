@@ -1366,11 +1366,13 @@ export class Viewer {
     };
     for (const a of arrows) {
       if (!a.at || !a.dir) continue;
-      const { o, dir } = arrow(a.at, a.dir, a.color, 3.5, 1);
+      const { o, dir } = arrow(a.at, a.dir, a.color, a.width ?? 3.5, 1);
       const el = this.addLabel(o.clone().addScaledVector(dir, len * 1.25), '', 'pickbar');
       el.append(a.widget);
       this.labels[this.labels.length - 1].preview = true;
-      const dot = this.annotDots([a.at], a.color, 9);
+    }
+    if (arrows[0]?.at) {
+      const dot = this.annotDots([arrows[0].at], 0x14265a, 9);
       this.annot.remove(dot);
       this.preview.add(dot);
     }

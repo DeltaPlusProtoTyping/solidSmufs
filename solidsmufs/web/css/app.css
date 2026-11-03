@@ -378,6 +378,7 @@ input[type="range"] { accent-color: var(--accent); width: 100%; }
 .pickbar button.x { color: #c22d2d; } .pickbar button.y { color: #23843a; } .pickbar button.z { color: #2453b8; }
 .pickbar button.on.x { background: #d93a3a; color: #fff; } .pickbar button.on.y { background: #2f9e46; color: #fff; } .pickbar button.on.z { background: #2c63d6; color: #fff; }
 .pickbar button.flip.on { background: var(--btn-on); border-color: var(--btn-on-line); }
+.pickbar button.auto.on { opacity: .6; } .pickbar button:disabled { opacity: .35; cursor: default; }
 .pickbar .sep { width: 1px; margin: 3px 1px; background: var(--line-2); }
 .mlabel.thread { background: #e8f0ff; border-color: #3b64c8; color: #14265a; } /* thread size on a hole or shaft */
 .mlabel.box { background: #fff6e3; border-color: #d99a1c; color: #5a3d05; } /* bounding box sizes, in the box's amber */

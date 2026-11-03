@@ -236,48 +236,80 @@ export class Pages {
   }
 
   // ================================================================== align part
-  // Turn the part to picked faces (or round faces' axes, or straight edges). Two ways to say how:
-  //  - Pick axes (the usual): each pick gets an arrow on the part with X / Y / Z and Flip buttons; the
-  //    pick then points along that axis. One pick: the part turns about it so its length runs along the
-  //    next free axis.
+  // Turn the part to a picked face (or round face's axis, or straight edge). Two ways to say how:
+  //  - Pick axes (the usual): a triad sits on the pick (its facing direction, the part's length across
+  //    it, or a second pick's direction, and the third square to both), each arrow with X / Y / Z and
+  //    flip buttons. Give any two arrows an axis; the third follows (never mirrored).
   //  - Face views: choose which view (Top, Front, Right, …) each pick faces, with a triad preview.
   // The geometry itself turns, so views, X / Y / Z, the bounding box, stock size and Save As STEP follow.
   alignPart() {
     if (!this.meta) return;
     const app = this.app, o = this.alignOpts, v = this.viewer;
     o.mode = o.mode || 'axes';
-    o.assign = o.assign || {};  // pick key -> { axis: 'x' | 'y' | 'z' | null, flip }
     const VIEWS = [['top', 'Top'], ['front', 'Front'], ['right', 'Right'], ['bottom', 'Bottom'], ['back', 'Back'], ['left', 'Left']];
     const opposite = { top: 'bottom', bottom: 'top', front: 'back', back: 'front', right: 'left', left: 'right' };
     const square = (a) => VIEWS.map(([k]) => k).filter((k) => k !== a && k !== opposite[a]);
     const COLORS = { x: 0xd93a3a, y: 0x2f9e46, z: 0x2c63d6 }, GREY = 0x7a8496;
     const UNIT = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
     const picks = () => app.sel.filter((s) => s.kind === 'face' || s.kind === 'edge').slice(0, 2).map((s) => ({ kind: s.kind, index: s.index }));
-    const key = (r) => `${r.kind}:${r.index}`;
-    const slot = (r) => (o.assign[key(r)] = o.assign[key(r)] || { axis: null, flip: false });
-    let busy = false, error = null, token = 0, facing = [];
+    const fresh = () => [{ axis: null, flip: false }, { axis: null, flip: false }, { axis: null, flip: false }];
+    let tri = fresh(), order = [];  // each arrow's axis and flip; the arrows in the order they were given axes
+    let busy = false, error = null, token = 0, facing = [], pickKey = '';
     const turned = () => !!this.meta?.orient;
     const views = () => standardViews(v.upAxis);
+    const vec = {
+      neg: (a) => a.map((x) => -x),
+      dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+      cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+      unit: (a) => { const l = Math.hypot(...a) || 1; return a.map((x) => x / l); },
+    };
+
+    // the triad's three directions on the part as it is now: the pick's facing, the length across it (or
+    // the second pick's direction), and the third square to both; null until the pick has a direction
+    const base = () => {
+      const a = facing[0]?.dir;
+      if (!a) return null;
+      let b = facing[1]?.dir || facing[0].length;
+      b = vec.unit(b.map((x, i) => x - a[i] * vec.dot(a, b)));
+      if (Math.hypot(...b) < 0.5) return null;
+      return [a, b, vec.cross(a, b)];
+    };
+    const assigned = () => order.filter((i) => tri[i].axis);
+    // the arrow that follows from two others: its axis, and its direction (σ (u × w), so it's a true turn)
+    const derived = () => {
+      const [i, j] = assigned().slice(-2);
+      if (j === undefined) return null;
+      const k = [0, 1, 2].find((n) => n !== i && n !== j), b = base();
+      if (!b) return null;
+      const ai = tri[i].axis, aj = tri[j].axis, ak = ['x', 'y', 'z'].find((a) => a !== ai && a !== aj);
+      const cyclic = ['xyz', 'yzx', 'zxy'].includes(ai + aj + ak);
+      const u = tri[i].flip ? vec.neg(b[i]) : b[i], w = tri[j].flip ? vec.neg(b[j]) : b[j];
+      const d = vec.cross(u, w);
+      return { k, axis: ak, dir: cyclic ? d : vec.neg(d) };
+    };
 
     // what to send: [refs, targets] for the chosen mode, or null when there's nothing to align yet
     const request = () => {
       const ps = picks();
       if (!ps.length) return null;
       if (o.mode === 'views') return [ps, [views()[o.first].dir.toArray(), views()[o.second].dir.toArray()]];
-      const used = ps.filter((r) => slot(r).axis);
-      if (!used.length) return null;
-      const target = (r) => UNIT[slot(r).axis].map((x) => (slot(r).flip ? -x : x));
-      if (used.length > 1) return [used, used.map(target)];
-      const free = ['x', 'y', 'z'].find((a) => a !== slot(used[0]).axis);  // the length runs along the next free axis
-      return [used, [target(used[0]), UNIT[free]]];
+      const b = base(), used = assigned().slice(-2);
+      if (!b || !used.length) return null;
+      const dirOf = (i) => (tri[i].flip ? vec.neg(b[i]) : b[i]);
+      if (used.length === 2) return [used.map((i) => ({ dir: dirOf(i) })), used.map((i) => UNIT[tri[i].axis])];
+      // one arrow given: the next arrow along takes the next free axis
+      const i = used[0], j = [0, 1, 2].find((n) => n !== i), free = ['x', 'y', 'z'].find((a) => a !== tri[i].axis);
+      return [[{ dir: dirOf(i) }, { dir: b[j] }], [UNIT[tri[i].axis], UNIT[free]]];
     };
 
     const choose = (options, value, fn) => h('select', { class: 'input', onchange: (e) => { fn(e.target.value); refresh(); } },
       ...options.map((k) => h('option', { value: k, selected: k === value, text: VIEWS.find(([vw]) => vw === k)[1] })));
-    const describePick = (r, i) => {
-      if (o.mode === 'views') return VIEWS.find(([k]) => k === (i ? o.second : o.first))[1];
-      const s = slot(r);
-      return s.axis ? `${s.flip ? '−' : '+'}${s.axis.toUpperCase()}` : '?';
+    const summary = () => {
+      const d = derived();
+      return ['face', 'length', 'across'].map((name, i) => {
+        if (d && d.k === i) return `${name} → ${d.axis.toUpperCase()} (auto)`;
+        return tri[i].axis ? `${name} → ${tri[i].flip ? '−' : '+'}${tri[i].axis.toUpperCase()}` : `${name} → ?`;
+      }).join(' · ');
     };
     const page = {
       id: 'align', title: 'Align Part', icon: 'normalTo',
@@ -291,11 +323,13 @@ export class Pages {
           { title: 'Faces / Edges', body: [
             h('div', { class: 'selbox active' }, ...(ps.length ? ps.map((r, i) => h('div', { class: 'si' },
               h('span', { html: tool(r.kind), style: { width: '13px', height: '13px', display: 'inline-flex' } }),
-              h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, text: `${app.describe(r, true)} → ${describePick(r, i)}` })))
-              : [h('div', { class: 'hint', style: { padding: '4px 6px' }, text: 'Click a flat or round face (or a straight edge). Ctrl+click a second one.' })])),
-            o.mode === 'axes'
-              ? h('div', { class: 'hint', text: 'Click X, Y or Z by the arrow on each pick to point it along that axis; ⇄ flips it. With one pick, the part\'s length runs along the next free axis.' })
-              : null,
+              h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                text: o.mode === 'views' ? `${app.describe(r, true)} → ${VIEWS.find(([k]) => k === (i ? o.second : o.first))[1]}`
+                  : `${app.describe(r, true)}${i ? ' (sets the length arrow)' : ''}` })))
+              : [h('div', { class: 'hint', style: { padding: '4px 6px' }, text: o.mode === 'views' ? 'Click a flat or round face (or a straight edge). Ctrl+click a second one.'
+                : 'Click a flat or round face (or a straight edge). Ctrl+click a second one to aim the length arrow along it.' })])),
+            o.mode === 'axes' && ps.length ? h('div', { class: 'hint', text: summary() }) : null,
+            o.mode === 'axes' ? h('div', { class: 'hint', text: 'Click X, Y or Z on any two arrows; the third follows. ⇄ flips an arrow.' }) : null,
           ] },
           ...(o.mode === 'views' ? [{ title: 'Directions', body: [
             h('div', { class: 'pm-row' }, h('label', { text: 'First faces' }), choose(VIEWS.map(([k]) => k), o.first, (val) => { o.first = val; })),
@@ -314,25 +348,33 @@ export class Pages {
       },
       onOK: () => { v.clearAxesPreview(); return request() ? apply() : null; },
       onCancel: () => v.clearAxesPreview(),
-      onSelection: () => { facing = []; refresh(); },
+      onSelection: () => refresh(),
     };
 
-    // the buttons by a pick's arrow
-    const pickBar = (r) => {
-      const s = slot(r), bar = h('span', { style: { display: 'flex', gap: '2px' } });
+    // the X / Y / Z / flip bar by arrow i
+    const bar = (i) => {
+      const d = derived(), auto = d && d.k === i, s = tri[i];
+      const el = h('span', { style: { display: 'flex', gap: '2px' } });
       for (const a of ['x', 'y', 'z']) {
-        bar.append(h('button', { class: `${a}${s.axis === a ? ' on' : ''}`, text: a.toUpperCase(), title: `Point this along ${a.toUpperCase()}`,
+        const on = auto ? d.axis === a : s.axis === a;
+        el.append(h('button', { class: `${a}${on ? ' on' : ''}${auto ? ' auto' : ''}`, text: a.toUpperCase(),
+          title: auto ? `Follows from the other two arrows (click to set it instead)` : `Point this arrow along ${a.toUpperCase()}`,
           onclick: (e) => {
             e.stopPropagation();
-            for (const other of picks()) if (key(other) !== key(r) && slot(other).axis === a) slot(other).axis = null;  // one pick per axis
-            s.axis = s.axis === a ? null : a;
+            if (s.axis === a && !auto) { s.axis = null; order = order.filter((n) => n !== i); refresh(); return; }
+            for (let n = 0; n < 3; n++) if (n !== i && tri[n].axis === a) { tri[n].axis = null; order = order.filter((x) => x !== n); }
+            if (auto) s.flip = vec.dot(d.dir, base()[i]) < 0;  // keep the way it already points
+            s.axis = a;
+            order = [...order.filter((n) => n !== i), i];
+            if (assigned().length > 2) { const drop = order.shift(); tri[drop].axis = null; }  // two set the third
             refresh();
           } }));
       }
-      bar.append(h('span', { class: 'sep' }), h('button', { class: `flip${s.flip ? ' on' : ''}`, text: '⇄', title: 'Flip: point it the other way',
+      el.append(h('span', { class: 'sep' }), h('button', { class: `flip${s.flip && !auto ? ' on' : ''}`, text: '⇄', disabled: auto,
+        title: auto ? 'This arrow follows from the other two; flip one of those' : 'Flip: point this arrow the other way',
         onclick: (e) => { e.stopPropagation(); s.flip = !s.flip; refresh(); } }));
-      bar.addEventListener('pointerdown', (e) => e.stopPropagation());
-      return bar;
+      el.addEventListener('pointerdown', (e) => e.stopPropagation());
+      return el;
     };
 
     const viewName = (k) => {
@@ -350,49 +392,50 @@ export class Pages {
 
     // redraw the page and the arrows on the part
     const refresh = async () => {
+      const ps = picks(), t = ++token, k = JSON.stringify(ps);
+      if (k !== pickKey) { pickKey = k; facing = []; if (!ps.length || o.mode === 'axes') { tri = fresh(); order = []; } }
       this.mgr.updatePM();
-      const ps = picks(), t = ++token;
       if (!ps.length || busy) { v.clearAxesPreview(); return; }
-      const req = request();
-      let turn = null;
       try {
         if (o.mode === 'axes' && facing.length !== ps.length) facing = await api.facing(app.active.id, ps);
-        if (req) turn = (await api.alignPreview(app.active.id, ...req)).turn;
         if (t !== token) return;
-        if (error) { error = null; this.mgr.updatePM(); }
+        const req = request();
+        const turn = req && o.mode === 'views' ? (await api.alignPreview(app.active.id, ...req)).turn : null;
+        if (t !== token) return;
+        if (error) { error = null; }
+        this.mgr.updatePM();
+        if (o.mode === 'views') {
+          if (turn) v.showAxesPreview(centre(ps[0]), turn, [COLORS.x, COLORS.y, COLORS.z], [0, 1, 2].map((n) => `${'XYZ'[n]}${viewName(n)}`));
+          else v.clearAxesPreview();
+          return;
+        }
       } catch (e) {
         if (t !== token) return;
-        error = e.message; this.mgr.updatePM();
-        if (o.mode === 'views') { v.clearAxesPreview(); return; }
+        error = e.message; this.mgr.updatePM(); v.clearAxesPreview(); return;
       }
-      if (o.mode === 'views') {
-        if (turn) v.showAxesPreview(centre(ps[0]), turn, [COLORS.x, COLORS.y, COLORS.z], [0, 1, 2].map((k) => `${'XYZ'[k]}${viewName(k)}`));
-        return;
+      const b = base();
+      if (!b) {
+        error = 'The pick has no direction: use a flat or round face, or a straight edge.';
+        this.mgr.updatePM(); v.clearAxesPreview(); return;
       }
-      const arrows = ps.map((r, i) => {
-        const s = slot(r), f = facing[i] || {};
-        const dir = f.dir && (s.flip ? f.dir.map((x) => -x) : f.dir);
-        return { at: f.at || centre(r), dir, color: s.axis ? COLORS[s.axis] : GREY, widget: pickBar(r) };
-      });
-      if (facing.some((f) => !f.dir) && !error) { error = 'A pick has no direction: use a flat or round face, or a straight edge.'; this.mgr.updatePM(); }
-      // the axes the picks don't set, where they'll end up
-      const set = new Set(ps.map((r) => slot(r).axis).filter(Boolean));
-      const anchor = arrows.find((a) => a.at)?.at;
-      const ghosts = turn && anchor ? [0, 1, 2].filter((k) => !set.has('xyz'[k])).map((k) => ({
-        at: anchor, dir: turn[k], color: COLORS['xyz'[k]], cls: 'xyz'[k], label: `${'XYZ'[k]}${viewName(k)}` })) : [];
-      v.showPickArrows(arrows, ghosts);
+      const at = facing[0].at || centre(ps[0]), d = derived();
+      v.showPickArrows([0, 1, 2].map((i) => {
+        if (d && d.k === i) return { at, dir: d.dir, color: COLORS[d.axis], widget: bar(i), width: 2.5 };
+        const s = tri[i];
+        return { at, dir: s.flip ? vec.neg(b[i]) : b[i], color: s.axis ? COLORS[s.axis] : GREY, widget: bar(i), width: i ? 3 : 3.5 };
+      }));
     };
 
     const apply = async () => {
       const req = request();
       if (!req) return;
       busy = true; error = null; v.clearAxesPreview(); this.mgr.updatePM();
-      try { await app.realign(...req); o.assign = {}; } catch (e) { error = e.message; }
+      try { await app.realign(...req); tri = fresh(); order = []; } catch (e) { error = e.message; }
       busy = false; this.mgr.updatePM();
     };
     const reset = async () => {
       busy = true; error = null; v.clearAxesPreview(); this.mgr.updatePM();
-      try { await app.realign(null); o.assign = {}; } catch (e) { error = e.message; }
+      try { await app.realign(null); tri = fresh(); order = []; } catch (e) { error = e.message; }
       busy = false; this.mgr.updatePM();
     };
     this.mgr.openPM(page);

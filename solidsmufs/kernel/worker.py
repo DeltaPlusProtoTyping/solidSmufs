@@ -238,12 +238,18 @@ class Session:
         return self.load(path, quality, progress, config, orient)
 
     def facing(self, refs):
-        """For Align Part's arrows: [{"dir": the way each pick faces (or None), "at": its middle}]."""
+        """For Align Part's arrows: [{"dir": the way each pick faces (or None), "at": its middle}]; the
+        first also gets "length", the part's length direction square to it (the Bounding Box fit)."""
         m, out = self.model, []
         for r in refs:
             i = int(r.get("index", -1))
             pts = m.face_triangles(i)[0] if r.get("kind") == "face" else m.edge_points(i) if r.get("kind") == "edge" else np.zeros((0, 3))
             out.append({"dir": _facing(m, r), "at": pts.mean(axis=0) if len(pts) else None})
+        if out and out[0]["dir"] is not None:
+            d1 = out[0]["dir"]
+            allp = np.concatenate([np.asarray(m.positions, np.float64), np.asarray(m.vertices, np.float64)])
+            ln = np.asarray(massprops.reference_axes(allp, [d1])[0], np.float64)
+            out[0]["length"] = unit(ln - d1 * float(ln @ d1))
         return jsonable(out)
 
     def align(self, refs, targets):
@@ -588,7 +594,9 @@ def _rotation(orient):
 
 def _facing(m, ent):
     """The way a pick faces: a flat face's outward normal (from its triangles), a round face's axis, an
-    edge's direction; None when it has none."""
+    edge's direction, or a direction given outright ({"dir": [x, y, z]}); None when it has none."""
+    if ent.get("dir") is not None:
+        return unit(np.asarray(ent["dir"], np.float64))
     d = _direction(m, ent)
     if d is None:
         return None
