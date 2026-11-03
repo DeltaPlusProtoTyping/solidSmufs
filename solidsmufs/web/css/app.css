@@ -350,7 +350,7 @@ input[type="range"] { accent-color: var(--accent); width: 100%; }
 .views-strip .vs-item:hover { border-color: var(--btn-hover-line); background: var(--row-hover); }
 
 /* heads-up view toolbar: transparent like SolidWorks */
-.hud { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 1px; padding: 3px 4px; border-radius: 9px; background: var(--hud-bg); border: 1px solid var(--hud-line); box-shadow: var(--shadow-sm); z-index: 5; backdrop-filter: blur(10px) saturate(1.2); }
+.hud { position: absolute; top: 8px; left: 8px; display: flex; align-items: center; gap: 1px; padding: 3px 4px; border-radius: 9px; background: var(--hud-bg); border: 1px solid var(--hud-line); box-shadow: var(--shadow-sm); z-index: 5; backdrop-filter: blur(10px) saturate(1.2); }
 .hud .hb { position: relative; width: 31px; height: 28px; border: 1px solid transparent; border-radius: 6px; background: transparent; display: grid; place-items: center; color: var(--ink); cursor: default; }
 .hud .hb:hover { background: var(--btn-hover); border-color: var(--btn-hover-line); }
 .hud .hb.on { background: var(--btn-on); border-color: var(--btn-on-line); }
