@@ -135,7 +135,7 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
 - **Align Part:** pick a flat or round face (or a straight edge); a triad on it (its facing, the length across it, and the third) has X / Y / Z and Flip buttons on every arrow: set any two and the third follows (a second pick aims the length arrow). The other method chooses which view each pick faces (Top,
   Front, Right, ...); Ctrl+click a second pick to set the turn about it, or let the part's length run
   left to right. The geometry itself turns, exactly, so views, X / Y / Z, the bounding box, Stock Size,
-  mass properties and Save As STEP all follow. Reset puts it back as modelled.
+  mass properties and Save As STEP all follow. The orientation is remembered for that file (it reopens turned, with a notice); Reset puts it back as modelled.
 - **Stock Size:** smallest block (or one standing on picked faces, as in Bounding Box), and round bar for round parts, with allowance and rounding,
   plus stock weight. **Hole Report:** every hole by diameter, count and depth, with modelled
   thread sizes, and the rest matched to tap drills, minor diameters, clearance holes and drills. **Quote Summary:** all of it in one copyable list.

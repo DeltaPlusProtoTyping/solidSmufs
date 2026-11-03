@@ -1,4 +1,4 @@
-"""Remembered between runs: recent files and the viewer's preferences, in %APPDATA%\\SolidSmufs."""
+"""Remembered between runs: recent files, preferences and each part's Align Part orientation, in %APPDATA%\\SolidSmufs."""
 
 import json
 import os
@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 _lock = threading.Lock()
-DEFAULTS = {"recent": [], "ui": {}}
+DEFAULTS = {"recent": [], "ui": {}, "orient": {}}
 
 
 def folder():
@@ -47,6 +47,29 @@ def add_recent(path, name=None):
     data["recent"] = rec[:15]
     save(data)
     return data["recent"]
+
+
+def _key(path):
+    try:
+        return os.path.normcase(str(Path(path).resolve()))
+    except OSError:
+        return os.path.normcase(str(path))
+
+
+def get_orient(path):
+    """The 3x3 rotation Align Part last left this file in, or None (as modelled)."""
+    rot = load()["orient"].get(_key(path))
+    return rot if isinstance(rot, list) and len(rot) == 3 else None
+
+
+def set_orient(path, rot):
+    """Remember (or with None forget) the file's Align Part orientation; the 500 most recent are kept."""
+    data = load()
+    turns = {k: v for k, v in data.get("orient", {}).items() if k != _key(path)}
+    if rot is not None:
+        turns[_key(path)] = [[float(x) for x in row] for row in rot]
+    data["orient"] = dict(list(turns.items())[-500:])
+    save(data)
 
 
 def set_ui(ui):

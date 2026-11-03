@@ -11,6 +11,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import settings
+
 log = logging.getLogger("solidsmufs")
 _ctx = mp.get_context("spawn")
 
@@ -42,7 +44,7 @@ class Document:
         self.name = display_name or Path(path).name
         self.quality = quality
         self.config = None  # SolidWorks part configuration to show; None: the file's first
-        self.orient = None  # 3x3 rotation from Align Part; None: as modelled
+        self.orient = settings.get_orient(path)  # 3x3 rotation from Align Part (remembered per file); None: as modelled
         self.state, self.stage, self.fraction, self.error = "loading", "Starting the geometry engine", 0.0, None
         self.meta, self.blob = None, None
         self.exact = False  # exact geometry loaded (a cached tessellation can show before it is)
@@ -103,6 +105,7 @@ class Document:
             self.config = config
         if orient != "keep":
             self.orient = orient
+            settings.set_orient(self.path, orient)
         self.exact = False
         self.state, self.stage, self.fraction, self.error = "loading", "Reloading", 0.0, None
         self.opened = time.time()

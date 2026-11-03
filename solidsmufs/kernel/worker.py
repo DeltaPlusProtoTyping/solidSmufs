@@ -45,6 +45,8 @@ class Session:
             self.exact = self.model.kind != "brep"
             meta["stats"]["cached"] = True
             meta["orient"] = None if self.orient is None else self.orient.tolist()
+            if self.orient is not None:
+                meta["notices"] = [*[n for n in meta.get("notices", []) if n != TURNED_NOTICE], TURNED_NOTICE]
             return {"meta": meta, "blob": blob, "exact": self.exact}
         meta, blob = self.load(path, quality, progress)
         return {"meta": meta, "blob": blob, "exact": True}
@@ -115,6 +117,8 @@ class Session:
         progress("Sending to the view", 0.95)
         meta, blob = self.model.payload()
         meta["orient"] = None if self.orient is None else self.orient.tolist()  # turned by Align Part
+        if self.orient is not None:
+            meta["notices"] = [*[n for n in meta.get("notices", []) if n != TURNED_NOTICE], TURNED_NOTICE]
         meta = jsonable(meta)
         if self.model.kind == "brep":
             model, config, orient = self.model, self.config, self.orient
@@ -578,6 +582,9 @@ def _direction(m, ent):
     else:
         d = None
     return None if d is None else np.asarray(d, np.float64)
+
+
+TURNED_NOTICE = "Shown in the orientation you set with Align Part (Tools > Align Part > Reset to go back)."
 
 
 def _rotation(orient):
