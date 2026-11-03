@@ -116,8 +116,9 @@ export function toast(msg, kind = 'ok', ms = 2600) {
 // A floating, draggable, resizable window (SolidWorks' Measure / Mass Properties style).
 let zTop = 100;
 export class Dialog {
-  constructor({ key, title, icon: iconName, width = 360, height = null, tools = null, body, foot = null, onClose = null, resizable = true }) {
+  constructor({ key, title, icon: iconName, width = 360, height = null, tools = null, body, foot = null, onClose = null, resizable = true, at = null }) {
     this.key = key;
+    this.at = at;  // (width, height) => {x, y}: where it opens every time, instead of where it was last left
     this.onClose = onClose;
     this.el = h('div', { class: 'dialog', style: { width: `${width}px`, height: height ? `${height}px` : null, zIndex: ++zTop } });
     this.titleEl = h('span', { class: 'dl-title', text: title });
@@ -151,6 +152,8 @@ export class Dialog {
     let y = s?.y ?? 150;
     if (s?.w) this.el.style.width = `${s.w}px`;
     if (s?.h) this.el.style.height = `${s.h}px`;
+    const fixed = this.at?.(this.el.offsetWidth, this.el.offsetHeight);
+    if (fixed) ({ x, y } = fixed);
     x = Math.min(Math.max(0, x), innerWidth - 120);
     y = Math.min(Math.max(0, y), innerHeight - 60);
     this.el.style.left = `${x}px`;

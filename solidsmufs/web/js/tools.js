@@ -80,6 +80,7 @@ export class Tools {
     this.measureTools = tools;
     const d = this._dialog('measure', {
       title: `Measure - ${this.app.active?.name || ''}`, icon: 'measure', width: 340, tools: h('div', { class: 'row', style: { gap: '1px' } }, ...tools()), body: h('div'),
+      at: (w) => this._viewTopRight(w),
       onClose: () => { app.measuring = false; this.viewer.clearAnnotations(); app.shell.refresh(); app.status(); },
     });
     app.measuring = true;
@@ -91,6 +92,19 @@ export class Tools {
   // How round items are measured: the toolbar default, and each picked radius's close / center / far
   measureOpts(sel) {
     return { arc: this.arcMode, arcs: sel.map((s) => this.arcPick.get(arcKey(s)) || null) };
+  }
+
+  // The top right corner of the 3D view for a tool window w wide, clear of the view cube and the
+  // heads-up toolbar
+  _viewTopRight(w) {
+    const v = this.viewer, c = v.canvas.getBoundingClientRect(), GAP = 10;
+    if (!c.width) return null;
+    const x = Math.max(c.left + GAP, c.right - w - GAP);
+    let y = c.top + GAP;
+    if (v.showCube) { const r = v.cube.rect(v.width); y = c.top + r.y + r.h + GAP; }
+    const hud = v.container.querySelector('.hud')?.getBoundingClientRect();
+    if (hud?.width && hud.right + GAP > x && hud.bottom + GAP > y) y = hud.bottom + GAP;
+    return { x, y };
   }
 
   async _runMeasure() {
