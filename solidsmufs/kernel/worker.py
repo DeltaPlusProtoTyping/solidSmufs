@@ -20,8 +20,40 @@ import numpy as np
 
 from . import looks, massprops, measure
 from .geom import unit
-from .formats import ALL_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, MESH_FORMATS, PARASOLID_FORMATS, PDF_FORMATS  # noqa: F401
+from .formats import ALL_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, MESH_FORMATS, PARASOLID_FORMATS, PDF_FORMATS, PRC_FORMATS  # noqa: F401
 from .model import jsonable
+
+
+def prc_placed(piece):
+    """A piece just where it was modelled."""
+    from ..formats.prc import Placed
+    return Placed(piece, np.eye(4), "", None)
+
+
+def _placed_piece(one, unit_mm, default_name):
+    """(name, points in mm, triangles, faces, corner normals, planar flags, colour) of a piece in its place."""
+    p, m = one.piece, one.matrix
+    points = (p.points @ m[:3, :3].T + m[:3, 3]) * unit_mm
+    triangles, normals = p.triangles, p.normals
+    turned = m[:3, :3]
+    det = float(np.linalg.det(turned))
+    if normals is not None and not np.allclose(turned, np.eye(3)):
+        if abs(det) > 1e-12:  # normals turn by the inverse transpose, which keeps them square to a scaled surface
+            normals = unit_rows_3(normals @ np.linalg.inv(turned))
+    if det < 0:  # mirrored: the same triangles now wind the other way
+        triangles = triangles[:, [0, 2, 1]]
+        if normals is not None:
+            normals = normals[:, [0, 2, 1]]
+    color = list(one.color) if one.color is not None else None
+    to_mm = np.diag([unit_mm, unit_mm, unit_mm, 1.0]) @ m
+    return (one.name or default_name, points, triangles, p.faces, normals, p.planar, color, (id(p), to_mm))
+
+
+def unit_rows_3(n):
+    """Corner normals (m, 3, 3) made unit length."""
+    length = np.linalg.norm(n, axis=2, keepdims=True)
+    length[length == 0] = 1.0
+    return n / length
 
 
 class Session:
@@ -45,6 +77,14 @@ class Session:
         models, problem = models_inside(path), None
         self.model = None
         if "PRC" in models:
+            hit = _mesh_cache_read(path, "pdf", None, self.orient)
+            if hit is not None:  # worked out on an earlier opening: only the pages are new
+                progress("Opening from cache", 0.5)
+                self.model, meta, blob = hit
+                self.exact = True
+                meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": models, "problem": None}
+                meta["stats"]["cached"] = True
+                return meta, blob
             progress("Reading the 3D model", 0.5)
             try:
                 self.model = self._pdf_model(path)
@@ -59,31 +99,43 @@ class Session:
         meta, blob = self.model.payload()
         meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": models, "problem": problem}
         meta["orient"] = None if self.orient is None else self.orient.tolist()
-        return jsonable(meta), blob
+        meta = jsonable(meta)
+        if self.model.kind == "mesh":
+            model, orient = self.model, self.orient
+            self.post = lambda: _mesh_cache_write(path, "pdf", model, meta, blob, None, orient)
+        return meta, blob
 
     def _pdf_model(self, path):
-        """The mesh model from the PRC models in a PDF, in mm. Its points are as accurate as the file rounded them."""
+        """The mesh model from the PRC models in a PDF, in mm."""
         from ..formats import prc
+        return self._prc_model(path, prc.read_pdf(path), "3D PDF (PRC)")
+
+    def _prc_model(self, path, files, fmt):
+        """A mesh model from read PRC files. Each piece goes where the file's tree puts it, as many times as it does."""
         from . import meshio
-        files = prc.read_pdf(path)
-        stem, pieces, warnings, tolerance = Path(path).stem, [], [], 0.0
-        total = sum(len(f.pieces) for f in files)
+        stem, pieces, warnings, tolerance, lost = Path(path).stem, [], [], 0.0, False
         for f in files:
             warnings += f.warnings
-            for p in f.pieces:
-                name = (f.name or stem) if total == 1 else f"{f.name or stem} ({len(pieces) + 1})"
-                pieces.append((name, p.points * f.unit_mm, p.triangles, p.faces, p.normals, p.planar))
-                tolerance = max(tolerance, p.tolerance * f.unit_mm)
+            placed = f.placed
+            if not placed:  # the tree couldn't be followed, or names none of them: each where it was modelled
+                lost = lost or len(f.pieces) > 1
+                placed = [prc_placed(p) for p in f.pieces]
+            for one in placed:
+                pieces.append(_placed_piece(one, f.unit_mm, f.name or stem))
+                tolerance = max(tolerance, one.piece.tolerance * f.unit_mm)
         if not pieces:
-            raise ValueError(" ".join(warnings) or "This PDF's 3D model holds nothing that can be shown yet.")
+            raise ValueError(" ".join(warnings) or "This 3D model holds no triangles to show. "
+                             "(It may be exact geometry alone, which can't be shown yet.)")
+        if len(pieces) == 1:
+            pieces[0] = (stem, *pieces[0][1:])
         # three axes, each rounded to the nearest tolerance: half of it, on the diagonal
         slack = tolerance * 0.87
-        m = meshio.from_faces(path, Path(path).name, "3D PDF (PRC)", pieces, slack=slack)
-        m.info["Accuracy"] = f"\u00b1{slack:.3f} mm (the 3D PDF's rounding)"
+        m = meshio.from_faces(path, Path(path).name, fmt, pieces, slack=slack)
+        if slack:
+            m.info["Accuracy"] = f"\u00b1{slack:.3f} mm (the file's rounding)"
         m.warnings += warnings
-        if total > 1:  # placing them needs the file's assembly tree, which isn't read yet
-            m.notices.append(f"This 3D PDF has {total} pieces. Each is shown where it was modelled, "
-                             "which may not be its place in the assembly.")
+        if lost:
+            m.notices.append("This model's pieces couldn't be put in their assembly positions: each is shown where it was modelled.")
         return m
 
     def pdf_tile(self, **kw):
@@ -166,7 +218,13 @@ class Session:
             raise ValueError(f"Can't open {ext or 'this kind of'} files.")
         self.path, self.quality = path, quality
         t0 = time.perf_counter()
-        if ext in CAD_FORMATS:
+        if ext in PRC_FORMATS:
+            from ..formats import prc
+            progress("Reading the model", 0.3)
+            self.model = self._prc_model(path, [prc.read_prc(Path(path).read_bytes())], "PRC")
+            if self.orient is not None:
+                _turn_mesh(self.model, self.orient)
+        elif ext in CAD_FORMATS:
             from . import cad
             self.model = cad.load(path, name, CAD_FORMATS[ext], quality, progress, sew=CAD_FORMATS[ext] == "IGES",
                                   orient=self.orient)
@@ -188,7 +246,7 @@ class Session:
         if self.orient is not None:
             meta["notices"] = [*[n for n in meta.get("notices", []) if n != TURNED_NOTICE], TURNED_NOTICE]
         meta = jsonable(meta)
-        if self.model.kind == "brep":
+        if self.model.kind == "brep" or ext in PRC_FORMATS:
             model, config, orient = self.model, self.config, self.orient
             self.post = lambda: _mesh_cache_write(path, quality, model, meta, blob, config, orient)
         return meta, blob
@@ -770,7 +828,7 @@ def _cache_paths(path, config=None):
 def _code_stamp():
     here = Path(__file__).resolve().parents[1]
     files = [*(here / "kernel").glob("*.py"), *(here / "formats").glob("*.py"),
-             *(here / "formats" / "parasolid").glob("*.py")]
+             *(here / "formats" / "parasolid").glob("*.py"), *(here / "formats" / "prc").glob("*.py")]
     return max((f.stat().st_mtime_ns for f in files), default=0)
 
 

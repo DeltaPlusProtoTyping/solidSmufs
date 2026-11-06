@@ -49,6 +49,14 @@ class Bits:
             shift += 8
         return v
 
+    def i32(self):
+        """Integer: as UnsignedInteger, its last byte's top bit being the sign."""
+        v, shift = 0, 0
+        while self.bit():
+            v |= self.read(8) << shift
+            shift += 8
+        return v - (1 << shift) if shift and v >= 1 << (shift - 1) else v
+
     def string(self):
         if not self.bit():
             return ""
@@ -192,17 +200,20 @@ def _huffman_decode(raw, width, sign_extend):
             node = arm[node]
         symbol[node] = sym
     count = num(32)
-    out, node, end = [], 0, len(s)
-    append = out.append
-    while len(out) < count:
-        if left[node] < 0 and right[node] < 0:  # a leaf (also a tree of one symbol, which takes no bits)
-            append(symbol[node])
+    if left[0] < 0 and right[0] < 0:  # a tree of one symbol takes no bits
+        return [symbol[0]] * count
+    # each node's two ways on, as one table indexed by the next bit's character ('0' is 48, '1' is 49)
+    steps = [(left[n], right[n]) for n in range(len(left))]
+    out = [0] * count
+    try:
+        for k in range(count):
             node = 0
-            continue
-        if pos >= end:
-            raise PrcError("A compressed array in the PRC data ended early.")
-        node = right[node] if s[pos] == 49 else left[node]
-        pos += 1
-        if node < 0:
-            raise PrcError("A compressed array in the PRC data has a code it doesn't define.")
+            while True:
+                node = steps[node][s[pos] - 48]
+                pos += 1
+                if symbol[node] is not None:
+                    break
+            out[k] = symbol[node]
+    except IndexError:  # past the end, or a code it doesn't define (-1 lands on a node with no symbol, then runs out)
+        raise PrcError("A compressed array in the PRC data ended early.") from None
     return out

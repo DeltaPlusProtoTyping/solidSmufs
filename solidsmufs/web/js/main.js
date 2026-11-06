@@ -145,7 +145,7 @@ class App {
 
   async openDialog() {
     if (!this.native) {
-      const inp = h('input', { type: 'file', accept: '.step,.stp,.igs,.iges,.sldprt,.sldasm,.x_t,.x_b,.xmt_txt,.xmt_bin,.brep,.stl,.obj,.ply,.off,.3mf,.glb,.gltf,.pdf' });
+      const inp = h('input', { type: 'file', accept: '.step,.stp,.igs,.iges,.sldprt,.sldasm,.x_t,.x_b,.xmt_txt,.xmt_bin,.brep,.stl,.obj,.ply,.off,.3mf,.glb,.gltf,.pdf,.prc' });
       inp.addEventListener('change', () => { if (inp.files[0]) this.upload(inp.files[0]); });
       inp.click();
       return;

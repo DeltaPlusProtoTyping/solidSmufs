@@ -16,7 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from solidsmufs.formats import prc  # noqa: E402
 from solidsmufs.formats.prc.bits import Bits, PrcError  # noqa: E402
-from solidsmufs.formats.prc import tess  # noqa: E402
+from solidsmufs.formats.prc import schema as prc_schema, tess, tree  # noqa: E402
+from solidsmufs.kernel import meshio  # noqa: E402
+from solidsmufs.kernel.worker import _placed_piece  # noqa: E402
 
 # a real 3D PDF, when this PC has it: McMaster-Carr's 4-40 x 5/8 button head screw
 SCREW = Path.home() / "Downloads" / "90910A721_3D_Button Head Screws.pdf"
@@ -140,6 +142,155 @@ class InThePdf(unittest.TestCase):
             prc.read_prc(b"nope")
 
 
+def move(x=0.0, y=0.0, z=0.0):
+    m = np.eye(4)
+    m[:3, 3] = x, y, z
+    return m
+
+
+def product(**kw):
+    return {"name": "", "style": 0, "part": 0, "prototype": 0, "prototype_file": None, "external": 0, "external_file": None,
+            "children": [], "location": None, **kw}
+
+
+def part(tess_number, style=0):
+    return {"name": "", "style": style, "items": [tree.Item("", 0, 0, tess_number)]}
+
+
+class Placing(unittest.TestCase):
+    def at(self, files, by_id=None, roots=()):
+        return [(f, n, m[:3, 3].tolist()) for f, n, m, _name, _c in tree.placements(files, by_id or {}, roots)]
+
+    def test_locations_add_up_from_the_root_down(self):
+        files = [{"parts": [part(1)], "globals": None, "products": [
+            product(part=1, location=move(x=1)), product(children=[0], location=move(y=2))]}]
+        self.assertEqual(self.at(files), [(0, 0, [1, 2, 0])])
+
+    def test_one_part_placed_twice_comes_out_twice(self):
+        files = [{"parts": [part(1)], "globals": None, "products": [
+            product(part=1, location=move(x=1)), product(part=1, location=move(x=5)), product(children=[0, 1])]}]
+        self.assertEqual(self.at(files), [(0, 0, [1, 0, 0]), (0, 0, [5, 0, 0])])
+
+    def test_a_prototype_is_looked_through_keeping_its_location(self):
+        files = [{"parts": [part(1)], "globals": None, "products": [
+            product(part=1, location=move(z=1)), product(prototype=1, location=move(z=3))]}]
+        self.assertEqual(self.at(files), [(0, 0, [0, 0, 4])])
+
+    def test_a_prototype_can_be_in_another_file_structure(self):
+        uid = (1, 2, 3, 4)
+        files = [{"parts": [part(7)], "products": [product(part=1)], "globals": None},
+                 {"parts": [], "products": [product(prototype=1, prototype_file=uid)], "globals": None}]
+        self.assertEqual(self.at(files, {uid: 0}), [(0, 6, [0, 0, 0])])
+
+    def test_every_active_root_counts(self):
+        a, b = (1, 1, 1, 1), (2, 2, 2, 2)
+        files = [{"parts": [part(1)], "products": [product(part=1)], "globals": None},
+                 {"parts": [part(2)], "products": [product(part=1)], "globals": None}]
+        self.assertEqual(self.at(files, {a: 0, b: 1}, [(a, 1, True), (b, 1, True)]), [(0, 0, [0, 0, 0]), (1, 1, [0, 0, 0])])
+        self.assertEqual(self.at(files, {a: 0, b: 1}, [(a, 1, False), (b, 1, True)]), [(1, 1, [0, 0, 0])])
+
+    def test_an_assembly_that_loops_is_an_error_not_a_hang(self):
+        files = [{"parts": [], "globals": None, "products": [product(children=[0])]}]
+        with self.assertRaises(PrcError):
+            self.at(files)
+
+    def test_colours_come_from_styles_through_materials_and_textures(self):
+        data = {"colors": [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0)], "styles": [(False, 1), (True, 1), (True, 2)],
+                "materials": [(False, 4), (True, 1)], "coords": []}
+        self.assertEqual(tree.style_color(data, 1), (1.0, 0.0, 0.0))  # a plain colour; indices count components
+        self.assertEqual(tree.style_color(data, 2), (0.0, 1.0, 0.0))  # a material's diffuse
+        self.assertEqual(tree.style_color(data, 3), (0.0, 1.0, 0.0))  # a texture over that material
+        self.assertIsNone(tree.style_color(data, 0))
+        self.assertIsNone(tree.style_color(None, 1))
+
+
+class SchemaPrograms(unittest.TestCase):
+    def run_it(self, tokens, text):
+        b = bits(text)
+        b.schema = {99: tokens}
+        prc_schema.extend(b, 99)
+        return b.i
+
+    def test_a_block_for_a_newer_version_is_read(self):
+        tokens = [prc_schema.BLOCK_VERSION, 15000, prc_schema.BOOLEAN, prc_schema.BLOCK_END]
+        self.assertEqual(self.run_it(tokens, "1"), 1)
+
+    def test_a_block_for_a_version_we_know_is_passed_over(self):
+        tokens = [prc_schema.BLOCK_VERSION, 8000, prc_schema.BOOLEAN, prc_schema.BLOCK_END]
+        self.assertEqual(self.run_it(tokens, "1"), 0)
+
+    def test_conditions_and_loops(self):
+        ifs = [prc_schema.IF, prc_schema.EQ, prc_schema.CONSTANT, 1, prc_schema.BOOLEAN, prc_schema.CHARACTER,
+               prc_schema.ELSE, prc_schema.BOOLEAN]
+        self.assertEqual(self.run_it(ifs, "1 00000000"), 9)
+        self.assertEqual(self.run_it(ifs, "0 1"), 2)
+        loop = [prc_schema.SIMPLE_FOR, prc_schema.BOOLEAN]
+        self.assertEqual(self.run_it(loop, "1 00000011 0 111"), 13)
+
+    def test_no_schema_reads_nothing(self):
+        b = bits("1")
+        prc_schema.extend(b, 99)
+        self.assertEqual(b.i, 0)
+
+    def test_a_program_running_off_its_end_is_an_error(self):
+        with self.assertRaises(PrcError):
+            self.run_it([prc_schema.BLOCK_START, prc_schema.BOOLEAN], "1")
+
+
+class Uncompressed(unittest.TestCase):
+    def test_fans_and_strips_become_triangles(self):
+        self.assertEqual(prc._triangles_of(prc.FANS, 4), [(0, 1, 2), (0, 2, 3)])
+        self.assertEqual(prc._triangles_of(prc.STRIPS, 4), [(0, 1, 2), (2, 1, 3)])
+        self.assertEqual(prc._triangles_of(prc.TRIANGLES, 3), ((0, 1, 2),))
+
+    def test_a_face_counts_its_corners_for_its_colours(self):
+        # 2 triangles, then 2 fans of 3 and 4 (one carrying the flag that isn't part of its size)
+        self.assertEqual(prc._corners_in(0x2 | 0x4, [2, 2, 3, 4 | prc._NORMAL_SINGLE]), 13)
+
+    def test_group_sizes_that_run_short_say_so(self):
+        with self.assertRaises(PrcError):
+            prc._corners_in(0x2 | 0x4, [2])
+
+
+class InstancesOfAPart(unittest.TestCase):
+    SQUARE = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], float)
+    TRIS = np.array([[0, 1, 2], [0, 2, 3]])
+
+    def piece(self, matrix, source=1, planar=(True,)):
+        pts = self.SQUARE @ matrix[:3, :3].T + matrix[:3, 3]
+        return ("p", pts, self.TRIS, np.zeros(2, np.int64), None, list(planar), None, (source, matrix))
+
+    def test_later_instances_match_working_them_out_afresh(self):
+        turn = move(x=10)
+        turn[:3, :3] = [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
+        shared = meshio.from_faces("x", "x", "t", [self.piece(np.eye(4)), self.piece(turn)])
+        alone = meshio.from_faces("x", "x", "t", [self.piece(turn, source=2)])
+        self.assertEqual(shared.edge_type[len(alone.edge_type):], alone.edge_type)
+        for a, b in zip(shared.edge_params[len(alone.edge_params):], alone.edge_params):
+            for k in ("start", "end"):
+                np.testing.assert_allclose(a[k], b[k], atol=1e-9)
+        np.testing.assert_allclose(shared.positions[4:], alone.positions, atol=1e-5)
+
+    def test_a_mirrored_or_scaled_instance_is_worked_out_afresh(self):
+        mirror = np.diag([-1.0, 1.0, 1.0, 1.0])
+        m = meshio.from_faces("x", "x", "t", [self.piece(np.eye(4)), self.piece(mirror)])
+        self.assertEqual(len(m.bodies), 2)
+        self.assertIsNone(meshio._rigid_between(np.eye(4), mirror))
+        self.assertIsNone(meshio._rigid_between(np.eye(4), np.diag([2.0, 2.0, 2.0, 1.0])))
+        self.assertIsNotNone(meshio._rigid_between(np.eye(4), move(x=3)))
+
+    def test_a_mirrored_part_keeps_facing_outward(self):
+        piece = prc.Piece(self.SQUARE, self.TRIS, np.zeros(2, np.int64), None, None, 0.0, {})
+        _n, pts, tris, *_rest = _placed_piece(prc.Placed(piece, np.diag([-1.0, 1.0, 1.0, 1.0]), "", None), 1.0, "d")
+        a, b, c = pts[tris[0]]
+        self.assertGreater(np.cross(b - a, c - a)[2], 0)  # as the unmirrored square faces
+
+    def test_units_scale_the_placed_points(self):
+        piece = prc.Piece(self.SQUARE, self.TRIS, np.zeros(2, np.int64), None, None, 0.0, {})
+        _n, pts, *_rest = _placed_piece(prc.Placed(piece, move(x=1), "", None), 25.4, "d")
+        np.testing.assert_allclose(pts[0], [25.4, 0, 0])
+
+
 @unittest.skipUnless(SCREW.is_file(), "the sample 3D PDF isn't on this PC")
 class RealScrew(unittest.TestCase):
     """Nothing here can pass by luck: one wrong rule and the bits don't come out even."""
@@ -154,6 +305,8 @@ class RealScrew(unittest.TestCase):
 
     def test_every_bit_of_the_mesh_is_used_up(self):
         self.assertEqual(self.piece.unread, {"normal_bits": 0, "angles": 0, "points": 0, "references": 0, "flags": 0})
+        self.assertIsNone(self.file.tree_problem)
+        self.assertEqual(len(self.file.placed), 1)
         self.assertEqual((len(self.piece.points), len(self.piece.triangles)), (14799, 29594))
 
     def test_it_comes_out_a_closed_consistently_wound_solid(self):

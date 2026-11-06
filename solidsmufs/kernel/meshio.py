@@ -458,31 +458,38 @@ def load(path, name, fmt, progress=lambda *a: None):
 
 def from_faces(path, name, fmt, pieces, slack=0.0):
     """A model from meshes that come with their own faces (a 3D PDF): pieces are (name, points (n, 3) in mm,
-    triangles (m, 3), face per triangle, corner normals (m, 3, 3) or None, planar flag per face or None).
-    `slack` is how far, in mm, the file's rounding may have moved a point: fits must allow for it."""
+    triangles (m, 3), face per triangle, corner normals (m, 3, 3) or None, planar flag per face or None, colour or None,
+    source or None). `slack` is how far, in mm, the file's rounding may have moved a point: fits must allow for it.
+    Instances of one part say so with the same source, (its id, its 4 x 4 matrix to mm), so it's only worked out once:
+    an assembly may hold thousands of the same screw."""
     m = MeshModel(name, path, fmt)
     pos, nrm, idx, segs = [], [], [], []
     vcount = tcount = scount = 0
-    for pname, pts, tris, faces, normals, planar in pieces:
-        face0, ends = len(m.face_type), []
-        order = np.argsort(faces, kind="stable")
-        ids, starts = np.unique(faces[order], return_index=True)
-        for fi, (fid, first) in enumerate(zip(ids, starts)):
-            last = starts[fi + 1] if fi + 1 < len(starts) else len(order)
-            sel = order[first:last]
-            used, inv = np.unique(tris[sel], return_inverse=True)
-            p, t = pts[used], inv.reshape(-1, 3)
+    known = {}  # a part's id: what's worked out for its first instance
+    for pname, pts, tris, faces, normals, planar, color, source in pieces:
+        face0 = len(m.face_type)
+        # how a part's later instance relates to its first: only a rigid move lets the findings carry over
+        work = move = None
+        if source and source[0] in known:
+            move = _rigid_between(known[source[0]][1], source[1])
+            if move is not None:
+                work = known[source[0]][0]
+        if work is None:
+            work = _work_out_faces(pts, tris, faces, planar, slack)
+            if source and source[0] not in known:
+                known[source[0]] = (work, source[1])
+        for sel, used, t, typ, params in work["faces"]:
+            p = pts[used]
             if normals is None:
                 n = vertex_normals(p, t)
             else:  # what's stored, averaged where a vertex has several in the one face
                 n = np.zeros_like(p)
                 np.add.at(n, t.reshape(-1), normals[sel].reshape(-1, 3))
                 n = unit_rows(n)
-            if planar is not None and planar[int(fid)]:
-                c = p.mean(axis=0)
-                typ, params = "plane", {"origin": c, "normal": unit(n.mean(axis=0))}
-            else:
-                typ, params = _classify(p, t, slack)
+            if typ == "planar":  # the file says so; its normal is the stored one
+                typ, params = "plane", {"origin": p.mean(axis=0), "normal": unit(n.mean(axis=0))}
+            elif move is not None:
+                params = _moved(params, move)
             m.face_type.append(typ)
             m.face_params.append(params)
             m.face_color.append(None)
@@ -496,44 +503,21 @@ def from_faces(path, name, fmt, pieces, slack=0.0):
             idx.append(t + vcount)
             vcount += len(p)
             tcount += len(t)
-        # an edge wherever two faces meet, or a face ends
-        region = np.searchsorted(ids, faces)
-        e = np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
-        of = np.tile(np.arange(len(tris)), 3)
-        k = np.sort(e, axis=1)
-        keep = k[:, 0] != k[:, 1]
-        k, of = k[keep], of[keep]
-        by_edge = {}
-        for key, tri in zip(map(tuple, k.tolist()), of.tolist()):
-            by_edge.setdefault(key, []).append(int(region[tri]))
-        pairs = {}
-        for key, regs in by_edge.items():
-            here = sorted(set(regs))
-            if len(here) == 1 and len(regs) == 1:
-                pairs.setdefault((here[0], -1), []).append(key)
-            elif len(here) > 1:
-                pairs.setdefault((here[0], here[1]), []).append(key)
-        for (ra, rb), es in pairs.items():
-            for chain in _chains(es):
-                s = pts[np.stack([chain[:-1], chain[1:]], axis=1)]
-                typ, params = _edge_classify(pts[chain], slack)
-                m.edge_type.append(typ)
-                m.edge_params.append(params)
-                m.edge_length.append(float(np.linalg.norm(s[:, 1] - s[:, 0], axis=1).sum()))
-                m.edge_faces.append([face0 + ra] + ([face0 + rb] if rb >= 0 else []))
-                m.edge_seam.append(False)
-                m.edge_sstart.append(scount)
-                m.edge_scount.append(len(s))
-                segs.append(s)
-                scount += len(s)
-                if chain[0] != chain[-1]:
-                    ends += [chain[0], chain[-1]]
-        m.bodies.append({"name": pname, "path": [], "kind": "mesh", "color": None,
-                         "faces": [face0, len(m.face_type) - face0],
-                         "closed": not any(rb < 0 for _ra, rb in pairs)})
-        if ends:
-            uniq, cnt = np.unique(np.array(ends), return_counts=True)
-            m.vertices = np.concatenate([m.vertices, pts[uniq[cnt >= 2]]])
+        for ra, rb, chain, typ, params in work["edges"]:
+            s = pts[np.stack([chain[:-1], chain[1:]], axis=1)]
+            m.edge_type.append(typ)
+            m.edge_params.append(_moved(params, move) if move is not None else params)
+            m.edge_length.append(float(np.linalg.norm(s[:, 1] - s[:, 0], axis=1).sum()))
+            m.edge_faces.append([face0 + ra] + ([face0 + rb] if rb >= 0 else []))
+            m.edge_seam.append(False)
+            m.edge_sstart.append(scount)
+            m.edge_scount.append(len(s))
+            segs.append(s)
+            scount += len(s)
+        m.bodies.append({"name": pname, "path": [], "kind": "mesh", "color": color,
+                         "faces": [face0, len(work["faces"])], "closed": work["closed"]})
+        if len(work["corners"]):
+            m.vertices = np.concatenate([m.vertices, pts[work["corners"]]])
     if not pos:
         raise ValueError("No triangles in this file.")
     m.positions = np.concatenate(pos).astype(np.float32)
@@ -541,6 +525,81 @@ def from_faces(path, name, fmt, pieces, slack=0.0):
     m.indices = np.concatenate(idx).astype(np.uint32)
     m.segments = np.concatenate(segs).astype(np.float32) if segs else m.segments
     return m
+
+
+def _work_out_faces(pts, tris, faces, planar, slack):
+    """Which triangles make each face and what it is, and where the edges run: all independent of where the part sits."""
+    order = np.argsort(faces, kind="stable")
+    ids, starts = np.unique(faces[order], return_index=True)
+    out = {"faces": [], "edges": [], "corners": np.zeros(0, np.int64), "closed": True}
+    for fi, (fid, first) in enumerate(zip(ids, starts)):
+        last = starts[fi + 1] if fi + 1 < len(starts) else len(order)
+        sel = order[first:last]
+        used, inv = np.unique(tris[sel], return_inverse=True)
+        t = inv.reshape(-1, 3)
+        if planar is not None and planar[int(fid)]:
+            typ, params = "planar", None
+        else:
+            typ, params = _classify(pts[used], t, slack)
+        out["faces"].append((sel, used, t, typ, params))
+    region = np.searchsorted(ids, faces)
+    e = np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
+    of = np.tile(np.arange(len(tris)), 3)
+    k = np.sort(e, axis=1)
+    keep = k[:, 0] != k[:, 1]
+    k, of = k[keep], of[keep]
+    by_edge = {}
+    for key, tri in zip(map(tuple, k.tolist()), of.tolist()):
+        by_edge.setdefault(key, []).append(int(region[tri]))
+    pairs = {}
+    for key, regs in by_edge.items():
+        here = sorted(set(regs))
+        if len(here) == 1 and len(regs) == 1:
+            pairs.setdefault((here[0], -1), []).append(key)
+        elif len(here) > 1:
+            pairs.setdefault((here[0], here[1]), []).append(key)
+    ends = []
+    for (ra, rb), es in pairs.items():
+        out["closed"] = out["closed"] and rb >= 0
+        for chain in _chains(es):
+            typ, params = _edge_classify(pts[chain], slack)
+            out["edges"].append((ra, rb, chain, typ, params))
+            if chain[0] != chain[-1]:
+                ends += [chain[0], chain[-1]]
+    if ends:
+        uniq, cnt = np.unique(np.array(ends), return_counts=True)
+        out["corners"] = uniq[cnt >= 2]
+    return out
+
+
+def _rigid_between(first, second):
+    """The move from one placement to another, if it's only a turn and a slide (no mirror or scale); else None."""
+    try:
+        move = np.asarray(second) @ np.linalg.inv(np.asarray(first))
+    except np.linalg.LinAlgError:
+        return None
+    r = move[:3, :3]
+    if not np.allclose(r @ r.T, np.eye(3), atol=1e-6) or np.linalg.det(r) < 0:
+        return None
+    return move
+
+
+_PARAM_POINTS = ("origin", "center", "start", "end")
+_PARAM_VECTORS = ("normal", "axis", "dir")
+
+
+def _moved(params, move):
+    """A fitted plane, cylinder, line or circle after a rigid move."""
+    if params is None:
+        return None
+    out = dict(params)
+    for key in _PARAM_POINTS:
+        if key in out:
+            out[key] = move[:3, :3] @ np.asarray(out[key]) + move[:3, 3]
+    for key in _PARAM_VECTORS:
+        if key in out:
+            out[key] = move[:3, :3] @ np.asarray(out[key])
+    return out
 
 
 def _segment(pts, tris):

@@ -8,4 +8,5 @@ PARASOLID_FORMATS = {".sldprt": "SolidWorks part", ".x_t": "Parasolid", ".xmt_tx
 ASSEMBLY_FORMATS = {".sldasm": "SolidWorks assembly"}
 MESH_FORMATS = {".stl": "STL", ".obj": "OBJ", ".ply": "PLY", ".off": "OFF", ".3mf": "3MF", ".glb": "glTF", ".gltf": "glTF"}
 PDF_FORMATS = {".pdf": "PDF"}
-ALL_FORMATS = {**CAD_FORMATS, **PARASOLID_FORMATS, **ASSEMBLY_FORMATS, **MESH_FORMATS, **PDF_FORMATS}
+PRC_FORMATS = {".prc": "PRC"}  # the model format inside most 3D PDFs, on its own
+ALL_FORMATS = {**CAD_FORMATS, **PARASOLID_FORMATS, **ASSEMBLY_FORMATS, **MESH_FORMATS, **PDF_FORMATS, **PRC_FORMATS}
