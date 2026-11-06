@@ -90,7 +90,7 @@ export class PdfView {
     this.pageOf.textContent = `/ ${this.pagesInfo.length}`;
     const models = doc.meta.pdf.models || [];
     this.chip.hidden = !models.length;
-    this.chip.textContent = models.length ? `Holds a 3D model (${models.join(', ')})` : '';
+    this.chip.textContent = models.length ? `3D model inside (${models.join(', ')}): can't be shown yet` : '';
     this.side.hidden = !this.state.side;
     this._buildPages();
     this._resized();
