@@ -39,13 +39,52 @@ class Session:
         from .model import Model
         from .pdfdoc import PdfFile, models_inside
         progress("Reading the PDF", 0.3)
+        if self.pdf is not None:
+            self.pdf.close()
         self.pdf = PdfFile(path)
-        self.model = Model(Path(path).name, path, "PDF")
-        self.model.kind = "pdf"
+        models, problem = models_inside(path), None
+        self.model = None
+        if "PRC" in models:
+            progress("Reading the 3D model", 0.5)
+            try:
+                self.model = self._pdf_model(path)
+            except ValueError as e:  # the pages can still be shown (PrcError is a ValueError)
+                problem = str(e)
+        if self.model is None:
+            self.model = Model(Path(path).name, path, "PDF")
+            self.model.kind = "pdf"
+        elif self.orient is not None:
+            _turn_mesh(self.model, self.orient)
         self.exact = True
         meta, blob = self.model.payload()
-        meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": models_inside(path)}
-        return meta, blob
+        meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": models, "problem": problem}
+        meta["orient"] = None if self.orient is None else self.orient.tolist()
+        return jsonable(meta), blob
+
+    def _pdf_model(self, path):
+        """The mesh model from the PRC models in a PDF, in mm. Its points are as accurate as the file rounded them."""
+        from ..formats import prc
+        from . import meshio
+        files = prc.read_pdf(path)
+        stem, pieces, warnings, tolerance = Path(path).stem, [], [], 0.0
+        total = sum(len(f.pieces) for f in files)
+        for f in files:
+            warnings += f.warnings
+            for p in f.pieces:
+                name = (f.name or stem) if total == 1 else f"{f.name or stem} ({len(pieces) + 1})"
+                pieces.append((name, p.points * f.unit_mm, p.triangles, p.faces, p.normals, p.planar))
+                tolerance = max(tolerance, p.tolerance * f.unit_mm)
+        if not pieces:
+            raise ValueError(" ".join(warnings) or "This PDF's 3D model holds nothing that can be shown yet.")
+        # three axes, each rounded to the nearest tolerance: half of it, on the diagonal
+        slack = tolerance * 0.87
+        m = meshio.from_faces(path, Path(path).name, "3D PDF (PRC)", pieces, slack=slack)
+        m.info["Accuracy"] = f"\u00b1{slack:.3f} mm (the 3D PDF's rounding)"
+        m.warnings += warnings
+        if total > 1:  # placing them needs the file's assembly tree, which isn't read yet
+            m.notices.append(f"This 3D PDF has {total} pieces. Each is shown where it was modelled, "
+                             "which may not be its place in the assembly.")
+        return m
 
     def pdf_tile(self, **kw):
         return self.pdf.tile(**kw)
@@ -121,6 +160,7 @@ class Session:
         ext = Path(path).suffix.lower()
         name = Path(path).name
         if ext in PDF_FORMATS:
+            self.path, self.quality = path, quality
             return self._open_pdf(path, progress)
         if ext not in ALL_FORMATS:
             raise ValueError(f"Can't open {ext or 'this kind of'} files.")
@@ -915,6 +955,8 @@ def main(conn):
             else:
                 if s.model is None:
                     raise ValueError("Nothing is loaded.")
+                if s.model.kind == "pdf" and not cmd.startswith("pdf_"):
+                    raise ValueError("This PDF has no 3D model to work on.")
                 if cmd in EXACT_CMDS and not s.exact:
                     s.ensure_exact(progress=progress)
                 result = fn(**kw)

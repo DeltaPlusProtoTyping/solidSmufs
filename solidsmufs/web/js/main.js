@@ -30,7 +30,7 @@ class App {
     this.prefs = { ...DEFAULTS };
     this.units = new Units('MMGS');
     this.viewer = new Viewer(this.$('viewport'));
-    this.pdf = new PdfView(this.$('viewport'));
+    this.pdf = new PdfView(this.$('viewport'), (mode) => this.setPdfMode(mode));
     this.viewer.formatLength = (mm) => this.units.len(mm); // labels drawn in the graphics area use the document units
     this.docs = [];
     this.active = null;
@@ -136,10 +136,10 @@ class App {
   }
 
   // ================================================================== documents
-  // the model on show: a PDF with no model behind it has none, so the part tools stay out of its way
+  // the model on show: a PDF's pages aren't one, so the part tools stay out of their way
   get meta() {
     const m = this.active?.meta;
-    return m && !(m.pdf && !m.bodies.length) ? m : null;
+    return m && !(m.pdf && this.active.pdfMode === 'pages') ? m : null;
   }
   get isAssembly() { return !!this.meta && this.meta.bodies.some((b) => (b.path || []).length > 1); }
 
@@ -225,7 +225,7 @@ class App {
   }
 
   activate(doc) {
-    if (this.active && this.active !== doc && this.active.meta && !this.active.meta.pdf) this.active.view = this.viewer.rig.state();
+    if (this.active && this.active !== doc && this.active.meta?.bodies.length) this.active.view = this.viewer.rig.state();
     this.active = doc;
     this.tools.closeDocDialogs();
     this.pages.close(false);
@@ -244,15 +244,18 @@ class App {
     this.sel = [];
     this.viewer.setSection(null);
     this.viewer.setAnalysis(null);
-    this.$('workspace').classList.toggle('pdf-doc', !!doc.meta.pdf);
+    const hasModel = doc.meta.bodies.length > 0;
+    if (hasModel) this.viewer.setModel(doc.meta, doc.blob);
+    else this.viewer.clear();
     if (doc.meta.pdf) {
-      this.viewer.clear();
+      doc.pdfMode ||= hasModel ? 'model' : 'pages'; // a 3D PDF opens on its model, one click from its pages
       this.pdf.open(doc);
+      this.$('workspace').classList.toggle('pdf-doc', doc.pdfMode === 'pages');
     } else {
       this.pdf.close();
-      this.viewer.setModel(doc.meta, doc.blob);
+      this.$('workspace').classList.remove('pdf-doc');
     }
-    if (doc.view && !doc.meta.pdf) {
+    if (doc.view && hasModel) {
       this.viewer.rig.quat.copy(doc.view.quat);
       this.viewer.rig.target.copy(doc.view.target);
       this.viewer.rig.height = doc.view.height;
@@ -261,6 +264,20 @@ class App {
     document.title = `${doc.name} - ${PRODUCT}`;
     api.title(document.title);
     this.refreshAll();
+  }
+
+  // a 3D PDF's two sides: its model, and its pages
+  setPdfMode(mode) {
+    const doc = this.active;
+    if (!doc?.meta?.pdf || doc.pdfMode === mode) return;
+    doc.pdfMode = mode;
+    this.setSelection([]);
+    this.tools.closeDocDialogs();
+    this.pages.close(false);
+    this.$('workspace').classList.toggle('pdf-doc', mode === 'pages');
+    this.pdf.setMode(mode);
+    this.refreshAll();
+    requestAnimationFrame(() => this.viewer.requestRender());
   }
 
   async closeDoc(doc) {

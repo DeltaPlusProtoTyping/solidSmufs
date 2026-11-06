@@ -456,6 +456,93 @@ def load(path, name, fmt, progress=lambda *a: None):
     return m
 
 
+def from_faces(path, name, fmt, pieces, slack=0.0):
+    """A model from meshes that come with their own faces (a 3D PDF): pieces are (name, points (n, 3) in mm,
+    triangles (m, 3), face per triangle, corner normals (m, 3, 3) or None, planar flag per face or None).
+    `slack` is how far, in mm, the file's rounding may have moved a point: fits must allow for it."""
+    m = MeshModel(name, path, fmt)
+    pos, nrm, idx, segs = [], [], [], []
+    vcount = tcount = scount = 0
+    for pname, pts, tris, faces, normals, planar in pieces:
+        face0, ends = len(m.face_type), []
+        order = np.argsort(faces, kind="stable")
+        ids, starts = np.unique(faces[order], return_index=True)
+        for fi, (fid, first) in enumerate(zip(ids, starts)):
+            last = starts[fi + 1] if fi + 1 < len(starts) else len(order)
+            sel = order[first:last]
+            used, inv = np.unique(tris[sel], return_inverse=True)
+            p, t = pts[used], inv.reshape(-1, 3)
+            if normals is None:
+                n = vertex_normals(p, t)
+            else:  # what's stored, averaged where a vertex has several in the one face
+                n = np.zeros_like(p)
+                np.add.at(n, t.reshape(-1), normals[sel].reshape(-1, 3))
+                n = unit_rows(n)
+            if planar is not None and planar[int(fid)]:
+                c = p.mean(axis=0)
+                typ, params = "plane", {"origin": c, "normal": unit(n.mean(axis=0))}
+            else:
+                typ, params = _classify(p, t, slack)
+            m.face_type.append(typ)
+            m.face_params.append(params)
+            m.face_color.append(None)
+            m.face_body.append(len(m.bodies))
+            m.face_vstart.append(vcount)
+            m.face_vcount.append(len(p))
+            m.face_tstart.append(tcount)
+            m.face_tcount.append(len(t))
+            pos.append(p)
+            nrm.append(n)
+            idx.append(t + vcount)
+            vcount += len(p)
+            tcount += len(t)
+        # an edge wherever two faces meet, or a face ends
+        region = np.searchsorted(ids, faces)
+        e = np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
+        of = np.tile(np.arange(len(tris)), 3)
+        k = np.sort(e, axis=1)
+        keep = k[:, 0] != k[:, 1]
+        k, of = k[keep], of[keep]
+        by_edge = {}
+        for key, tri in zip(map(tuple, k.tolist()), of.tolist()):
+            by_edge.setdefault(key, []).append(int(region[tri]))
+        pairs = {}
+        for key, regs in by_edge.items():
+            here = sorted(set(regs))
+            if len(here) == 1 and len(regs) == 1:
+                pairs.setdefault((here[0], -1), []).append(key)
+            elif len(here) > 1:
+                pairs.setdefault((here[0], here[1]), []).append(key)
+        for (ra, rb), es in pairs.items():
+            for chain in _chains(es):
+                s = pts[np.stack([chain[:-1], chain[1:]], axis=1)]
+                typ, params = _edge_classify(pts[chain], slack)
+                m.edge_type.append(typ)
+                m.edge_params.append(params)
+                m.edge_length.append(float(np.linalg.norm(s[:, 1] - s[:, 0], axis=1).sum()))
+                m.edge_faces.append([face0 + ra] + ([face0 + rb] if rb >= 0 else []))
+                m.edge_seam.append(False)
+                m.edge_sstart.append(scount)
+                m.edge_scount.append(len(s))
+                segs.append(s)
+                scount += len(s)
+                if chain[0] != chain[-1]:
+                    ends += [chain[0], chain[-1]]
+        m.bodies.append({"name": pname, "path": [], "kind": "mesh", "color": None,
+                         "faces": [face0, len(m.face_type) - face0],
+                         "closed": not any(rb < 0 for _ra, rb in pairs)})
+        if ends:
+            uniq, cnt = np.unique(np.array(ends), return_counts=True)
+            m.vertices = np.concatenate([m.vertices, pts[uniq[cnt >= 2]]])
+    if not pos:
+        raise ValueError("No triangles in this file.")
+    m.positions = np.concatenate(pos).astype(np.float32)
+    m.normals = np.concatenate(nrm).astype(np.float32)
+    m.indices = np.concatenate(idx).astype(np.uint32)
+    m.segments = np.concatenate(segs).astype(np.float32) if segs else m.segments
+    return m
+
+
 def _segment(pts, tris):
     """Split triangles into smooth regions. Returns (region per triangle, welded triangles,
     welded points, {(region a, region b or -1): [edges as welded point pairs]}, closed?)."""
@@ -543,8 +630,8 @@ def _chains(edges):
     return out
 
 
-def _classify(p, t):
-    """Is this region flat? Report it as a plane (with its normal) if so."""
+def _classify(p, t, slack=0.0):
+    """Is this region flat? Report it as a plane (with its normal) if so. Points may be `slack` off true."""
     if len(p) < 3:
         return "mesh", None
     c = p.mean(axis=0)
@@ -552,18 +639,18 @@ def _classify(p, t):
     n = vt[2]
     dev = np.abs((p - c) @ n).max()
     size = float(np.linalg.norm(np.ptp(p, axis=0))) or 1.0
-    if dev <= max(1e-4 * size, 1e-6):
+    if dev <= max(1e-4 * size, 1e-6, slack):
         a, b, cc = p[t[:, 0]], p[t[:, 1]], p[t[:, 2]]
         if float(np.cross(b - a, cc - a).sum(axis=0) @ n) < 0:
             n = -n
         return "plane", {"origin": c, "normal": unit(n)}
-    cyl = _fit_cylinder(p, size)
+    cyl = _fit_cylinder(p, size, slack)
     if cyl is not None:
         return "cylinder", cyl
     return "mesh", None
 
 
-def _fit_cylinder(p, size):
+def _fit_cylinder(p, size, slack=0.0):
     """A cylinder through the points, if they make one: axis from the point spread's least-curved
     direction, circle fit across it."""
     if len(p) < 8:
@@ -578,7 +665,7 @@ def _fit_cylinder(p, size):
         if fit is None:
             continue
         (cx, cy), r, err = fit
-        if r > 0 and err < max(2e-3 * r, 1e-5 * size) and r < size * 10:
+        if r > 0 and err < max(2e-3 * r, 1e-5 * size, slack) and r < size * 10:
             centre = c + cx * x + cy * y
             return {"center": centre, "axis": unit(axis), "radius": float(r)}
     return None
@@ -600,7 +687,7 @@ def _fit_circle_2d(q):
     return (cx, cy), r, err
 
 
-def _edge_classify(pts):
+def _edge_classify(pts, slack=0.0):
     """A crease polyline: a straight line, a circle / arc (fitted), or just a polyline."""
     a, b = pts[0], pts[-1]
     size = float(np.linalg.norm(np.ptp(pts, axis=0))) or 1.0
@@ -608,19 +695,19 @@ def _edge_classify(pts):
     d = b - a
     if not closed and float(np.linalg.norm(d)) > 0:
         off = np.linalg.norm(np.cross(pts - a, unit(d)), axis=1).max()
-        if off < 1e-5 * size:
+        if off < max(1e-5 * size, slack):
             return "line", {"start": a, "end": b, "dir": unit(d)}
     if len(pts) >= 6:
         c = pts.mean(axis=0)
         _, _, vt = np.linalg.svd(pts - c, full_matrices=False)
         n = vt[2]
-        if np.abs((pts - c) @ n).max() < 2e-3 * size:
+        if np.abs((pts - c) @ n).max() < max(2e-3 * size, slack):
             x = vt[0]
             y = np.cross(n, x)
             fit = _fit_circle_2d(np.stack([(pts - c) @ x, (pts - c) @ y], axis=1))
             if fit is not None:
                 (cx, cy), r, err = fit
-                if err < max(2e-3 * r, 1e-6 * size):
+                if err < max(2e-3 * r, 1e-6 * size, slack):
                     centre = c + cx * x + cy * y
                     seg = np.linalg.norm(pts[1:] - pts[:-1], axis=1).sum()
                     ang = 360.0 if closed else math.degrees(seg / r)

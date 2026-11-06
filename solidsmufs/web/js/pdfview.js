@@ -13,8 +13,9 @@ const POINT = 96 / 72; // css px per point at 100%
 const clamp = (x, a, b) => Math.min(Math.max(x, a), b);
 
 export class PdfView {
-  constructor(host) {
+  constructor(host, onMode) {
     this.host = host;
+    this.onMode = onMode;
     this.doc = null;
     this.run = 0; // bumps when the view is rebuilt: answers for an older one are dropped
     this.el = h('div', { class: 'pdfview', hidden: true });
@@ -25,11 +26,16 @@ export class PdfView {
     this.scroller.append(this.sheet);
     this.el.append(this.bar, h('div', { class: 'pv-body' }, this.side, this.scroller));
     host.append(this.el);
+    // a 3D PDF's switch between its model and its pages
+    this.toModel = h('button', { class: 'pv-sw', text: '3D model', onclick: () => this.onMode('model') });
+    this.toPages = h('button', { class: 'pv-sw', text: 'Pages', onclick: () => this.onMode('pages') });
+    this.modeSwitch = h('div', { class: 'pv-switch', hidden: true }, this.toModel, this.toPages);
+    host.append(this.modeSwitch);
     this._buildBar();
     this.scroller.addEventListener('scroll', () => { this._schedule(); this._pageNumber(); });
     this.scroller.addEventListener('wheel', (e) => this._wheel(e), { passive: false });
     this.scroller.addEventListener('pointerdown', (e) => this._down(e));
-    new ResizeObserver(() => { if (this.doc) this._resized(); }).observe(this.scroller);
+    new ResizeObserver(() => { if (this.doc && !this.el.hidden) this._resized(); }).observe(this.scroller);
     document.addEventListener('keydown', (e) => this._key(e), true);
     document.addEventListener('copy', (e) => {
       if (this.doc && this.selection?.text) {
@@ -86,13 +92,25 @@ export class PdfView {
     this.run++;
     this.pagesInfo = doc.meta.pdf.pages;
     this.state = doc.pdfState ||= { zoom: 1, fit: this.pagesInfo.length > 1 ? 'width' : 'page', turns: 0, top: 0, side: this.pagesInfo.length > 1 };
-    this.el.hidden = false;
     this.pageOf.textContent = `/ ${this.pagesInfo.length}`;
-    const models = doc.meta.pdf.models || [];
-    this.chip.hidden = !models.length;
-    this.chip.textContent = models.length ? `3D model inside (${models.join(', ')}): can't be shown yet` : '';
+    const models = doc.meta.pdf.models || [], hasModel = doc.meta.bodies.length > 0;
+    this.chip.hidden = !models.length || hasModel;
+    this.chip.title = doc.meta.pdf.problem || '';
+    this.chip.textContent = `3D model inside (${models.join(', ')}): can't be shown yet`;
+    this.modeSwitch.hidden = !hasModel;
     this.side.hidden = !this.state.side;
     this._buildPages();
+    this.setMode(doc.pdfMode);
+  }
+
+  // show the pages, or step aside for the 3D view beneath
+  setMode(mode) {
+    const pages = mode === 'pages';
+    if (!pages && !this.el.hidden && this.state) this.state.top = this.scroller.scrollTop;
+    this.toModel.classList.toggle('on', !pages);
+    this.toPages.classList.toggle('on', pages);
+    this.el.hidden = !pages;
+    if (!pages) return;
     this._resized();
     this.scroller.scrollTop = this.state.top;
     if (this.state.side) this._thumbs();
@@ -100,10 +118,11 @@ export class PdfView {
   }
 
   close() {
-    if (this.doc?.pdfState) this.doc.pdfState.top = this.scroller.scrollTop;
+    if (this.doc?.pdfState && !this.el.hidden) this.doc.pdfState.top = this.scroller.scrollTop;
     this.doc = null;
     this.run++;
     this.el.hidden = true;
+    this.modeSwitch.hidden = true;
     this.sheet.replaceChildren();
     this.side.replaceChildren();
     this.pages = [];
@@ -255,7 +274,7 @@ export class PdfView {
   // ================================================================== drawing
   _schedule(delay = 0) {
     clearTimeout(this._timer);
-    this._timer = setTimeout(() => { if (this.doc) this._wanted(); }, delay);
+    this._timer = setTimeout(() => { if (this.doc && !this.el.hidden) this._wanted(); }, delay);
   }
 
   _visible() {
