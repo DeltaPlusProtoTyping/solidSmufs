@@ -124,7 +124,7 @@ def run(argv):
                 mesh = "*.stl *.obj *.ply *.off *.3mf *.glb *.gltf"
                 start = start_dir or settings.load()["ui"].get("lastDir") or str(Path.home())
                 path, _ = QFileDialog.getOpenFileName(window_ref.get("w"), "Open a part", start,
-                                                      f"3D models ({exts});;CAD ({cad});;Meshes ({mesh});;All files (*)")
+                                                      f"Parts and PDFs ({exts});;CAD ({cad});;Meshes ({mesh});;PDF (*.pdf);;All files (*)")
                 if path:
                     settings.set_ui({"lastDir": str(Path(path).parent)})
                 return path or None

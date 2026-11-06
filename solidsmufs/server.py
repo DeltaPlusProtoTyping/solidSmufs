@@ -287,6 +287,15 @@ class _Handler(BaseHTTPRequestHandler):
                        b["orient"] if "orient" in b else "keep")
             settings.set_ui({"quality": doc.quality})
             return self._json(doc.status())
+        if what == "pdf-tile":  # raw RGBA pixels of a piece of a page
+            return self._send(200, doc.request("pdf_tile", timeout=120, page=int(b["page"]), scale=float(b["scale"]),
+                                               x=int(b["x"]), y=int(b["y"]), w=int(b["w"]), h=int(b["h"]),
+                                               turns=int(b.get("turns", 0))), "application/octet-stream")
+        if what == "pdf-select":
+            return self._json(doc.request("pdf_select", timeout=60, page=int(b["page"]), ax=b["ax"], ay=b["ay"],
+                                          bx=b["bx"], by=b["by"]))
+        if what == "pdf-find":
+            return self._json(doc.request("pdf_find", timeout=120, query=str(b.get("query", ""))))
         if what == "facing":  # which way each Align Part pick faces, for its arrow
             return self._json(doc.request("facing", timeout=60, refs=b.get("refs", [])))
         if what == "align-preview":  # the turn Align would make, without making it

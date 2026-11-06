@@ -13,6 +13,7 @@ import { Pages } from './pages.js';
 import { Tools } from './tools.js';
 import { TaskPane } from './taskpane.js';
 import { ViewSelector } from './viewselector.js';
+import { PdfView } from './pdfview.js';
 import { PRODUCT, STYLES, SCENES, escapeHtml, clean, mergeSel } from './consts.js';
 
 const DEFAULTS = {
@@ -29,6 +30,7 @@ class App {
     this.prefs = { ...DEFAULTS };
     this.units = new Units('MMGS');
     this.viewer = new Viewer(this.$('viewport'));
+    this.pdf = new PdfView(this.$('viewport'));
     this.viewer.formatLength = (mm) => this.units.len(mm); // labels drawn in the graphics area use the document units
     this.docs = [];
     this.active = null;
@@ -134,12 +136,16 @@ class App {
   }
 
   // ================================================================== documents
-  get meta() { return this.active?.meta || null; }
+  // the model on show: a PDF with no model behind it has none, so the part tools stay out of its way
+  get meta() {
+    const m = this.active?.meta;
+    return m && !(m.pdf && !m.bodies.length) ? m : null;
+  }
   get isAssembly() { return !!this.meta && this.meta.bodies.some((b) => (b.path || []).length > 1); }
 
   async openDialog() {
     if (!this.native) {
-      const inp = h('input', { type: 'file', accept: '.step,.stp,.igs,.iges,.sldprt,.sldasm,.x_t,.x_b,.xmt_txt,.xmt_bin,.brep,.stl,.obj,.ply,.off,.3mf,.glb,.gltf' });
+      const inp = h('input', { type: 'file', accept: '.step,.stp,.igs,.iges,.sldprt,.sldasm,.x_t,.x_b,.xmt_txt,.xmt_bin,.brep,.stl,.obj,.ply,.off,.3mf,.glb,.gltf,.pdf' });
       inp.addEventListener('change', () => { if (inp.files[0]) this.upload(inp.files[0]); });
       inp.click();
       return;
@@ -219,12 +225,14 @@ class App {
   }
 
   activate(doc) {
-    if (this.active && this.active !== doc && this.active.meta) this.active.view = this.viewer.rig.state();
+    if (this.active && this.active !== doc && this.active.meta && !this.active.meta.pdf) this.active.view = this.viewer.rig.state();
     this.active = doc;
     this.tools.closeDocDialogs();
     this.pages.close(false);
     if (doc.meta) this.show(doc);
     else {
+      this.$('workspace').classList.remove('pdf-doc');
+      this.pdf.close();
       this.viewer.clear();
       this.sel = [];
       this.refreshAll();
@@ -236,8 +244,15 @@ class App {
     this.sel = [];
     this.viewer.setSection(null);
     this.viewer.setAnalysis(null);
-    this.viewer.setModel(doc.meta, doc.blob);
-    if (doc.view) {
+    this.$('workspace').classList.toggle('pdf-doc', !!doc.meta.pdf);
+    if (doc.meta.pdf) {
+      this.viewer.clear();
+      this.pdf.open(doc);
+    } else {
+      this.pdf.close();
+      this.viewer.setModel(doc.meta, doc.blob);
+    }
+    if (doc.view && !doc.meta.pdf) {
       this.viewer.rig.quat.copy(doc.view.quat);
       this.viewer.rig.target.copy(doc.view.target);
       this.viewer.rig.height = doc.view.height;
@@ -258,6 +273,8 @@ class App {
       if (next) this.activate(next);
       else {
         this.active = null;
+        this.$('workspace').classList.remove('pdf-doc');
+        this.pdf.close();
         this.viewer.clear();
         this.sel = [];
         this.tools.closeDocDialogs();

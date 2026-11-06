@@ -20,7 +20,7 @@ import numpy as np
 
 from . import looks, massprops, measure
 from .geom import unit
-from .formats import ALL_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, MESH_FORMATS, PARASOLID_FORMATS  # noqa: F401
+from .formats import ALL_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, MESH_FORMATS, PARASOLID_FORMATS, PDF_FORMATS  # noqa: F401
 from .model import jsonable
 
 
@@ -32,12 +32,38 @@ class Session:
         self.config = None  # SolidWorks part configuration shown (its Config-<n> id); None: the file's first
         self.orient = None  # 3x3 rotation the part is turned by (Align Part); None: as modelled
         self.post = None  # work to do after the answer has gone out (writing the cache)
+        self.pdf = None  # the PDF behind a .pdf document
+
+    # ------------------------------------------------------------------ PDF
+    def _open_pdf(self, path, progress):
+        from .model import Model
+        from .pdfdoc import PdfFile, models_inside
+        progress("Reading the PDF", 0.3)
+        self.pdf = PdfFile(path)
+        self.model = Model(Path(path).name, path, "PDF")
+        self.model.kind = "pdf"
+        self.exact = True
+        meta, blob = self.model.payload()
+        meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": models_inside(path)}
+        return meta, blob
+
+    def pdf_tile(self, **kw):
+        return self.pdf.tile(**kw)
+
+    def pdf_select(self, **kw):
+        return self.pdf.select(**kw)
+
+    def pdf_find(self, query):
+        return self.pdf.find(query)
 
     # ------------------------------------------------------------------ loading
     def open(self, path, quality="normal", progress=lambda *a: None, config=None, orient=None):
         """First look at a file: a cached tessellation when there is one (instant), else a full load.
         {"meta", "blob", "exact"}; when exact is False, ensure_exact() loads the real geometry."""
         self.path, self.quality, self.config, self.orient = path, quality, config, _rotation(orient)
+        if Path(path).suffix.lower() in PDF_FORMATS:
+            meta, blob = self._open_pdf(path, progress)
+            return {"meta": meta, "blob": blob, "exact": True}
         hit = _mesh_cache_read(path, quality, config, self.orient)
         if hit is not None:
             progress("Opening from cache", 0.5)
@@ -94,6 +120,8 @@ class Session:
             self.orient = _rotation(orient)
         ext = Path(path).suffix.lower()
         name = Path(path).name
+        if ext in PDF_FORMATS:
+            return self._open_pdf(path, progress)
         if ext not in ALL_FORMATS:
             raise ValueError(f"Can't open {ext or 'this kind of'} files.")
         self.path, self.quality = path, quality
