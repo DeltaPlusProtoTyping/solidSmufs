@@ -3,6 +3,10 @@
 __pycache__/
 *.pyc
 
+# PyInstaller output
+build/
+dist/
+
 # test and tool output
 *.out.step
 *.log
