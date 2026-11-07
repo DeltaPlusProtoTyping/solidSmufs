@@ -675,6 +675,24 @@ export class Viewer {
       tn[t * 3] = uy * vz - uz * vy; tn[t * 3 + 1] = uz * vx - ux * vz; tn[t * 3 + 2] = ux * vy - uy * vx;
       tc[t * 3] = (pos[i0] + pos[i1] + pos[i2]) / 3; tc[t * 3 + 1] = (pos[i0 + 1] + pos[i1 + 1] + pos[i2 + 1]) / 3; tc[t * 3 + 2] = (pos[i0 + 2] + pos[i1 + 2] + pos[i2 + 2]) / 3;
     }
+    // where points were rounded, a thin triangle can be tipped any way at all: it would seem to turn away on a flat face
+    const limit = meta.stats?.thin_limit_mm || 0;
+    if (limit) {
+      const thin = new Uint8Array(idx.length / 3);
+      const span = (p, q) => Math.hypot(pos[p] - pos[q], pos[p + 1] - pos[q + 1], pos[p + 2] - pos[q + 2]);
+      for (let t = 0; t < thin.length; t++) {
+        const i0 = idx[t * 3] * 3, i1 = idx[t * 3 + 1] * 3, i2 = idx[t * 3 + 2] * 3;
+        const longest = Math.max(span(i0, i1), span(i1, i2), span(i2, i0));
+        thin[t] = Math.hypot(tn[t * 3], tn[t * 3 + 1], tn[t * 3 + 2]) < limit * longest ? 1 : 0; // the cross product is twice the area
+      }
+      let kept = 0;
+      for (let e = 0; e < a.length; e++) {
+        if (thin[t1[e]] || thin[t2[e]]) continue;
+        a[kept] = a[e]; b[kept] = b[e]; t1[kept] = t1[e]; t2[kept] = t2[e]; bodyOf[kept] = bodyOf[e];
+        kept++;
+      }
+      a.length = b.length = t1.length = t2.length = bodyOf.length = kept;
+    }
     this.silData = { a: Int32Array.from(a), b: Int32Array.from(b), t1: Int32Array.from(t1), t2: Int32Array.from(t2), body: Int32Array.from(bodyOf), tn, tc };
     const mat = new LineMaterial({ color: 0x0b0d10, linewidth: 1.1, transparent: true, opacity: 0.92, clippingPlanes: this.clipPlanes });
     mat.resolution.set(this.width, this.height);

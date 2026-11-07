@@ -613,3 +613,9 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .pv-sel { position: absolute; background: rgba(40, 110, 240, .32); }
 .pv-hit { position: absolute; background: rgba(255, 196, 0, .42); }
 .pv-hit.now { background: rgba(255, 120, 0, .55); }
+
+/* asking for a protected PDF's password */
+.pdf-pass { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
+.pdf-pass p { margin: 0; overflow-wrap: anywhere; }
+.pdf-pass-wrong { color: var(--danger, #c0392b); font-weight: 500; }
+.pdf-pass-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }

@@ -26,6 +26,7 @@ export const api = {
   meta: (id) => call('GET', `/api/docs/${id}/meta`),
   mesh: (id) => call('GET', `/api/docs/${id}/mesh`, undefined, true),
   close: (id) => call('POST', `/api/docs/${id}/close`, {}),
+  unlock: (id, password) => call('POST', `/api/docs/${id}/unlock`, { password }),
   reload: (id, quality, config) => call('POST', `/api/docs/${id}/reload`, config === undefined ? { quality } : { quality, config }),
   align: (id, refs, targets) => call('POST', `/api/docs/${id}/align`, { refs, targets }),
   alignPreview: (id, refs, targets) => call('POST', `/api/docs/${id}/align-preview`, { refs, targets }),

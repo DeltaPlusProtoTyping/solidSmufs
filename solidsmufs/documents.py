@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from . import settings
+from .kernel.formats import PASSWORD_NEEDED, PASSWORD_WRONG
 
 log = logging.getLogger("solidsmufs")
 _ctx = mp.get_context("spawn")
@@ -49,6 +50,8 @@ class Document:
         self.meta, self.blob = None, None
         self.exact = False  # exact geometry loaded (a cached tessellation can show before it is)
         self.rev = 0  # bumps whenever meta / blob are replaced
+        self.password = None  # what the user gave to open a protected PDF
+        self.locked = None  # why a PDF is waiting for a password: PASSWORD_NEEDED or PASSWORD_WRONG
         self.opened = time.time()
         self._rids = itertools.count(1)
         self._pending = {}
@@ -62,7 +65,7 @@ class Document:
     def status(self):
         return {"id": self.id, "name": self.name, "path": self.path, "state": self.state, "stage": self.stage,
                 "fraction": round(self.fraction, 3), "error": self.error, "quality": self.quality,
-                "elapsed": round(time.time() - self.opened, 1), "exact": self.exact, "rev": self.rev}
+                "elapsed": round(time.time() - self.opened, 1), "exact": self.exact, "rev": self.rev, "locked": self.locked}
 
     def _publish(self, meta, blob):
         meta["id"] = self.id
@@ -74,7 +77,8 @@ class Document:
     def _load(self, cmd):
         try:
             if cmd == "load":  # first open: show a cached tessellation at once, then load the exact geometry
-                r = self.request("open", path=self.path, quality=self.quality, config=self.config, orient=self.orient)
+                r = self.request("open", path=self.path, quality=self.quality, config=self.config, orient=self.orient,
+                                 password=self.password)
                 log.info("[timing] %s tessellation ready (cached=%s)", self.name, not r["exact"])
                 self._publish(r["meta"], r["blob"])
                 self.exact = r["exact"]
@@ -95,7 +99,18 @@ class Document:
             self.state, self.error = "error", ("The geometry engine stopped while reading this file. "
                                                "It may be damaged, or use something OpenCASCADE can't handle.")
         except Exception as e:
-            self.state, self.error = "error", str(e)
+            if str(e) in (PASSWORD_NEEDED, PASSWORD_WRONG):
+                self.state, self.locked, self.stage = "password", str(e), "Waiting for the password"
+            else:
+                self.state, self.error = "error", str(e)
+
+    def unlock(self, password):
+        """Try again with the password the user gave."""
+        self.password = password
+        self.locked, self.error = None, None
+        self.state, self.stage, self.fraction = "loading", "Opening the PDF", 0.0
+        self.opened = time.time()
+        threading.Thread(target=self._load, args=("load",), daemon=True).start()
 
     def reload(self, quality, config="keep", orient="keep"):
         """Read the file again (at another tessellation quality, showing another configuration, or turned

@@ -20,7 +20,7 @@ import numpy as np
 
 from . import looks, massprops, measure
 from .geom import unit
-from .formats import ALL_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, MESH_FORMATS, PARASOLID_FORMATS, PDF_FORMATS, PRC_FORMATS  # noqa: F401
+from .formats import ALL_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, MESH_FORMATS, PARASOLID_FORMATS, PDF_FORMATS, PRC_FORMATS, U3D_FORMATS  # noqa: F401
 from .model import jsonable
 
 
@@ -65,6 +65,7 @@ class Session:
         self.orient = None  # 3x3 rotation the part is turned by (Align Part); None: as modelled
         self.post = None  # work to do after the answer has gone out (writing the cache)
         self.pdf = None  # the PDF behind a .pdf document
+        self.password = ""  # what opened it, kept here only for as long as it's open
 
     # ------------------------------------------------------------------ PDF
     def _open_pdf(self, path, progress):
@@ -73,11 +74,12 @@ class Session:
         progress("Reading the PDF", 0.3)
         if self.pdf is not None:
             self.pdf.close()
-        self.pdf = PdfFile(path)
+        self.pdf = PdfFile(path, self.password)
         models, problem = models_inside(path), None
+        private = bool(self.password)  # its model isn't to sit unprotected in the cache
         self.model = None
-        if "PRC" in models:
-            hit = _mesh_cache_read(path, "pdf", None, self.orient)
+        if models:
+            hit = None if private else _mesh_cache_read(path, "pdf", None, self.orient)
             if hit is not None:  # worked out on an earlier opening: only the pages are new
                 progress("Opening from cache", 0.5)
                 self.model, meta, blob = hit
@@ -100,22 +102,25 @@ class Session:
         meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": models, "problem": problem}
         meta["orient"] = None if self.orient is None else self.orient.tolist()
         meta = jsonable(meta)
-        if self.model.kind == "mesh":
+        if self.model.kind == "mesh" and not private:
             model, orient = self.model, self.orient
             self.post = lambda: _mesh_cache_write(path, "pdf", model, meta, blob, None, orient)
         return meta, blob
 
     def _pdf_model(self, path):
-        """The mesh model from the PRC models in a PDF, in mm."""
-        from ..formats import prc
-        return self._prc_model(path, prc.read_pdf(path), "3D PDF (PRC)")
+        """The mesh model from the 3D models in a PDF, in mm."""
+        from ..formats import prc, u3d
+        prcs, u3ds = prc.read_pdf(path, self.password), u3d.read_pdf(path, self.password)
+        kinds = " + ".join(k for k, found in (("PRC", prcs), ("U3D", u3ds)) if found) or "no readable model"
+        return self._prc_model(path, prcs + u3ds, f"3D PDF ({kinds})")
 
     def _prc_model(self, path, files, fmt):
-        """A mesh model from read PRC files. Each piece goes where the file's tree puts it, as many times as it does."""
+        """A mesh model from read PRC or U3D files. Each piece goes where the file's tree puts it, as many times as it does."""
         from . import meshio
-        stem, pieces, warnings, tolerance, lost = Path(path).stem, [], [], 0.0, False
+        stem, pieces, warnings, notices, tolerance, lost = Path(path).stem, [], [], [], 0.0, False
         for f in files:
             warnings += f.warnings
+            notices += [n for n in f.notices if n not in notices]
             placed = f.placed
             if not placed:  # the tree couldn't be followed, or names none of them: each where it was modelled
                 lost = lost or len(f.pieces) > 1
@@ -124,8 +129,7 @@ class Session:
                 pieces.append(_placed_piece(one, f.unit_mm, f.name or stem))
                 tolerance = max(tolerance, one.piece.tolerance * f.unit_mm)
         if not pieces:
-            raise ValueError(" ".join(warnings) or "This 3D model holds no triangles to show. "
-                             "(It may be exact geometry alone, which can't be shown yet.)")
+            raise ValueError(" ".join(warnings) or "This 3D model holds no surfaces to show. (It may be lines alone, such as a plot.)")
         if len(pieces) == 1:
             pieces[0] = (stem, *pieces[0][1:])
         # three axes, each rounded to the nearest tolerance: half of it, on the diagonal
@@ -134,6 +138,10 @@ class Session:
         if slack:
             m.info["Accuracy"] = f"\u00b1{slack:.3f} mm (the file's rounding)"
         m.warnings += warnings
+        m.notices += notices
+        thin = max((f.thin_limit * f.unit_mm for f in files), default=0.0)
+        if thin:
+            m.stats["thin_limit_mm"] = thin
         if lost:
             m.notices.append("This model's pieces couldn't be put in their assembly positions: each is shown where it was modelled.")
         return m
@@ -148,10 +156,12 @@ class Session:
         return self.pdf.find(query)
 
     # ------------------------------------------------------------------ loading
-    def open(self, path, quality="normal", progress=lambda *a: None, config=None, orient=None):
+    def open(self, path, quality="normal", progress=lambda *a: None, config=None, orient=None, password=None):
         """First look at a file: a cached tessellation when there is one (instant), else a full load.
         {"meta", "blob", "exact"}; when exact is False, ensure_exact() loads the real geometry."""
         self.path, self.quality, self.config, self.orient = path, quality, config, _rotation(orient)
+        if password is not None:
+            self.password = password
         if Path(path).suffix.lower() in PDF_FORMATS:
             meta, blob = self._open_pdf(path, progress)
             return {"meta": meta, "blob": blob, "exact": True}
@@ -218,10 +228,11 @@ class Session:
             raise ValueError(f"Can't open {ext or 'this kind of'} files.")
         self.path, self.quality = path, quality
         t0 = time.perf_counter()
-        if ext in PRC_FORMATS:
-            from ..formats import prc
+        if ext in PRC_FORMATS or ext in U3D_FORMATS:
+            from ..formats import prc, u3d
             progress("Reading the model", 0.3)
-            self.model = self._prc_model(path, [prc.read_prc(Path(path).read_bytes())], "PRC")
+            data = Path(path).read_bytes()
+            self.model = self._prc_model(path, [prc.read_prc(data) if ext in PRC_FORMATS else u3d.read_u3d(data)], ALL_FORMATS[ext])
             if self.orient is not None:
                 _turn_mesh(self.model, self.orient)
         elif ext in CAD_FORMATS:
@@ -246,7 +257,7 @@ class Session:
         if self.orient is not None:
             meta["notices"] = [*[n for n in meta.get("notices", []) if n != TURNED_NOTICE], TURNED_NOTICE]
         meta = jsonable(meta)
-        if self.model.kind == "brep" or ext in PRC_FORMATS:
+        if self.model.kind == "brep" or ext in PRC_FORMATS or ext in U3D_FORMATS:
             model, config, orient = self.model, self.config, self.orient
             self.post = lambda: _mesh_cache_write(path, quality, model, meta, blob, config, orient)
         return meta, blob
@@ -828,7 +839,8 @@ def _cache_paths(path, config=None):
 def _code_stamp():
     here = Path(__file__).resolve().parents[1]
     files = [*(here / "kernel").glob("*.py"), *(here / "formats").glob("*.py"),
-             *(here / "formats" / "parasolid").glob("*.py"), *(here / "formats" / "prc").glob("*.py")]
+             *(here / "formats" / "parasolid").glob("*.py"), *(here / "formats" / "prc").glob("*.py"),
+             *(here / "formats" / "u3d").glob("*.py")]
     return max((f.stat().st_mtime_ns for f in files), default=0)
 
 

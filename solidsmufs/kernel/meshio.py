@@ -602,9 +602,49 @@ def _moved(params, move):
     return out
 
 
-def _segment(pts, tris):
+def _thin_triangles(a, b, c, slack):
+    """Which triangles are so thin that rounding their points by `slack` could swing their normal any way at all. Where
+    that's most of a mesh it says more about the rounding than the triangles: then none are singled out."""
+    if slack <= 0:
+        return np.zeros(len(a), bool)
+    twice_area = np.linalg.norm(np.cross(b - a, c - a), axis=1)
+    longest = np.max([np.linalg.norm(b - a, axis=1), np.linalg.norm(c - b, axis=1), np.linalg.norm(a - c, axis=1)], axis=0)
+    thin = twice_area < 2 * slack * longest
+    return thin if thin.mean() < 0.5 else np.zeros(len(a), bool)
+
+
+def _trusted_normals(normals, thin, t1, t2):
+    """Normals to judge creases by. A thin triangle's own may be tipped by rounding, but it still says which side the
+    triangle is nearer: it takes the normal of the neighbour closest to it, so it never spans a crease itself. Only thin
+    neighbours yet: it waits for them. A patch of nothing but thin triangles has to go by its own."""
+    out = normals.copy()
+    across = {}
+    for x, y in zip(t1.tolist(), t2.tolist()):
+        if thin[x]:
+            across.setdefault(x, []).append(y)
+        if thin[y]:
+            across.setdefault(y, []).append(x)
+    waiting = np.nonzero(thin)[0].tolist()
+    settled = ~thin
+    while waiting:
+        reached = {}
+        for t in waiting:
+            sides = [other for other in across.get(t, ()) if settled[other]]
+            if sides:
+                reached[t] = out[max(sides, key=lambda other: float(normals[t] @ out[other]))]
+        if not reached:
+            reached[waiting[0]] = out[waiting[0]]
+        for t, normal in reached.items():
+            out[t] = normal
+            settled[t] = True
+        waiting = [t for t in waiting if t not in reached]
+    return out
+
+
+def _segment(pts, tris, slack=0.0):
     """Split triangles into smooth regions. Returns (region per triangle, welded triangles,
-    welded points, {(region a, region b or -1): [edges as welded point pairs]}, closed?)."""
+    welded points, {(region a, region b or -1): [edges as welded point pairs]}, closed?).
+    `slack` is how far the file's rounding may have moved a point: a triangle too thin to trust doesn't make a crease."""
     scale = float(np.ptp(pts, axis=0).max()) or 1.0
     key = np.round(pts / (scale * 1e-7)).astype(np.int64)
     _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
@@ -627,6 +667,9 @@ def _segment(pts, tris):
     multi[pair_i] = True
     multi[pair_i + 1] = True
     t1, t2 = tri_of[pair_i], tri_of[pair_i + 1]
+    thin = _thin_triangles(a, b, c, slack)
+    if thin.any():
+        fn = _trusted_normals(fn, thin, t1, t2)
     smooth = np.einsum("ij,ij->i", fn[t1], fn[t2]) > math.cos(math.radians(CREASE_DEG))
     parent = np.arange(nt)
     u, v = t1[smooth], t2[smooth]

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .formats import PASSWORD_NEEDED, PASSWORD_WRONG
+
 _qt_app = None
 
 
@@ -48,7 +50,7 @@ class PdfFile:
             time.sleep(0.002)
         err = self.doc.error()
         if err == QPdfDocument.Error.IncorrectPassword:
-            raise ValueError("This PDF is protected by a password.")
+            raise ValueError(PASSWORD_WRONG if password else PASSWORD_NEEDED)
         if err != QPdfDocument.Error.None_ or self.doc.pageCount() < 1:
             raise ValueError("This PDF can't be read (it may be damaged).")
         self.text = {}

@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { api } from './api.js';
 import { hydrate } from './icons.js';
 import { Units } from './units.js';
-import { h, toast, closeMenus } from './ui.js';
+import { h, toast, closeMenus, modal } from './ui.js';
 import { Viewer } from './viewer.js';
 import { Shell } from './shell.js';
 import { Manager } from './manager.js';
@@ -145,7 +145,7 @@ class App {
 
   async openDialog() {
     if (!this.native) {
-      const inp = h('input', { type: 'file', accept: '.step,.stp,.igs,.iges,.sldprt,.sldasm,.x_t,.x_b,.xmt_txt,.xmt_bin,.brep,.stl,.obj,.ply,.off,.3mf,.glb,.gltf,.pdf,.prc' });
+      const inp = h('input', { type: 'file', accept: '.step,.stp,.igs,.iges,.sldprt,.sldasm,.x_t,.x_b,.xmt_txt,.xmt_bin,.brep,.stl,.obj,.ply,.off,.3mf,.glb,.gltf,.pdf,.prc,.u3d' });
       inp.addEventListener('change', () => { if (inp.files[0]) this.upload(inp.files[0]); });
       inp.click();
       return;
@@ -219,9 +219,40 @@ class App {
         this.shell.renderDocTabs();
       }
       if (st.state === 'error') return;
+      if (st.state === 'password') { this.askPassword(doc, st.locked); return; }
       if (st.state === 'ready' && st.exact) { this.status(); this.envelope(doc); return; } // fully loaded, exact geometry ready
       await new Promise((r) => setTimeout(r, st.state === 'ready' ? 600 : 200));
     }
+  }
+
+  // a protected PDF: asked for here rather than reported as an error, as many times as it takes
+  askPassword(doc, reason) {
+    const wrong = /doesn't open/.test(reason || '');
+    const input = h('input', { class: 'inp', type: 'password', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Password' });
+    let answered = false;
+    const submit = async () => {
+      answered = true;
+      dialog.close();
+      try {
+        const st = await api.unlock(doc.id, input.value);
+        doc.state = st.state;
+        this.poll(doc, st);
+      } catch (e) {
+        toast(e.message, 'error');
+        this.closeDoc(doc);
+      }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    const dialog = modal('Password required', h('div', { class: 'pdf-pass' },
+      h('p', { text: `"${doc.name}" is protected. Enter its password to open it.` }),
+      wrong ? h('p', { class: 'pdf-pass-wrong', role: 'alert', text: "That password didn't work. Try again." }) : null,
+      input,
+      h('div', { class: 'pdf-pass-foot' },
+        h('button', { class: 'btn', onclick: () => dialog.close(), text: 'Cancel' }),
+        h('button', { class: 'btn primary', onclick: submit, text: 'Open' }))), { width: 400, icon: 'open' });
+    const closed = dialog.onClose;
+    dialog.onClose = () => { closed?.(); if (!answered) this.closeDoc(doc); };
+    input.focus();
   }
 
   activate(doc) {
@@ -716,7 +747,7 @@ class App {
   renderLoading() {
     const el = this.$('loading');
     const d = this.active;
-    if (!d || d.state === 'ready') { el.hidden = true; return; }
+    if (!d || d.state === 'ready' || d.state === 'password') { el.hidden = true; return; }
     el.hidden = false;
     const err = d.state === 'error';
     const pct = Math.round((d.fraction || 0) * 100);

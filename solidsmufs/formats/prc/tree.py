@@ -329,8 +329,9 @@ def _view(b, version):
 class Item:
     """A representation item that may hold a tessellation."""
 
-    def __init__(self, name, style, local, tess, children=()):
+    def __init__(self, name, style, local, tess, children=(), exact=None):
         self.name, self.style, self.local, self.tess, self.children = name, style, local, tess, children
+        self.exact = exact  # (context, body), both biased: its exact geometry, if it has any
 
 
 def _item(b, depth=0):
@@ -340,9 +341,12 @@ def _item(b, depth=0):
     name, style = _graphics_base(b)
     local, tess = b.u(), b.u()
     children = ()
+    exact = None
     if tag in (TYPE_RI_BREP, TYPE_RI_CURVE, TYPE_RI_PLANE):
         if b.bit():
-            b.u(), b.u()
+            where = b.u(), b.u()
+            if tag == TYPE_RI_BREP and where[0] and where[1]:
+                exact = where
         if tag == TYPE_RI_BREP:
             b.bit()
     elif tag == TYPE_RI_DIRECTION:
@@ -364,7 +368,7 @@ def _item(b, depth=0):
     elif tag != TYPE_RI_POLY_WIRE:
         raise PrcError(f"An unknown representation item in the PRC tree ({tag}).")
     _user_data(b)
-    return Item(name, style, local, tess, children)
+    return Item(name, style, local, tess, children, exact)
 
 
 def _part(b, version):
@@ -617,7 +621,8 @@ def style_color(global_data, style):
 
 # ---------------------------------------------------------------------------------------------- walking it
 def placements(files, by_id, roots=()):
-    """Where each tessellation goes: [(file number, tessellation number, 4 x 4 matrix, name, colour)]. `files` holds, per
+    """Where each tessellation goes: [(file number, tessellation number, 4 x 4 matrix, name, colour)]; an item with only exact
+    geometry has ("exact", context, body), counting from 0, for its tessellation number. `files` holds, per
     file structure, {"parts", "products", "globals"}; `by_id` its number from its id. It starts at the model's active
     roots; a file naming none starts at the last product of the last file structure."""
     out = []
@@ -674,5 +679,7 @@ def _place_items(items, f, files, matrix, name, style, out, depth=0):
         s = item.style or style
         if item.tess:
             out.append((f, item.tess - 1, m, item.name or name, style_color(data, s)))
+        elif item.exact:
+            out.append((f, ("exact", item.exact[0] - 1, item.exact[1] - 1), m, item.name or name, style_color(data, s)))
         if item.children and depth < MAX_DEPTH:
             _place_items(item.children, f, files, m, name, s, out, depth + 1)

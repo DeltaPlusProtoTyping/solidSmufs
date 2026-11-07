@@ -282,6 +282,9 @@ class _Handler(BaseHTTPRequestHandler):
         if what == "close":
             self.ctx.docs.close(doc_id)
             return self._json({"ok": True})
+        if what == "unlock":  # never logged or stored: it lives in the document's memory
+            doc.unlock(str(b.get("password", "")))
+            return self._json(doc.status())
         if what == "reload":
             doc.reload(b.get("quality", doc.quality), b["config"] if "config" in b else "keep",
                        b["orient"] if "orient" in b else "keep")

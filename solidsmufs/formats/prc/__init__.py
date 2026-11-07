@@ -1,5 +1,6 @@
 """Reading 3D models out of PDFs that hold them in PRC (ISO 14739-1), the format of McMaster-Carr's and most CAD
-tools' 3D PDFs. What's read is the display tessellation, the triangles the file was made to be shown with.
+tools' 3D PDFs. What's read is the display tessellation, the triangles the file was made to be shown with, or when a part
+has none, its exact geometry, meshed here (brep.py, brepmesh.py).
 
 A PRC file is a small header, then per "file structure" a run of zlib sections (globals, tree, tessellation,
 geometry, extra geometry), then the model file section, which holds the units and the model's roots.
@@ -8,12 +9,13 @@ The reader is our own, written from the format's rules as learned from ISO 14739
 of the table in doubles.py) and studying how nanoPRC (AGPL) reads real files; no nanoPRC code is included.
 """
 
-import re
 import struct
 import zlib
 
 import numpy as np
 
+from ..pdfstreams import model_streams
+from . import brep, brepmesh
 from .bits import Bits, PrcError
 from .tess import rebuild
 from .schema import read_schema
@@ -21,7 +23,10 @@ from .tree import attributes, name_of, placements, read_globals, read_tree
 
 __all__ = ["PrcError", "Piece", "Prc", "read_pdf", "read_prc", "streams_in_pdf"]
 
-GLOBALS_SECTION, TREE_SECTION, TESSELLATION_SECTION = 1, 2, 3  # among a file structure's offsets; 0 is its header
+GLOBALS_SECTION, TREE_SECTION, TESSELLATION_SECTION, GEOMETRY_SECTION = 1, 2, 3, 4  # among a file structure's offsets; 0 is its header
+CHORD = 1e-3  # how far a mesh may stray from an exact surface, against the size of the body...
+CHORD_MODEL = 1e-4  # ...and of everything in its context, so that a model of thousands of tiny bodies stays a sensible size
+WELD = 1e-6  # points this close, against the size of the body, are one
 TYPE_FILE_TESSELLATION = 305
 TYPE_MODEL_FILE = 301
 TYPE_TESS_3D, TYPE_TESS_COMPRESSED, TYPE_TESS_FACE, TYPE_TESS_WIRE, TYPE_TESS_MARKUP = 172, 173, 174, 175, 176
@@ -63,6 +68,8 @@ class Prc:
         self.unit_mm = 1.0  # millimetres per file unit
         self.name = ""
         self.warnings = []
+        self.notices = []
+        self.thin_limit = 0.0  # triangles lower than this, in file units, can't be trusted to face the way they seem to
         self.version = 0  # the version of PRC it was written in: some fields came later
         self.placed = None  # [Placed] from the file's tree; None when the tree couldn't be followed
         self.roots = []  # (file structure's id, biased product number, active)
@@ -70,51 +77,16 @@ class Prc:
 
 
 # ---------------------------------------------------------------------------------------------- in the PDF
-def streams_in_pdf(data):
-    """The PRC streams in a PDF's bytes, last version of each first found (in file order)."""
-    out = []
-    for m in re.finditer(rb"/Subtype\s*/PRC\b", data):
-        start = data.rfind(b"obj", 0, m.start())
-        at = data.find(b"stream", m.end())
-        if start < 0 or at < 0:
-            continue
-        info = data[start:at]
-        body = at + 6
-        if data[body:body + 2] == b"\r\n":
-            body += 2
-        elif data[body:body + 1] in (b"\n", b"\r"):
-            body += 1
-        length = _stream_length(info, data)
-        end = body + length if length is not None and data[body + length:body + length + 12].lstrip()[:9] == b"endstream" \
-            else data.find(b"endstream", body)
-        if end < 0:
-            continue
-        raw = data[body:end]
-        if b"FlateDecode" in info or b"/Fl" in info:
-            try:
-                raw = zlib.decompressobj().decompress(raw)
-            except zlib.error:
-                continue
-        if raw[:3] == b"PRC":
-            out.append(raw)
-    return out
+def streams_in_pdf(data, password=""):
+    """The PRC streams in a PDF's bytes, in file order."""
+    return model_streams(data, b"PRC", b"PRC", password)
 
 
-def _stream_length(info, data):
-    m = re.search(rb"/Length\s+(\d+)(\s+\d+\s+R)?", info)
-    if not m:
-        return None
-    if not m.group(2):
-        return int(m.group(1))
-    held = re.search(rb"(?:^|[\r\n\s])" + m.group(1) + rb"\s+\d+\s+obj\s*(\d+)", data)  # /Length n 0 R
-    return int(held.group(1)) if held else None
-
-
-def read_pdf(path):
+def read_pdf(path, password=""):
     """Every PRC model in a PDF, read. Raises PrcError when there's one but nothing can be shown of it."""
     with open(path, "rb") as f:
         data = f.read()
-    return [read_prc(s) for s in streams_in_pdf(data)]
+    return [read_prc(s) for s in streams_in_pdf(data, password)]
 
 
 # ---------------------------------------------------------------------------------------------- in the PRC
@@ -154,11 +126,12 @@ def read_prc(data):
 
 def _place(data, structures, ids, out):
     """Follow the file's tree to put the pieces where they go. Failing that, they stay where they were modelled."""
-    files = []
+    files, schemas = [], []
     try:
         for offsets in structures:
             head = Bits(_section(data, offsets[GLOBALS_SECTION]))
             schema = read_schema(head)  # the fields newer files add, which this file structure's entities carry
+            schemas.append(schema)
             head.schema = schema
             tree = Bits(_section(data, offsets[TREE_SECTION]))
             tree.schema = schema
@@ -168,12 +141,60 @@ def _place(data, structures, ids, out):
             except (PrcError, IndexError, ValueError, OverflowError):
                 global_data = None  # its local coordinates and colours go without
             files.append({"parts": parts, "products": products, "globals": global_data})
+        where = placements(files, ids, out.roots)
+        _mesh_exact(data, structures, schemas, {(f, t) for f, t, *_ in where if isinstance(t, tuple)}, out)
         pieces = {p.key: p for p in out.pieces}
-        out.placed = [Placed(pieces[(f, t)], m, name, color) for f, t, m, name, color in placements(files, ids, out.roots)
-                      if (f, t) in pieces]
+        out.placed = [Placed(pieces[(f, t)], m, name, color) for f, t, m, name, color in where if (f, t) in pieces]
     except (PrcError, IndexError, ValueError, OverflowError) as e:
         out.placed = None
         out.tree_problem = str(e)
+        if not out.pieces:  # nothing to say where they go, but they can still be seen where they were modelled
+            _mesh_exact(data, structures, schemas, None, out)
+
+
+def _mesh_exact(data, structures, schemas, wanted, out):
+    """Pieces from exact bodies: those named in `wanted` as (file structure, ("exact", context, body)), or all of them for None."""
+    if wanted is not None and not wanted:
+        return
+    approximate = skipped = 0
+    for k, offsets in enumerate(structures):
+        if len(offsets) <= GEOMETRY_SECTION or k >= len(schemas):
+            continue
+        if wanted is not None and not any(f == k for f, _ in wanted):
+            continue
+        try:
+            b = Bits(_section(data, offsets[GEOMETRY_SECTION]))
+            b.schema = schemas[k]
+            contexts = brep.read_geometry(b)
+        except (PrcError, IndexError, ValueError, OverflowError, struct.error, TypeError, AttributeError) as e:
+            out.warnings.append(f"This model's exact geometry couldn't be read ({e}).")
+            continue
+        for c, context in enumerate(contexts):
+            boxes = [brepmesh.bounds(body) if body is not None else None for body in context.bodies]
+            known = [x for x in boxes if x is not None]
+            overall = float(np.linalg.norm(np.max([x[1] for x in known], axis=0) - np.min([x[0] for x in known], axis=0))) if known else 0.0
+            for n, (body, box) in enumerate(zip(context.bodies, boxes)):
+                key = (k, ("exact", c, n))
+                if body is None or box is None or (wanted is not None and key not in wanted):
+                    continue
+                size = float(np.linalg.norm(box[1] - box[0]))
+                if size <= 0:
+                    continue
+                points, triangles, faces, normals, planar, counts = brepmesh.mesh_body(body, max(size * CHORD, overall * CHORD_MODEL), size * WELD)
+                approximate += counts.approximate
+                skipped += counts.skipped
+                if len(triangles):
+                    piece = Piece(points * context.scale, triangles, faces, normals, planar, size * WELD * context.scale, {})
+                    piece.key = key
+                    out.pieces.append(piece)
+    if approximate:
+        out.notices.append(f"{_faces(approximate)} of this model had no surface that could be followed, so shaped from the edges alone.")
+    if skipped:
+        out.notices.append(f"{_faces(skipped)} of this model couldn't be drawn.")
+
+
+def _faces(count):
+    return "1 face" if count == 1 else f"{count} faces"
 
 
 def _read_model_file(raw, out):
