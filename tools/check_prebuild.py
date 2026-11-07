@@ -60,7 +60,8 @@ def main():
         fail(f"the app exited with {run.returncode}")
     if "Traceback" in text:
         fail("the log has a traceback")
-    for needed in ("[timing] page ready", "block.step tessellation ready", "block.step exact geometry ready"):
+    # a first open reads the exact geometry along with the tessellation, so there's no later "exact geometry ready" line
+    for needed in ("[timing] page ready", "block.step tessellation ready (cached=False)"):
         if needed not in text:
             fail(f"the log never says {needed!r}")
     if not picture.is_file() or picture.stat().st_size == 0:

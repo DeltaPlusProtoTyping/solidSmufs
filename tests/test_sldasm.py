@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from solidsmufs.formats import sldasm  # noqa: E402
 
-UJOINT = Path(r"C:\Users\Public\Documents\SOLIDWORKS\SOLIDWORKS 2025\samples\learn\U-Joint\UJoint.SLDASM")
+UJOINT = Path("C:/Users/Public/Documents/SOLIDWORKS/SOLIDWORKS 2025/samples/learn/U-Joint/UJoint.SLDASM")  # "/" so it still has parents off Windows
 STAMP = bytes.fromhex("6a70cb010a4b53aa")  # the timestamp that starts every record (2010 here)
 START = STAMP + bytes.fromhex("02000000000001")
 VOLUME_TOLERANCE_MM3 = 1e-3
