@@ -1,5 +1,5 @@
 """Checks a build from tools/solidsmurfs.spec before it's handed out: the unlicensed decoder isn't in it, and the frozen
-app starts, shows its page and opens a real STEP part in a worker process. Run from the repository root, with gmsh
+app starts, shows its page and opens a real STEP part and a picture in worker processes. Run from the repository root, with gmsh
 installed: python tools/check_prebuild.py picture.png"""
 
 import os
@@ -49,9 +49,12 @@ def main():
         tmp = Path(tmp)
         part = tmp / "block.step"
         make_block(part)
+        picture_file = tmp / "swatch.png"  # a picture too: Qt's image plugins must be in the build
+        from PIL import Image
+        Image.new("RGB", (64, 48), (40, 120, 200)).save(picture_file)
         # its own settings and caches, so the log holds this run alone and nothing comes from an earlier one
         env = {**os.environ, "APPDATA": str(tmp), "LOCALAPPDATA": str(tmp)}
-        run = subprocess.run([str(program.resolve()), "--snapshot", str(picture), "--snapshot-delay", str(DELAY), str(part)],
+        run = subprocess.run([str(program.resolve()), "--snapshot", str(picture), "--snapshot-delay", str(DELAY), str(part), str(picture_file)],
                              env=env, cwd=tmp, timeout=DELAY + 120)
         log = tmp / "SolidSmufs" / "log.txt"
         text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
@@ -61,7 +64,7 @@ def main():
     if "Traceback" in text:
         fail("the log has a traceback")
     # a first open reads the exact geometry along with the tessellation, so there's no later "exact geometry ready" line
-    for needed in ("[timing] page ready", "block.step tessellation ready (cached=False)"):
+    for needed in ("[timing] page ready", "block.step tessellation ready (cached=False)", "swatch.png tessellation ready"):
         if needed not in text:
             fail(f"the log never says {needed!r}")
     if not picture.is_file() or picture.stat().st_size == 0:

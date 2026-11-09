@@ -224,6 +224,7 @@ class App {
             doc.noticed = true;
             toast(`${doc.name}: ${meta.notices.join(' ')}`, 'warn', 9000);
           }
+          if (meta.pdf?.dwgSetup && !doc.offered) { doc.offered = true; this.offerDwgSetup(doc); }
         } catch (e) {
           doc.state = 'error';
           doc.error = e.message;
@@ -352,6 +353,33 @@ class App {
   setConfig(id) {
     if (!this.meta || this.meta.config === id) return;
     this.reload(this.prefs.quality, id);
+  }
+
+  /** A DWG shown as its thumbnail: offer to fetch the free converter that shows its lines (only on a click). */
+  offerDwgSetup(doc) {
+    const t = toast(`${doc.name} is showing its preview picture. To see its lines and measure them, SolidSmurfs can download the free ODA File Converter (about 32 MB, from opendesign.com) into your own folder. No admin is needed.`, 'info', 86400000); // stays until answered
+    const go = h('button', { class: 'btn', text: 'Set it up' });
+    const later = h('button', { class: 'btn', text: 'Not now', onclick: () => t.remove() });
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      go.textContent = 'Setting up…';
+      try {
+        await api.dwgSetup();
+        t.remove();
+        toast('DWG drawings are set up. Opening the drawing again…');
+        for (const d of this.docs.filter((x) => x.meta?.pdf?.dwgSetup)) { // every DWG open as a picture
+          await api.reload(d.id, this.prefs.quality);
+          Object.assign(d, { meta: null, state: 'loading', view: null, pdfMode: null, pdfState: null, envelope: null, envelopeKey: null });
+          if (this.active === d) this.activate(d);
+          this.poll(d);
+        }
+      } catch (e) {
+        go.disabled = false;
+        go.textContent = 'Try again';
+        toast(e.message, 'error');
+      }
+    });
+    t.append(go, later);
   }
 
   async reload(quality = this.prefs.quality, config) {

@@ -2,12 +2,19 @@
 # only (no admin). Double-click still opens files in whatever program owns them (SolidWorks, etc.).
 #   powershell -ExecutionPolicy Bypass -File tools\register-context-menu.ps1           # add
 #   powershell -ExecutionPolicy Bypass -File tools\register-context-menu.ps1 -Remove   # take it out
-param([switch]$Remove)
+# -Exe C:\...\SolidSmurfs.exe points the entries at a prebuilt copy instead of this source checkout (its installer does).
+param([switch]$Remove, [string]$Exe)
 
-$root = Split-Path -Parent $PSScriptRoot
-$pythonw = Join-Path $root '.venv\Scripts\pythonw.exe'
-$launcher = Join-Path $root 'solidsmurfs.pyw'
-$icon = Join-Path $root 'solidsmufs\web\img\solidsmurfs.ico'
+if ($Exe) {
+    $command = "`"$Exe`" `"%1`""
+    $icon = "$Exe,0"
+} else {
+    $root = Split-Path -Parent $PSScriptRoot
+    $pythonw = Join-Path $root '.venv\Scripts\pythonw.exe'
+    $launcher = Join-Path $root 'solidsmurfs.pyw'
+    $command = "`"$pythonw`" `"$launcher`" `"%1`""
+    $icon = Join-Path $root 'solidsmufs\web\img\solidsmurfs.ico'
+}
 $extensions = @(
     '.step', '.stp', '.igs', '.iges', '.brep', '.brp',
     '.sldprt', '.sldasm',
@@ -32,7 +39,7 @@ foreach ($ext in $extensions) {
     New-Item -Path "$key\command" -Force | Out-Null
     Set-Item -Path $key -Value 'Open with SolidSmurfs'
     New-ItemProperty -Path $key -Name 'Icon' -Value $icon -PropertyType String -Force | Out-Null
-    Set-Item -Path "$key\command" -Value "`"$pythonw`" `"$launcher`" `"%1`""
+    Set-Item -Path "$key\command" -Value $command
 }
 
 if ($Remove) { Write-Output 'Removed "Open with SolidSmurfs" from the right-click menu.' }

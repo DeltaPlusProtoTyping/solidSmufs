@@ -49,4 +49,5 @@ export const api = {
   title: (title) => call('POST', '/api/title', { title }).catch(() => {}),
   fsRoots: () => call('GET', '/api/fs/roots'),
   fsList: (path) => call('POST', '/api/fs/list', { path }),
+  dwgSetup: () => call('POST', '/api/dwg-setup', {}),
 };

@@ -11,6 +11,8 @@ on:
       - "requirements.txt"
       - "tools/check_prebuild.py"
       - "tools/solidsmurfs.spec"
+      - "tools/install-solidsmurfs.ps1"
+      - "tools/register-context-menu.ps1"
   workflow_dispatch:
 
 permissions:
@@ -32,7 +34,10 @@ jobs:
             --title "SolidSmurfs $GITHUB_REF_NAME" --notes "$(cat <<'EOF'
           Internal builds: keep this repository and these files private.
 
-          - **Windows:** unzip and run `SolidSmurfs.exe`. It isn't signed, so SmartScreen may ask first (More info, Run anyway).
+          - **Windows:** unzip, then double-click `Install SolidSmurfs.cmd`. It installs for you alone, with no admin: a Start menu
+            shortcut, "Open with SolidSmurfs" on the right-click menu, and an entry in Settings > Apps to uninstall it. Or just
+            run `SolidSmurfs.exe` from the unzipped folder. It isn't signed, so SmartScreen may ask first (More info, Run anyway).
+            DWG drawings: the first one you open offers to fetch the free ODA File Converter into your own folder (no admin).
           - **macOS (14 or newer):** unzip, then run `xattr -cr SolidSmurfs.app` once, because it isn't notarized. Pick `arm64` for Apple Silicon, `x64` for Intel.
           - **Linux (x64, glibc 2.35 or newer):** untar and run `SolidSmurfs/SolidSmurfs`.
 
@@ -88,6 +93,28 @@ jobs:
           else
             python tools/check_prebuild.py "picture-${{ matrix.name }}.png"
           fi
+      - name: Add the Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          cp tools/install-solidsmurfs.ps1 tools/register-context-menu.ps1 "tools/Install SolidSmurfs.cmd" dist/SolidSmurfs/
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "${GITHUB_REF_NAME#v}" > dist/SolidSmurfs/VERSION.txt; else echo dev > dist/SolidSmurfs/VERSION.txt; fi
+      - name: Check the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File dist/SolidSmurfs/install-solidsmurfs.ps1
+          if ($LASTEXITCODE) { throw "install failed: $LASTEXITCODE" }
+          $dest = Join-Path $env:LOCALAPPDATA 'Programs\SolidSmurfs'
+          $exe = Join-Path $dest 'SolidSmurfs.exe'
+          if (-not (Test-Path $exe)) { throw "no $exe" }
+          $entry = 'HKCU:\Software\Classes\SystemFileAssociations\.step\shell\SolidSmurfs'
+          $cmd = (Get-Item "$entry\command").GetValue('')
+          if ($cmd -notlike "*$exe*") { throw "the right-click entry is $cmd" }
+          if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SolidSmurfs')) { throw 'not in Settings > Apps' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dest 'install-solidsmurfs.ps1') -Uninstall
+          if (Test-Path $exe) { throw 'uninstalling left the app' }
+          if (Test-Path $entry) { throw 'uninstalling left the right-click entry' }
+          'installer ok'
       - name: Pack
         id: pack
         run: |
