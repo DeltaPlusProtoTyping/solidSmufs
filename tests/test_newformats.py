@@ -204,6 +204,111 @@ class PictureTest(unittest.TestCase):
                 edrawings_preview(str(p))
 
 
+def pe(*values, seven=False):
+    """HP-GL/2 PE numbers: the sign in the lowest bit, then base 64 (or 32) digits, the last one marked."""
+    out = ""
+    for v in values:
+        n = -2 * v + 1 if v < 0 else 2 * v
+        base, end = (32, 95) if seven else (64, 191)
+        while n >= base:
+            out += chr(63 + n % base)
+            n //= base
+        out += chr(end + n)
+    return out
+
+
+class HpglTest(unittest.TestCase):
+    def load(self, data, ext=".plt"):
+        from solidsmufs.kernel import drawing
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / f"x{ext}"
+            p.write_bytes(data)
+            return drawing.load(str(p), p.name)
+
+    def test_pens_lines_arcs_and_labels(self):
+        m = self.load(b"IN;SP1;PU0,0;PD4000,0,4000,2000;PU2000,1000;CI400;SP2;PU1000,1000;PD;AA2000,1000,90;PU;"
+                      b"PU0,3000;SI0.4,0.5;LBHELLO\x03;")
+        self.assertEqual([b["name"] for b in m.bodies], ["Pen 1", "Pen 2"])
+        self.assertEqual(m.edge_type, ["line", "line", "circle", "circle"])
+        self.assertAlmostEqual(m.edge_length[0], 100.0)  # 4000 plotter units: 100 mm
+        self.assertAlmostEqual(m.edge_params[2]["radius"], 10.0)
+        self.assertAlmostEqual(m.edge_params[3]["angle"], 90.0)
+        np.testing.assert_allclose(m.edge_params[3]["center"], [50, 25, 0])
+        self.assertEqual(m.texts[0]["lines"], ["HELLO"])
+        self.assertAlmostEqual(m.texts[0]["height"], 5.0)
+        self.assertIsNone(m.edge_color[0])  # pen 1: the drawing's ink
+        self.assertEqual(tuple(m.edge_color[3]), (0.9, 0.1, 0.1))  # pen 2: red
+
+    def test_relative_moves(self):
+        m = self.load(b"IN;PA;PU100,100;PR;PD400,0,0,400;")
+        np.testing.assert_allclose(m.segments[-1][1], [12.5, 12.5, 0])
+
+    def test_polyline_encoded(self):
+        body = "<=" + pe(0, 0) + pe(4000, 0) + pe(0, 2000) + "<" + pe(1000, 1000) + pe(-200, 0)
+        m = self.load(f"IN;SP1;PE{body};".encode("latin-1"))
+        ends = [tuple(np.round(s[1], 3)) for s in m.segments]
+        self.assertEqual(ends, [(100, 0, 0), (100, 50, 0), (120, 75, 0)])
+        seven = self.load(f"IN;SP1;PE7<={pe(0, 0, seven=True)}{pe(400, 0, seven=True)};".encode("latin-1"))
+        self.assertAlmostEqual(seven.edge_length[0], 10.0)
+
+    def test_pcl_wrapped(self):
+        m = self.load(b"\x1b%-12345X@PJL ENTER LANGUAGE=HPGL2\n\x1bE\x1b%1BIN;SP1;PD1000,0;\x1b%0A\x1bE\x1b%-12345X")
+        self.assertEqual(len(m.edge_type), 1)
+
+    def test_not_a_plot(self):
+        from solidsmufs.formats.hpgl import HpglError
+        with self.assertRaises(HpglError):
+            self.load(b"\x00\x01\x02 just bytes")
+
+
+class SvgTest(unittest.TestCase):
+    def load(self, text):
+        from solidsmufs.kernel import drawing
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.svg"
+            p.write_text(text)
+            return drawing.load(str(p), p.name)
+
+    def test_units_layers_and_y_up(self):
+        m = self.load('<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" '
+                      'width="100mm" height="50mm" viewBox="0 0 200 100">'
+                      '<g inkscape:label="Cut" stroke="red" fill="none"><circle cx="20" cy="20" r="10"/><line x1="0" y1="0" x2="200" y2="0"/></g>'
+                      '<g id="Marks"><rect x="0" y="0" width="10" height="10"/></g></svg>')
+        self.assertEqual([b["name"] for b in m.bodies], ["Cut", "Marks"])
+        self.assertEqual(m.info["Units"], "millimetres")
+        circle = m.edge_params[0]
+        self.assertAlmostEqual(circle["radius"], 5.0)  # 200 user units across 100 mm
+        np.testing.assert_allclose(circle["center"], [10, 40, 0])  # y flipped: 20 down from the top of 50 mm
+        self.assertEqual(m.edge_color[0], [1.0, 0.0, 0.0] if isinstance(m.edge_color[0], list) else (1.0, 0.0, 0.0))
+        self.assertAlmostEqual(m.edge_length[1], 100.0)
+
+    def test_pixels_transforms_and_arcs(self):
+        m = self.load('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">'
+                      '<g transform="translate(48 48) rotate(90)"><path d="M0 0 L48 0"/></g>'
+                      '<path d="M0 48 A24 24 0 0 1 48 48" stroke="black" fill="none"/></svg>')
+        self.assertIn("pixels", m.info["Units"])
+        line = m.edge_params[0]
+        np.testing.assert_allclose(line["start"], [12.7, 12.7, 0], atol=1e-9)  # 48 px is half an inch
+        np.testing.assert_allclose(line["end"], [12.7, 0, 0], atol=1e-9)  # turned to point down the page
+        arc = m.edge_params[1]
+        self.assertAlmostEqual(arc["radius"], 6.35)
+        self.assertAlmostEqual(arc["angle"], 180.0)
+
+    def test_curves_are_one_piece_each(self):
+        m = self.load('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><path d="M0 0 C 2 5 8 5 10 0 Q 5 -5 0 0 z"/></svg>')
+        self.assertEqual(m.edge_type, ["spline", "spline"])
+
+    def test_text(self):
+        m = self.load('<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">'
+                      '<text x="10" y="50" font-size="10">PART <tspan>42</tspan></text></svg>')
+        self.assertEqual(m.texts[0]["lines"], ["PART 42"])
+        self.assertAlmostEqual(m.texts[0]["height"], 7.0)
+
+    def test_not_svg(self):
+        with self.assertRaises(ValueError):
+            self.load("<html></html>")
+
+
 class ArchiveTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

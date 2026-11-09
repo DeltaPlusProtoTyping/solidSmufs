@@ -419,11 +419,14 @@ export class PdfView {
 
   _down(e) {
     const s = this.scroller;
-    if (e.button === 1 || (e.button === 0 && e.altKey)) { // middle drag pans, as in the 3D view
+    if (e.button === 1 || (e.button === 0 && !e.shiftKey)) { // left or middle drag pans; Shift+left-drag selects text
       e.preventDefault();
+      s.focus({ preventScroll: true });
+      if (e.button === 0 && this.selection) { this.selection = null; this._showSelection(); }
       const x0 = e.clientX, y0 = e.clientY, l0 = s.scrollLeft, t0 = s.scrollTop;
+      s.classList.add('panning');
       const move = (m) => { s.scrollLeft = l0 - (m.clientX - x0); s.scrollTop = t0 - (m.clientY - y0); };
-      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+      const up = () => { s.classList.remove('panning'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
       return;

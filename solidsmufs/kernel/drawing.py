@@ -45,9 +45,27 @@ def _conic_points(c, tol):
     return c.at(np.linspace(c.t0, c.t1, n + 1))
 
 
-def load(path, name, progress=lambda *a: None, fmt="DXF"):
+READERS = {".plt": "HP-GL", ".hpgl": "HP-GL", ".hgl": "HP-GL", ".svg": "SVG"}
+EACH_SEGMENT = 40000  # up to this many straight pieces, each its own edge; past it, each polyline is one
+
+
+def load(path, name, progress=lambda *a: None, fmt=None):
+    """A DXF (or DWG converted to one), HP-GL plot or SVG drawing as a model."""
     progress("Reading the drawing", 0.2)
-    d = dxf.read_dxf(Path(path).read_bytes())
+    data = Path(path).read_bytes()
+    kind = READERS.get(Path(path).suffix.lower())
+    if kind == "HP-GL":
+        from ..formats import hpgl
+        d = hpgl.read_hpgl(data)
+    elif kind == "SVG":
+        from ..formats import svg
+        d = svg.read_svg(data)
+    else:
+        d = dxf.read_dxf(data)
+    return from_drawing(d, path, name, fmt or kind or "DXF", progress)
+
+
+def from_drawing(d, path, name, fmt, progress=lambda *a: None):
     s = d.unit_mm
     m = Model(name, path, fmt)
     m.kind = "drawing"
@@ -67,6 +85,8 @@ def load(path, name, progress=lambda *a: None, fmt="DXF"):
     tol = max(size, 1e-9) * 2e-5  # how far an arc's straight steps may stray from it, in drawing units
 
     segs, colors, bodies, types, params, lengths, ends = [], [], [], [], [], [], []
+    pieces = sum(len(c.points) - 1 for _l, _c, c in d.curves if isinstance(c, dxf.Poly) and c.kind != "spline")
+    joined = pieces > EACH_SEGMENT
 
     def edge(pts, typ, prm, color, layer):
         pts = np.asarray(pts, np.float64) * s
@@ -103,6 +123,8 @@ def load(path, name, progress=lambda *a: None, fmt="DXF"):
         elif c.kind == "spline":
             closed = float(np.linalg.norm(c.points[0] - c.points[-1])) <= tol
             edge(c.points, "spline", {"start": c.points[0] * s, "end": c.points[-1] * s, "closed": closed}, color, layer)
+        elif joined:
+            edge(c.points, "path", {"start": c.points[0] * s, "end": c.points[-1] * s}, color, layer)
         else:
             for k in range(len(c.points) - 1):
                 a, b = c.points[k] * s, c.points[k + 1] * s
@@ -148,6 +170,8 @@ def load(path, name, progress=lambda *a: None, fmt="DXF"):
     if d.skipped:
         what = "; ".join(f"{name} ({n})" for name, n in d.skipped.most_common())
         m.notices.append(f"Some things in this drawing aren't shown: {what}.")
+    if joined:
+        m.notices.append(f"This drawing has {pieces:,} straight pieces, so each polyline is one line to pick.")
     m.warnings += d.warnings
     m.stats["drawing"] = True
     return m

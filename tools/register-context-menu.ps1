@@ -13,7 +13,7 @@ $extensions = @(
     '.sldprt', '.sldasm',
     '.x_t', '.x_b', '.xmt_txt', '.xmt_bin',
     '.stl', '.obj', '.ply', '.off', '.3mf', '.glb', '.gltf',
-    '.dxf', '.dwg', '.pdf', '.prc', '.u3d',
+    '.dxf', '.dwg', '.plt', '.hpgl', '.hgl', '.svg', '.pdf', '.prc', '.u3d',
     '.slddrw', '.eprt', '.easm', '.edrw', '.eprtx', '.easmx', '.edrwx',
     '.nc', '.tap', '.gcode', '.gc', '.ngc', '.cnc', '.eia', '.mpf', '.min', '.ptp',
     '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tif', '.tiff', '.webp', '.tga',

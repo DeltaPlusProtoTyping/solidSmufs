@@ -720,6 +720,7 @@ class App {
     } else if (this.meta) html = this.prefs.mouse === 'sw'
       ? 'Middle-drag to rotate · Ctrl+middle to pan · Wheel to zoom · Right-drag for gestures'
       : 'Drag to rotate · Right-drag to pan · Wheel to zoom';
+    else if (this.active?.meta?.pdf && this.active.pdfMode === 'pages') html = `Drag to pan · ${this.active.meta.pdf.picture ? '' : 'Shift+drag to select text · '}${this.active.meta.pdf.pages.length > 1 ? 'Ctrl+wheel' : 'Wheel'} to zoom`;
     else html = 'Open a part to begin.';
     if (this.active && this.active.state === 'ready' && this.active.exact === false) html += '<span class="sep">|</span>Loading exact geometry for measuring…';
     el.innerHTML = html;
@@ -752,7 +753,7 @@ class App {
           this.shell.bigButton('explorer', 'Browse Folders…'),
           this.shell.bigButton('help', 'Mouse and Keyboard'),
           this.shell.bigButton('options', 'Options'),
-          h('div', { class: 'wl-formats', html: 'STEP · IGES · BREP<br>SolidWorks SLDPRT · SLDASM · SLDDRW<br>Parasolid X_T / X_B<br>STL · OBJ · PLY · OFF · 3MF · glTF<br>PDF · DXF · DWG · eDrawings<br>G-code · pictures · zip' })),
+          h('div', { class: 'wl-formats', html: 'STEP · IGES · BREP<br>SolidWorks SLDPRT · SLDASM · SLDDRW<br>Parasolid X_T / X_B<br>STL · OBJ · PLY · OFF · 3MF · glTF<br>PDF · DXF · DWG · PLT · SVG · eDrawings<br>G-code · pictures · zip' })),
         h('div', { class: 'wl-recent' }, h('h3', { text: 'Recent Documents' }),
           recent.length ? recent.map((r) => this.shell.recentRow(r)) : h('div', { class: 'wl-empty', text: 'Files you open show up here.' }))))));
   }

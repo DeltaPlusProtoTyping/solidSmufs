@@ -14,7 +14,8 @@ MESH_FORMATS = {".stl": "STL", ".obj": "OBJ", ".ply": "PLY", ".off": "OFF", ".3m
 PDF_FORMATS = {".pdf": "PDF"}
 PRC_FORMATS = {".prc": "PRC"}  # the model format inside most 3D PDFs, on its own
 U3D_FORMATS = {".u3d": "U3D"}  # the older model format of 3D PDFs, on its own
-DRAWING_FORMATS = {".dxf": "DXF", ".dwg": "DWG"}  # 2D drawings: lines, arcs and text (DWG through the ODA converter)
+# 2D drawings: lines, arcs and text (DWG through the ODA converter)
+DRAWING_FORMATS = {".dxf": "DXF", ".dwg": "DWG", ".plt": "HP-GL", ".hpgl": "HP-GL", ".hgl": "HP-GL", ".svg": "SVG"}
 TOOLPATH_FORMATS = {e: "G-code" for e in (".nc", ".tap", ".gcode", ".gc", ".ngc", ".cnc", ".eia", ".mpf", ".min", ".ptp")}
 IMAGE_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".bmp": "BMP", ".gif": "GIF", ".tif": "TIFF", ".tiff": "TIFF",
                  ".webp": "WebP", ".tga": "TGA"}

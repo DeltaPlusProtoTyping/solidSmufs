@@ -126,7 +126,7 @@ def run(argv):
                     return " ".join(f"*{e}" for e in sorted(formats))
                 cad = "*.step *.stp *.igs *.iges *.sldprt *.sldasm *.x_t *.x_b *.xmt_txt *.xmt_bin *.brep"
                 mesh = "*.stl *.obj *.ply *.off *.3mf *.glb *.gltf"
-                drawings = f"*.dxf *.dwg *.slddrw {pats(EDRAWINGS_FORMATS)} *.pdf"
+                drawings = f"*.dxf *.dwg *.plt *.hpgl *.hgl *.svg *.slddrw {pats(EDRAWINGS_FORMATS)} *.pdf"
                 start = start_dir or settings.load()["ui"].get("lastDir") or str(Path.home())
                 path, _ = QFileDialog.getOpenFileName(window_ref.get("w"), "Open a file", start,
                                                       f"Everything SolidSmurfs opens ({pats(ALL_FORMATS)});;CAD ({cad});;Meshes ({mesh});;"
