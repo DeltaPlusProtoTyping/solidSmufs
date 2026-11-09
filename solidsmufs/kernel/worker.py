@@ -11,6 +11,7 @@ import json
 import os
 import pickle
 import shutil
+import sys
 import tempfile
 import time
 import traceback
@@ -120,14 +121,16 @@ class Session:
         self.model = Model(Path(path).name, path, what)
         self.model.kind = "pdf"
         self.model.info["Picture"] = self.pdf.size_text()
-        if ext == ".dwg":
+        offer = ext == ".dwg" and sys.platform == "win32"  # the page offers to set the converter up
+        if ext == ".dwg" and not offer:
             self.model.notices.append("This is the DWG's preview picture. To see its lines and measure them, "
                                       "install the free ODA File Converter, then open it again.")
         elif ext not in IMAGE_FORMATS:
             self.model.notices.append("This is the preview picture saved in the file, as it looked when it was last saved.")
         self.exact = True
         meta, blob = self.model.payload()
-        meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": [], "problem": None, "picture": True}
+        meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": [], "problem": None, "picture": True,
+                       "dwgSetup": offer}
         return jsonable(meta), blob
 
     def _shown_as_pages(self, path):
@@ -1061,9 +1064,12 @@ def _load_dwg(path, name, progress):
         out.mkdir()
         shutil.copyfile(path, src / "drawing.dwg")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        # the converter is a Qt program too: it mustn't inherit this worker's Qt settings (drawing off screen, PySide6's
+        # plugin folders), or it can't start and stops on an error box
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("QT_", "QML", "QTWEBENGINE"))}
         try:
             subprocess.run([str(exe), str(src), str(out), "ACAD2018", "DXF", "0", "1", "*.DWG"],
-                           creationflags=flags, timeout=300, capture_output=True)
+                           creationflags=flags, timeout=300, capture_output=True, env=env)
         except subprocess.TimeoutExpired:
             raise ValueError("The ODA File Converter took too long with this DWG.") from None
         dxf = out / "drawing.dxf"

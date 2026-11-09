@@ -257,6 +257,10 @@ class _Handler(BaseHTTPRequestHandler):
             if parts == ["title"] and method == "POST":
                 self.ctx.native.set_title(self._jbody().get("title", "SolidSmurfs"))
                 return self._json({"ok": True})
+            if parts == ["dwg-setup"] and method == "POST":  # the user asked: fetch the DWG converter (no admin)
+                from . import oda
+                self._jbody()  # read, so it doesn't stay in the connection ahead of the next request
+                return self._json({"path": str(oda.setup())})
             if parts == ["fs", "roots"]:
                 return self._json(_fs_roots())
             if parts == ["fs", "list"] and method == "POST":
