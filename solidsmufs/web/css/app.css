@@ -612,6 +612,16 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .pv-tile { position: absolute; display: block; }
 .pv-marks { position: absolute; inset: 0; pointer-events: none; }
 .pv-sel { position: absolute; background: rgba(40, 110, 240, .32); }
+/* hovering a print's words: a fit's limits, a size in inches, French in English */
+.pv-hint { position: absolute; border: 1.5px solid #2a6ff0; background: rgba(42, 111, 240, .12); border-radius: 2px; }
+.pv-hint.fit { border-color: #d0661c; background: rgba(208, 102, 28, .14); }
+.pv-hint.fr { border-color: #2c9a52; background: rgba(44, 154, 82, .10); }
+.pv-tip { position: fixed; z-index: 90; max-width: 520px; padding: 6px 9px; border-radius: 6px; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); box-shadow: var(--shadow); font: 12px/1.45 var(--mono); white-space: pre-wrap; pointer-events: none; }
+.pv-tip[hidden] { display: none; }
+.pv-btn.pv-toggle.on { background: var(--btn-on); border-color: var(--btn-hover-line); }
+.pv-ocr { margin-left: 8px; font-style: italic; }
+.pv-ocr[hidden] { display: none; }
 .pv-hit { position: absolute; background: rgba(255, 196, 0, .42); }
 .pv-hit.now { background: rgba(255, 120, 0, .55); }
 

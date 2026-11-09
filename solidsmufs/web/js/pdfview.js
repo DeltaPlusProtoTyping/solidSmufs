@@ -3,6 +3,7 @@
 // already here are stretched to fit, so zooming answers at once, and the newest view is always drawn first.
 import { api } from './api.js';
 import { h, toast } from './ui.js';
+import { PrintHints } from './printhints.js';
 
 const TILE = 1536; // device pixels: large, as a word cut by a seam can differ by a pixel across it
 const PREVIEW = 900; // long side of the whole-page picture that shows until the tiles land
@@ -32,6 +33,7 @@ export class PdfView {
     this.modeSwitch = h('div', { class: 'pv-switch', hidden: true }, this.toModel, this.toPages);
     host.append(this.modeSwitch);
     this._buildBar();
+    this.hints = new PrintHints(this); // fits, inches and French on hover
     this.scroller.addEventListener('scroll', () => { this._schedule(); this._pageNumber(); });
     this.scroller.addEventListener('wheel', (e) => this._wheel(e), { passive: false });
     this.scroller.addEventListener('pointerdown', (e) => this._down(e));
@@ -101,6 +103,7 @@ export class PdfView {
     this.findIn.hidden = !!doc.meta.pdf.picture; // a picture has no text to find
     this.side.hidden = !this.state.side;
     this._buildPages();
+    this.hints.open(doc);
     this.setMode(doc.pdfMode);
   }
 
@@ -121,6 +124,7 @@ export class PdfView {
   close() {
     if (this.doc?.pdfState && !this.el.hidden) this.doc.pdfState.top = this.scroller.scrollTop;
     this.doc = null;
+    this.hints?.close();
     this.run++;
     this.el.hidden = true;
     this.modeSwitch.hidden = true;
@@ -286,6 +290,7 @@ export class PdfView {
 
   // what the current view needs, nearest its middle first; replaces whatever was waiting
   _wanted() {
+    this.hints.need(this._visible());
     const s = this.scroller, dpr = window.devicePixelRatio || 1, want = [];
     const left = s.scrollLeft, right = left + s.clientWidth, top = s.scrollTop, bottom = top + s.clientHeight;
     const mx = (left + right) / 2, my = (top + bottom) / 2;

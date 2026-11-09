@@ -77,6 +77,7 @@ class Session:
         if self.pdf is not None:
             self.pdf.close()
         self.pdf = PdfFile(path, self.password)
+        self._marks = {}  # hover marks belong to the pages they were read from
         models, problem = models_inside(path), None
         private = bool(self.password)  # its model isn't to sit unprotected in the cache
         self.model = None
@@ -118,6 +119,7 @@ class Session:
             self.pdf.close()
         ext = Path(path).suffix.lower()
         self.pdf, what = open_picture(path, ext)
+        self._marks = {}
         self.model = Model(Path(path).name, path, what)
         self.model.kind = "pdf"
         self.model.info["Picture"] = self.pdf.size_text()
@@ -187,6 +189,67 @@ class Session:
 
     def pdf_tile(self, **kw):
         return self.pdf.tile(**kw)
+
+    def pdf_marks(self, page):
+        """What hovering a page's words shows (kernel/printmarks.py): {"marks", "ocr": "pending" | "done" | "off" |
+        "error", "metric"}. The page's own text answers at once; Windows OCR then reads the page's picture on a
+        thread of its own (one page at a time), so the page keeps drawing meanwhile. Ask again to see what OCR added."""
+        import threading
+        from . import printmarks
+        if not hasattr(self, "_marks_lock"):
+            self._marks_lock, self._ocr_turn = threading.Lock(), threading.Semaphore(1)
+            self._marks = getattr(self, "_marks", {})
+        with self._marks_lock:
+            entry = self._marks.get(page)
+        if entry is None:
+            from .pdfdoc import PdfFile
+            marks, texts, words = [], [], []
+            if isinstance(self.pdf, PdfFile):
+                marks, texts, words = printmarks.pdf_text_marks(self.pdf.doc, page, self.pdf.page_text(page))
+            entry = {"marks": marks, "texts": texts, "words": words, "ocr": "pending" if printmarks.ocr_available() else "off"}
+            with self._marks_lock:
+                self._marks[page] = entry
+            if entry["ocr"] == "pending":
+                img, k = self._ocr_picture(page)
+                threading.Thread(target=self._ocr_page, args=(entry, img, k), daemon=True).start()
+        with self._marks_lock:
+            texts = [t for e in self._marks.values() for t in e["texts"]]
+            return {"marks": list(entry["marks"]), "ocr": entry["ocr"],
+                    "metric": printmarks.is_metric(texts, [m for e in self._marks.values() for m in e["marks"]])}
+
+    def _ocr_picture(self, page):
+        """(the page drawn for OCR on white, points per pixel). Drawn here, as QtPdf is only used on this thread."""
+        from PySide6.QtCore import QSize, Qt
+        from PySide6.QtGui import QImage, QPainter
+        from . import printmarks
+        from .pdfdoc import PdfFile
+        if isinstance(self.pdf, PdfFile):
+            s = self.pdf.doc.pagePointSize(page)
+            scale = min(printmarks.OCR_DPI / 72, printmarks.OCR_MAX / max(s.width(), s.height(), 1))
+            src = self.pdf.doc.render(page, QSize(max(round(s.width() * scale), 1), max(round(s.height() * scale), 1)))
+            k = 1 / scale
+        else:  # a picture: its own pixels
+            from .pictures import POINTS_PER_PX
+            src, k = self.pdf.images[page], POINTS_PER_PX
+        img = QImage(src.size(), QImage.Format.Format_RGB32)
+        img.fill(Qt.GlobalColor.white)  # PDFium leaves bare paper transparent
+        p = QPainter(img)
+        p.drawImage(0, 0, src)
+        p.end()
+        return img, k
+
+    def _ocr_page(self, entry, img, k):
+        from . import printmarks
+        with self._ocr_turn:
+            try:
+                marks, texts = printmarks.ocr_marks(img, k)
+                with self._marks_lock:
+                    entry["marks"] = printmarks.merge(entry["marks"], marks, entry["words"])
+                    entry["texts"] = entry["texts"] + texts
+                    entry["ocr"] = "done"
+            except Exception as e:  # the PDF's own text still shows
+                with self._marks_lock:
+                    entry["ocr"], entry["error"] = "error", str(e)
 
     def pdf_select(self, **kw):
         return self.pdf.select(**kw)

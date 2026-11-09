@@ -41,6 +41,7 @@ export const api = {
   pdfTile: (id, spec) => call('POST', `/api/docs/${id}/pdf-tile`, spec, true),
   pdfSelect: (id, spec) => call('POST', `/api/docs/${id}/pdf-select`, spec),
   pdfFind: (id, query) => call('POST', `/api/docs/${id}/pdf-find`, { query }),
+  pdfMarks: (id, page) => call('POST', `/api/docs/${id}/pdf-marks`, { page }),
   settings: (ui) => call('POST', '/api/settings', ui),
   removeRecent: (path) => call('POST', '/api/recent/remove', { path }),
   openDialog: () => call('POST', '/api/dialog/open', {}),

@@ -311,6 +311,8 @@ class _Handler(BaseHTTPRequestHandler):
         if what == "pdf-select":
             return self._json(doc.request("pdf_select", timeout=60, page=int(b["page"]), ax=b["ax"], ay=b["ay"],
                                           bx=b["bx"], by=b["by"]))
+        if what == "pdf-marks":  # what hovering a page's words shows
+            return self._json(doc.request("pdf_marks", timeout=120, page=int(b["page"])))
         if what == "pdf-find":
             return self._json(doc.request("pdf_find", timeout=120, query=str(b.get("query", ""))))
         if what == "facing":  # which way each Align Part pick faces, for its arrow
