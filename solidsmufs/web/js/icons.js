@@ -127,6 +127,7 @@ const TOOLS = {
   bodyFolder: T(`<path d="M3 9a2 2 0 0 1 2-2h6l2.5 2.5H26a2 2 0 0 1 2 2V25a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="${Y}" stroke="#a8761a" stroke-width="1.2"/>${block(18, 13, 5, M1, M2, '#b9c0cb')}`),
   surfaceBody: T(`<path d="M4 20 C8 10 13 8 16 13 S24 20 28 9 L28 22 C24 30 18 26 16 24 S8 22 4 28Z" fill="${B2}" stroke="${NV}" stroke-width="1.3"/>`),
   meshBody: T(`<path d="M4 25L16 5l12 20z" fill="${B2}" stroke="${NV}" stroke-width="1.3"/><path d="M10 15h12M16 5l-6 20M16 5l6 20M10 15l6 10 6-10" fill="none" stroke="${NV}" stroke-width="1"/>`),
+  layer: T(`<path d="M16 17L3 11l13-6 13 6z" fill="${B2}" stroke="${NV}" stroke-width="1.2"/><path d="M3 16l13 6 13-6M3 21l13 6 13-6" fill="none" stroke="${NV}" stroke-width="1.2"/>`), // a drawing's layer
   material: T(`<path d="M6 6h20v4h-7v12h7v4H6v-4h7V10H6z" fill="url(#mt)" stroke="${K}" stroke-width="1.2"/><defs><pattern id="mt" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="4" fill="${M1}"/><rect width="1.5" height="4" fill="${M2}"/></pattern></defs>`),
   plane: T(`<polygon points="3,20 12,8 29,12 20,24" fill="${B2}" fill-opacity=".85" stroke="${NV}" stroke-width="1.3"/>`),
   origin: T(`<path d="M8 24V7" stroke="${GR}" stroke-width="2"/><path d="M8 24h17" stroke="${RD}" stroke-width="2"/><path d="M8 24l-5 5" stroke="${B1}" stroke-width="2"/><path d="M5 10l3-4 3 4M22 21l4 3-4 3" fill="none" stroke="${K}" stroke-width="1.4"/><circle cx="8" cy="24" r="2" fill="${K}"/>`),

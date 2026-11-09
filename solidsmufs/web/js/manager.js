@@ -16,7 +16,7 @@ export class Manager {
     this.app = app;
     this.tab = 'tree';
     this.page = null;
-    this.open = new Set(['root', 'solids', 'surfaces', 'meshes']);
+    this.open = new Set(['root', 'solids', 'surfaces', 'meshes', 'layers']);
     this.filter = '';
     this.tabsEl = document.getElementById('mgr-tabs');
     this.body = document.getElementById('mgr-body');
@@ -138,7 +138,7 @@ export class Manager {
       const ent = { kind: 'body', index: bi };
       add({
         key: `b${bi}`, depth, label: b.name, searchable: true, ent,
-        icon: b.kind === 'sheet' ? 'surfaceBody' : b.kind === 'mesh' ? 'meshBody' : asm ? 'component' : 'body',
+        icon: b.kind === 'sheet' ? 'surfaceBody' : b.kind === 'mesh' ? 'meshBody' : b.kind === 'layer' ? 'layer' : asm ? 'component' : 'body',
         swatch: `rgb(${rgb.map((c) => Math.round(c * 255)).join(',')})`, hidden: !vis, eye: vis,
         toggleEye: () => { this.viewer.setBodyVisible(bi, !vis); this.refresh(); },
         hover: ent,
@@ -165,6 +165,7 @@ export class Manager {
     const solids = m.bodies.map((b, i) => [b, i]).filter(([b]) => b.kind === 'solid').map(([, i]) => i);
     const sheets = m.bodies.map((b, i) => [b, i]).filter(([b]) => b.kind === 'sheet').map(([, i]) => i);
     const meshes = m.bodies.map((b, i) => [b, i]).filter(([b]) => b.kind === 'mesh').map(([, i]) => i);
+    const layers = m.bodies.map((b, i) => [b, i]).filter(([b]) => b.kind === 'layer').map(([, i]) => i);
     const rootOpen = this.open.has('root');
     // the configuration shown, as SolidWorks writes it after the part name; right-click to show another
     const configs = m.configs || [];
@@ -203,7 +204,13 @@ export class Manager {
         if (!q) add({ key: 'meshes', depth: 1, label: `Graphics Bodies(${meshes.length})`, icon: 'bodyFolder', children: true, open: o });
         if (o || q) meshes.forEach((i) => bodyRow(i, 2));
       }
-      if (!q) {
+      if (layers.length) { // a drawing's layers
+        const o = this.open.has('layers');
+        if (!q) add({ key: 'layers', depth: 1, label: `${m.toolpath ? 'Toolpaths' : 'Layers'}(${layers.length})`, icon: 'bodyFolder', children: true, open: o,
+          select: () => this.app.setSelection(layers.map((i) => ({ kind: 'body', index: i }))) });
+        if (o || q) layers.forEach((i) => bodyRow(i, 2));
+      }
+      if (!q && !m.drawing) { // a flat drawing has nothing to weigh
         const mat = this.app.active?.material;
         add({ key: 'mat', depth: 1, label: mat ? mat.name : 'Material', note: mat ? '' : '<not specified>', icon: 'material',
           title: mat ? `${materialLabel(mat)}${mat.fromFile ? ' — from the file' : ''}` : 'Double-click to choose a material for mass properties',
@@ -217,7 +224,7 @@ export class Manager {
         toggleEye: () => { this.viewer.setOriginVisible(!ov); this.refresh(); }, select: (e) => this._select({ kind: 'origin', index: 0 }, e) });
     }
     if (rootOpen && asm) this._components(add, bodyRow, q);
-    if (rootOpen && !asm && !q) {
+    if (rootOpen && !asm && !q && !m.drawing) {
       add({ key: 'imp', depth: 1, label: 'Imported1', icon: 'imported', title: `Bodies read from ${m.name}`,
         select: () => this.app.setSelection(m.bodies.map((_, i) => ({ kind: 'body', index: i }))) });
     }

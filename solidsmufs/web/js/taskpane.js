@@ -119,7 +119,7 @@ export class TaskPane {
         r.parent ? item('..', 'folder', () => go(r.parent), 'Up one folder') : null,
         ...r.dirs.map((d) => item(d.name, 'folder', () => go(d.path), d.path)),
         ...r.files.map((f) => item(f.name, iconFor(f.name), () => app.openPath(f.path), f.path, fmtSize(f.size))),
-        !r.dirs.length && !r.files.length ? h('div', { class: 'hint', style: { padding: '8px 12px' }, text: 'No folders or 3D files here.' }) : null].filter(Boolean));
+        !r.dirs.length && !r.files.length ? h('div', { class: 'hint', style: { padding: '8px 12px' }, text: 'No folders or files to open here.' }) : null].filter(Boolean));
     };
     const item = (name, ic, fn, title, size) => {
       const el = h('div', { class: 'fx-item', title }, h('span', { class: 'fx-icon', html: tool(ic) }), h('span', { class: 'fx-name', text: name }), size ? h('span', { class: 'fx-size', text: size }) : null);

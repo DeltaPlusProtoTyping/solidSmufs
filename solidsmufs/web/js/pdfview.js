@@ -98,6 +98,7 @@ export class PdfView {
     this.chip.title = doc.meta.pdf.problem || '';
     this.chip.textContent = `3D model inside (${models.join(', ')}): can't be shown yet`;
     this.modeSwitch.hidden = !hasModel;
+    this.findIn.hidden = !!doc.meta.pdf.picture; // a picture has no text to find
     this.side.hidden = !this.state.side;
     this._buildPages();
     this.setMode(doc.pdfMode);

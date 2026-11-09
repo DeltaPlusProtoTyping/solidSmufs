@@ -13,7 +13,8 @@ import webbrowser
 from pathlib import Path
 
 from . import APP_NAME, settings
-from .kernel.formats import ALL_FORMATS
+from .archive import ChooseInArchive
+from .kernel.formats import ALL_FORMATS, EDRAWINGS_FORMATS, IMAGE_FORMATS, TOOLPATH_FORMATS
 from .server import WEB, App, Native
 
 log = logging.getLogger("solidsmufs")
@@ -31,7 +32,9 @@ def run(argv):
     port = 0
     if "--port" in argv:
         port = int(argv[argv.index("--port") + 1])
-    files = [a for a in argv if not a.startswith("--") and Path(a).suffix.lower() in ALL_FORMATS]
+    valued = ("--port", "--snapshot", "--snapshot-js", "--snapshot-delay")  # options followed by a value, not a file
+    files = [a for i, a in enumerate(argv) if not a.startswith("--") and Path(a).suffix.lower() in ALL_FORMATS
+             and not (i and argv[i - 1] in valued)]
     # development: --snapshot out.png [--snapshot-js "script"] [--snapshot-delay seconds] renders the
     # window off screen, runs the script in the page, saves a picture of the window and quits
     snapshot = argv[argv.index("--snapshot") + 1] if "--snapshot" in argv else None
@@ -119,12 +122,16 @@ def run(argv):
 
         def open_dialog(self, start_dir=None):
             def ask():
-                exts = " ".join(f"*{e}" for e in sorted(ALL_FORMATS))
+                def pats(formats):
+                    return " ".join(f"*{e}" for e in sorted(formats))
                 cad = "*.step *.stp *.igs *.iges *.sldprt *.sldasm *.x_t *.x_b *.xmt_txt *.xmt_bin *.brep"
                 mesh = "*.stl *.obj *.ply *.off *.3mf *.glb *.gltf"
+                drawings = f"*.dxf *.dwg *.slddrw {pats(EDRAWINGS_FORMATS)} *.pdf"
                 start = start_dir or settings.load()["ui"].get("lastDir") or str(Path.home())
-                path, _ = QFileDialog.getOpenFileName(window_ref.get("w"), "Open a part", start,
-                                                      f"Parts and PDFs ({exts});;CAD ({cad});;Meshes ({mesh});;PDF (*.pdf);;All files (*)")
+                path, _ = QFileDialog.getOpenFileName(window_ref.get("w"), "Open a file", start,
+                                                      f"Everything SolidSmurfs opens ({pats(ALL_FORMATS)});;CAD ({cad});;Meshes ({mesh});;"
+                                                      f"Drawings and PDFs ({drawings});;G-code ({pats(TOOLPATH_FORMATS)});;"
+                                                      f"Pictures ({pats(IMAGE_FORMATS)});;Zip archives (*.zip);;All files (*)")
                 if path:
                     settings.set_ui({"lastDir": str(Path(path).parent)})
                 return path or None
@@ -164,6 +171,8 @@ def run(argv):
     for f in files:
         try:
             app.open(f)
+        except ChooseInArchive as e:  # the page shows what's in it once it's up
+            app.browse_first = e.path
         except Exception as e:
             log.warning("could not open %s: %s", f, e)
 
@@ -269,6 +278,8 @@ def run(argv):
             try:
                 doc = app.open(p)
                 window.page.runJavaScript(f"window.SS && SS.attach({json.dumps(doc.id)})")
+            except ChooseInArchive as e:  # a zip of several files: show them, to pick from
+                window.page.runJavaScript(f"window.SS && SS.browse({json.dumps(e.path)})")
             except Exception as e:
                 window.page.runJavaScript(f"window.SS && SS.toast({json.dumps(str(e))}, 'error')")
 
