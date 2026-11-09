@@ -1,4 +1,4 @@
-# Adds "Open with SolidSmurfs" to the right-click menu of CAD and mesh files, for this Windows user
+# Adds "Open with SolidSmurfs" to the right-click menu of CAD, mesh, drawing, PDF, G-code, picture and zip files, for this Windows user
 # only (no admin). Double-click still opens files in whatever program owns them (SolidWorks, etc.).
 #   powershell -ExecutionPolicy Bypass -File tools\register-context-menu.ps1           # add
 #   powershell -ExecutionPolicy Bypass -File tools\register-context-menu.ps1 -Remove   # take it out
@@ -12,7 +12,12 @@ $extensions = @(
     '.step', '.stp', '.igs', '.iges', '.brep', '.brp',
     '.sldprt', '.sldasm',
     '.x_t', '.x_b', '.xmt_txt', '.xmt_bin',
-    '.stl', '.obj', '.ply', '.off', '.3mf', '.glb', '.gltf'
+    '.stl', '.obj', '.ply', '.off', '.3mf', '.glb', '.gltf',
+    '.dxf', '.dwg', '.plt', '.hpgl', '.hgl', '.svg', '.pdf', '.prc', '.u3d',
+    '.slddrw', '.eprt', '.easm', '.edrw', '.eprtx', '.easmx', '.edrwx',
+    '.nc', '.tap', '.gcode', '.gc', '.ngc', '.cnc', '.eia', '.mpf', '.min', '.ptp',
+    '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tif', '.tiff', '.webp', '.tga',
+    '.zip'
 )
 
 foreach ($ext in $extensions) {

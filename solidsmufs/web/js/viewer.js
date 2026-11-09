@@ -207,7 +207,8 @@ export class Viewer {
     this.overlay = new THREE.Group();
     this.annot = new THREE.Group();
     this.preview = new THREE.Group(); // Align Part's axis triad (kept apart from measurement annotations)
-    this.scene.add(this.modelGroup, this.edgeGroup, this.silGroup, this.capGroup, this.refGroup, this.boxGroup, this.selGroup, this.overlay, this.annot, this.preview);
+    this.textGroup = new THREE.Group(); // a drawing's text
+    this.scene.add(this.modelGroup, this.edgeGroup, this.textGroup, this.silGroup, this.capGroup, this.refGroup, this.boxGroup, this.selGroup, this.overlay, this.annot, this.preview);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -429,6 +430,7 @@ export class Viewer {
 
   // ================================================================== model
   clear() {
+    this._clearTexts();
     for (const g of [this.modelGroup, this.edgeGroup, this.capGroup, this.overlay, this.annot, this.silGroup, this.pickScene, this.refGroup, this.boxGroup, this.selGroup]) {
       g.traverse((o) => { if (o.geometry && !o.userData.sharedGeo) o.geometry.dispose(); });
       g.clear();
@@ -460,7 +462,7 @@ export class Viewer {
     this.model = { meta, pos, nrm, idx, segs, verts, nF, nE, nV, faceBody: F.body };
 
     const edgeBody = new Int32Array(nE);
-    for (let e = 0; e < nE; e++) edgeBody[e] = E.faces[e].length ? F.body[E.faces[e][0]] : 0;
+    for (let e = 0; e < nE; e++) edgeBody[e] = E.body ? E.body[e] : E.faces[e].length ? F.body[E.faces[e][0]] : 0;
     this.model.edgeBody = edgeBody;
     const vertBody = new Int32Array(nV);
     {
@@ -484,7 +486,7 @@ export class Viewer {
 
     meta.bodies.forEach((b, bi) => {
       const [f0, fn] = b.faces;
-      if (!fn) { this.bodies.push(null); return; }
+      if (!fn) { this.bodies.push(meta.drawing ? this._lineBody(b, bi) : null); return; }
       const fl = f0 + fn - 1;
       const v0 = F.vstart[f0], v1 = F.vstart[fl] + F.vcount[fl];
       const t0 = F.tstart[f0], t1 = F.tstart[fl] + F.tcount[fl];
@@ -519,14 +521,29 @@ export class Viewer {
     });
 
     this._buildEdges();
+    this._buildTexts();
     this._buildVertexPick();
     this._buildSilhouetteData();
     this._buildReferences();
     this._applyStyle();
     this._rebuildCaps();
-    if (this.bodies.some((b) => !b.visible)) this._applyVisibility();
-    this.fitAll(false, standardViews(this.upAxis).iso);
+    if (this.bodies.some((b) => b && !b.visible)) this._applyVisibility();
+    // a flat drawing opens looking straight down on it, X across and Y up, as it was drawn
+    this.fitAll(false, meta.drawing && !meta.toolpath ? { dir: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0) } : standardViews(this.upAxis).iso);
     this.requestRender();
+  }
+
+  /** A drawing's layer: a body with edges and text but no faces (it's shown and hidden like any other). */
+  _lineBody(b, bi) {
+    const { meta, segs, edgeBody } = this.model;
+    const E = meta.edges, box = new THREE.Box3(), p = new THREE.Vector3();
+    for (let e = 0; e < E.type.length; e++) {
+      if (edgeBody[e] !== bi) continue;
+      for (let i = E.sstart[e] * 2; i < (E.sstart[e] + E.scount[e]) * 2; i++) box.expandByPoint(p.fromArray(segs, i * 3));
+    }
+    for (const t of meta.texts || []) if (t.body === bi) box.expandByPoint(p.fromArray(t.origin));
+    return { index: bi, meta: b, lineOnly: true, visible: !b.hidden, color: b.color || null, geometry: { boundingBox: box },
+      f0: 0, fn: 0, opacity: 1, closed: false };
   }
 
   /** The body's surface: its file finish (metal, roughness, clear coat) under RealView, else the plain look. */
@@ -547,7 +564,7 @@ export class Viewer {
   setRealView(on) {
     this.realView = !!on;
     for (const b of this.bodies) {
-      if (!b) continue;
+      if (!b || b.lineOnly) continue;
       this._finishBody(b);
       b.opacity = this.realView ? (b.finish?.opacity ?? 1) : (b.finish?.opacity ? 1 : b.opacity);
       this._paintBody(b);
@@ -587,17 +604,19 @@ export class Viewer {
       let n = 0;
       for (const e of list) n += E.scount[e];
       const arr = new Float32Array(n * 6), ids = new Float32Array(n * 6);
+      const inks = E.color ? [] : null; // a drawing's lines: each edge's own colour (null: the drawing's ink), per segment
       let k = 0;
       for (const e of list) {
         const s0 = E.sstart[e], sn = E.scount[e];
         arr.set(segs.subarray(s0 * 6, (s0 + sn) * 6), k * 6);
         const [r, g, bl] = idColor(nF + e + 1);
         for (let i = 0; i < sn; i++) ids.set([r, g, bl, r, g, bl], (k + i) * 6);
+        if (inks) inks.push([E.color[e], sn]);
         k += sn;
       }
       const geo = new LineSegmentsGeometry();
       geo.setPositions(arr);
-      const mat = new LineMaterial({ color: 0x0b0d10, linewidth: 1.1, transparent: true, opacity: 0.92, clippingPlanes: this.clipPlanes });
+      const mat = new LineMaterial({ color: inks ? 0xffffff : 0x0b0d10, vertexColors: !!inks, toneMapped: !inks, linewidth: 1.1, transparent: true, opacity: 0.92, clippingPlanes: this.clipPlanes });
       mat.resolution.set(this.width, this.height);
       const lines = new LineSegments2(geo, mat);
       lines.computeLineDistances();
@@ -619,7 +638,160 @@ export class Viewer {
       // target that would make these lines hair-thin, so pick() sets the resolution itself
       plines.onBeforeRender = () => {};
       this.pickScene.add(plines);
-      this.edgeObjs.set(b, { lines, hidden, pick: plines, edges: list });
+      this.edgeObjs.set(b, { lines, hidden, pick: plines, edges: list, inks });
+    }
+  }
+
+  /** A drawing colour as it shows on this background: its ink (null) black on light and white on dark, and
+   *  colours too pale (or too dark) to see against it toned until they can be. Linear RGB, for the GPU. */
+  _inkColor(rgb) {
+    const c = new THREE.Color();
+    if (!rgb) return this.darkScene ? c.set(0xe2e8f0) : c.set(0x0b0d10);
+    let [r, g, b] = rgb;
+    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    if (!this.darkScene && lum > 0.55) { const k = 0.55 / lum; r *= k; g *= k; b *= k; }
+    if (this.darkScene && lum < 0.4) { const k = (0.4 - lum) / (1 - lum); r += (1 - r) * k; g += (1 - g) * k; b += (1 - b) * k; }
+    return c.setRGB(r, g, b, THREE.SRGBColorSpace);
+  }
+
+  /** Colour a drawing's lines and text for the current background. */
+  _paintInks() {
+    for (const [, o] of this.edgeObjs || []) {
+      if (!o.inks) continue;
+      const n = o.inks.reduce((s, [, sn]) => s + sn, 0), cols = new Float32Array(n * 6);
+      let k = 0;
+      for (const [rgb, sn] of o.inks) {
+        const c = this._inkColor(rgb);
+        for (let i = 0; i < sn * 2; i++, k++) cols.set([c.r, c.g, c.b], k * 3);
+      }
+      o.lines.geometry.setColors(cols);
+    }
+    for (const [, meshes] of this.textObjs || []) {
+      for (const mesh of meshes) {
+        const col = mesh.geometry.attributes.color;
+        mesh.userData.inks.forEach((rgb, q) => { const c = this._inkColor(rgb); for (let i = 0; i < 4; i++) col.setXYZ(q * 4 + i, c.r, c.g, c.b); });
+        col.needsUpdate = true;
+      }
+    }
+  }
+
+  // ================================================================== a drawing's text
+  _clearTexts() {
+    for (const o of this.textGroup.children) { o.geometry.dispose(); o.material.dispose(); }
+    for (const t of this._textPages || []) t.dispose();
+    this.textGroup.clear();
+    this.textObjs = null;
+    this._textPages = null;
+  }
+
+  /** Set a drawing's text: each line is drawn once in white into big shared images (2048 px square),
+   *  then shown on a flat strip in the drawing, tinted its colour. Lines lie where the file places them,
+   *  sized by capital height, wrapped and lined up as AutoCAD would (Arial stands in for its fonts). */
+  _buildTexts() {
+    this._clearTexts();
+    const T = this.model.meta.texts;
+    if (!T?.length) return;
+    const SIZE = 2048, MARGIN = 3, CAP_EM = 0.716, BASE_EM = 0.93, ROW_EM = 1.2; // Arial: capitals 0.716 of the font size
+    const font = (px) => `${px}px Arial, "Segoe UI", sans-serif`;
+    const meas = document.createElement('canvas').getContext('2d');
+    // lines, wrapped where MTEXT gives a width (in font pixels at the measuring size)
+    let fontPx = 56;
+    meas.font = font(fontPx);
+    const wrapLines = (t) => {
+      const capPx = fontPx * CAP_EM, wpx = t.wrap > 0 ? t.wrap / (t.height / capPx) / (t.width || 1) : 0;
+      if (!wpx) return t.lines;
+      const out = [];
+      for (const line of t.lines) {
+        const words = line.split(' ');
+        let cur = '';
+        for (const w of words) {
+          const next = cur ? `${cur} ${w}` : w;
+          if (cur && meas.measureText(next).width > wpx * 1.001) { out.push(cur); cur = w; } else cur = next;
+        }
+        out.push(cur);
+      }
+      return out;
+    };
+    const items = T.map((t) => ({ t, lines: wrapLines(t) }));
+    // smaller letters when there's a lot of text, so it fits in a few images
+    let area = 0;
+    for (const it of items) for (const l of it.lines) area += (meas.measureText(l).width + 2 * MARGIN) * fontPx * ROW_EM;
+    const pagesWanted = area / (SIZE * SIZE * 0.8);
+    if (pagesWanted > 6) fontPx = Math.max(14, Math.floor(fontPx * Math.sqrt(6 / pagesWanted)));
+    const row = Math.ceil(fontPx * ROW_EM), base = Math.round(fontPx * BASE_EM), capPx = fontPx * CAP_EM;
+    const pages = [];
+    let page = null, x = 0, y = 0;
+    const newPage = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = SIZE;
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff';
+      g.textBaseline = 'alphabetic';
+      page = { c, g, quads: new Map() };
+      pages.push(page);
+      x = 0; y = 0;
+    };
+    const P = new THREE.Vector3(), X = new THREE.Vector3(), Y = new THREE.Vector3();
+    for (const { t, lines } of items) {
+      if (!lines.some((l) => l.trim())) continue;
+      const h = t.height, n = lines.length, pitch = h * (5 / 3) * (t.spacing || 1);
+      let b0;
+      if (t.mtext) b0 = t.valign === 'top' ? -h : t.valign === 'middle' ? (h + (n - 1) * pitch) / 2 - h : (n - 1) * pitch;
+      else b0 = t.valign === 'top' ? -h : t.valign === 'middle' ? -h / 2 : t.valign === 'bottom' ? 0.3 * h : 0;
+      P.fromArray(t.origin); X.fromArray(t.x); Y.fromArray(t.y);
+      lines.forEach((line, i) => {
+        if (!line.trim()) return;
+        meas.font = font(fontPx);
+        let wpx = meas.measureText(line).width;
+        const shrink = Math.min(1, (SIZE - 2 * MARGIN) / Math.max(wpx, 1)); // too long for one image: smaller letters
+        const px = fontPx * shrink;
+        wpx *= shrink;
+        const cell = Math.ceil(wpx + 2 * MARGIN);
+        if (!page) newPage();
+        if (x + cell > SIZE) { x = 0; y += row; }
+        if (y + row > SIZE) newPage();
+        page.g.font = font(px);
+        page.g.fillText(line, x + MARGIN, y + base * shrink);
+        const k = h / (capPx * shrink); // drawing units per image pixel, up the line
+        const sx = t.fit > 0 ? t.fit / Math.max(wpx * k, 1e-12) : (t.width || 1); // how much wider, along it
+        const lw = wpx * k * sx;
+        const x0 = t.halign === 'center' ? -lw / 2 : t.halign === 'right' ? -lw : 0;
+        const bi = b0 - i * pitch;
+        const a0 = x0 - MARGIN * k * sx, a1 = x0 + (wpx + MARGIN) * k * sx;
+        const top = bi + base * shrink * k, bottom = top - row * k;
+        const corner = (a, u) => [P.x + X.x * a + Y.x * u, P.y + X.y * a + Y.y * u, P.z + X.z * a + Y.z * u];
+        const u0 = x / SIZE, u1 = (x + cell) / SIZE, v0 = 1 - y / SIZE, v1 = 1 - (y + row) / SIZE;
+        if (!page.quads.has(t.body)) page.quads.set(t.body, { pos: [], uv: [], inks: [] });
+        const q = page.quads.get(t.body);
+        q.pos.push(...corner(a0, top), ...corner(a1, top), ...corner(a1, bottom), ...corner(a0, bottom));
+        q.uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
+        q.inks.push(t.color);
+        x += cell;
+      });
+    }
+    this.textObjs = new Map();
+    this._textPages = [];
+    for (const pg of pages) {
+      const tex = new THREE.CanvasTexture(pg.c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+      this._textPages.push(tex);
+      for (const [bi, q] of pg.quads) {
+        const nq = q.inks.length, idx = new Uint32Array(nq * 6);
+        for (let i = 0; i < nq; i++) idx.set([i * 4, i * 4 + 2, i * 4 + 1, i * 4, i * 4 + 3, i * 4 + 2], i * 6);
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(q.pos, 3));
+        g.setAttribute('uv', new THREE.Float32BufferAttribute(q.uv, 2));
+        g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(nq * 12), 3));
+        g.setIndex(new THREE.BufferAttribute(idx, 1));
+        const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: tex, vertexColors: true, transparent: true, depthWrite: false,
+          side: THREE.DoubleSide, toneMapped: false, clippingPlanes: this.clipPlanes }));
+        mesh.renderOrder = 2;
+        mesh.userData.inks = q.inks;
+        this.textGroup.add(mesh);
+        if (!this.textObjs.has(bi)) this.textObjs.set(bi, []);
+        this.textObjs.get(bi).push(mesh);
+      }
     }
   }
 
@@ -750,7 +922,7 @@ export class Viewer {
     const lightLines = (s !== 'shadedEdges' && s !== 'shaded') && this.darkScene;
     const lineColor = lightLines ? 0xe2e8f0 : 0x0b0d10;
     for (const b of this.bodies) {
-      if (!b) continue;
+      if (!b || b.lineOnly) continue;
       const shaded = s === 'shadedEdges' || s === 'shaded';
       b.mesh.material = this.analysis ? this.analysisMat : b.material;
       const m = b.material;
@@ -762,13 +934,14 @@ export class Viewer {
       m.needsUpdate = true;
     }
     for (const [, o] of this.edgeObjs || []) {
-      o.lines.material.color.set(lineColor);
+      if (!o.inks) o.lines.material.color.set(lineColor);
       o.lines.material.opacity = s === 'shadedEdges' ? 0.92 : 1;
       o.lines.material.linewidth = s === 'shadedEdges' ? 1.1 : 1.25;
       o.lines.material.depthTest = s !== 'wire';
     }
-    const showLines = s !== 'shaded' || !!this.analysis;
+    const showLines = s !== 'shaded' || !!this.analysis || !!this.model.meta.drawing; // a drawing is nothing but lines
     this.edgeGroup.visible = showLines;
+    this._paintInks();
     this.silGroup.visible = this.showSilhouettes && showLines;
     if (this.silLines) { this.silLines.material.color.set(lineColor); this.silLines.material.depthTest = s !== 'wire'; }
     this._applyVisibility();
@@ -792,8 +965,11 @@ export class Viewer {
     if (!this.model) return;
     for (const b of this.bodies) {
       if (!b) continue;
-      b.mesh.visible = b.visible && (this.style !== 'wire' || !!this.analysis);
-      b.pick.visible = b.visible;
+      if (!b.lineOnly) {
+        b.mesh.visible = b.visible && (this.style !== 'wire' || !!this.analysis);
+        b.pick.visible = b.visible;
+      }
+      for (const t of this.textObjs?.get(b.index) || []) t.visible = b.visible;
       const eo = this.edgeObjs?.get(b.index);
       if (eo) {
         eo.lines.visible = b.visible;
@@ -821,7 +997,7 @@ export class Viewer {
   setBodyVisible(bi, on) { const b = this.bodies[bi]; if (!b) return; b.visible = on; this._applyVisibility(); }
   showAll() { this.bodies.forEach((b) => b && (b.visible = true)); this._applyVisibility(); }
   isolate(bis) { const keep = new Set(bis); this.bodies.forEach((b) => b && (b.visible = keep.has(b.index))); this._applyVisibility(); }
-  setBodyColor(bi, rgb) { const b = this.bodies[bi]; if (!b) return; b.override = rgb; this._paintBody(b); this._rebuildCaps(); this.requestRender(); }
+  setBodyColor(bi, rgb) { const b = this.bodies[bi]; if (!b || b.lineOnly) return; b.override = rgb; this._paintBody(b); this._rebuildCaps(); this.requestRender(); }
   setBodyOpacity(bi, a) { const b = this.bodies[bi]; if (!b) return; b.opacity = a; this._applyStyle(); this.requestRender(); }
 
   bodyColor(bi) {
@@ -1126,6 +1302,16 @@ export class Viewer {
   _highlight(ent, color, isHover) {
     const m = this.model;
     if (!m || ent.kind === 'plane' || ent.kind === 'origin') return;
+    if (ent.kind === 'body' && this.bodies[ent.index]?.lineOnly) { // a drawing's layer: its lines
+      const E = m.meta.edges, parts = [];
+      for (let e = 0; e < E.type.length; e++) if (m.edgeBody[e] === ent.index) parts.push(this.entityPoints({ kind: 'edge', index: e }));
+      if (!parts.length || !this.bodies[ent.index].visible) return;
+      const all = new Float32Array(parts.reduce((n, p) => n + p.length, 0));
+      let k = 0;
+      parts.forEach((p) => { all.set(p, k); k += p.length; });
+      this._fatLine(all, color, isHover ? 2.2 : 2.6);
+      return;
+    }
     if (ent.kind === 'face' || ent.kind === 'body') {
       const faces = ent.kind === 'body' ? (() => { const b = this.bodies[ent.index]; return b ? Array.from({ length: b.fn }, (_, i) => b.f0 + i) : []; })() : [ent.index];
       const F = m.meta.faces;

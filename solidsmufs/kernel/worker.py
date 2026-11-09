@@ -20,7 +20,8 @@ import numpy as np
 
 from . import looks, massprops, measure
 from .geom import unit
-from .formats import ALL_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, MESH_FORMATS, PARASOLID_FORMATS, PDF_FORMATS, PRC_FORMATS, U3D_FORMATS  # noqa: F401
+from .formats import (ALL_FORMATS, ARCHIVE_FORMATS, ASSEMBLY_FORMATS, CAD_FORMATS, DRAWING_FORMATS, IMAGE_FORMATS,  # noqa: F401
+                      MESH_FORMATS, PARASOLID_FORMATS, PDF_FORMATS, PICTURE_FORMATS, PRC_FORMATS, TOOLPATH_FORMATS, U3D_FORMATS)
 from .model import jsonable
 
 
@@ -107,6 +108,41 @@ class Session:
             self.post = lambda: _mesh_cache_write(path, "pdf", model, meta, blob, None, orient)
         return meta, blob
 
+    def _open_picture(self, path, progress):
+        """A picture, or the preview picture inside a drawing, shown as pages by the PDF page view."""
+        from .model import Model
+        from .pictures import open_picture
+        progress("Reading the picture", 0.3)
+        if self.pdf is not None:
+            self.pdf.close()
+        ext = Path(path).suffix.lower()
+        self.pdf, what = open_picture(path, ext)
+        self.model = Model(Path(path).name, path, what)
+        self.model.kind = "pdf"
+        self.model.info["Picture"] = self.pdf.size_text()
+        if ext == ".dwg":
+            self.model.notices.append("This is the DWG's preview picture. To see its lines and measure them, "
+                                      "install the free ODA File Converter, then open it again.")
+        elif ext not in IMAGE_FORMATS:
+            self.model.notices.append("This is the preview picture saved in the file, as it looked when it was last saved.")
+        self.exact = True
+        meta, blob = self.model.payload()
+        meta["pdf"] = {"pages": self.pdf.pages(), "title": self.pdf.title(), "models": [], "problem": None, "picture": True}
+        return jsonable(meta), blob
+
+    def _shown_as_pages(self, path):
+        """Is this file shown by the page view (a PDF, a picture, or a preview picture)?"""
+        ext = Path(path).suffix.lower()
+        if ext == ".dwg":
+            from .pictures import dwg_converter
+            return dwg_converter() is None
+        return ext in PDF_FORMATS or ext in PICTURE_FORMATS
+
+    def _open_pages(self, path, progress):
+        if Path(path).suffix.lower() in PDF_FORMATS:
+            return self._open_pdf(path, progress)
+        return self._open_picture(path, progress)
+
     def _pdf_model(self, path):
         """The mesh model from the 3D models in a PDF, in mm."""
         from ..formats import prc, u3d
@@ -162,8 +198,8 @@ class Session:
         self.path, self.quality, self.config, self.orient = path, quality, config, _rotation(orient)
         if password is not None:
             self.password = password
-        if Path(path).suffix.lower() in PDF_FORMATS:
-            meta, blob = self._open_pdf(path, progress)
+        if self._shown_as_pages(path):
+            meta, blob = self._open_pages(path, progress)
             return {"meta": meta, "blob": blob, "exact": True}
         hit = _mesh_cache_read(path, quality, config, self.orient)
         if hit is not None:
@@ -221,10 +257,10 @@ class Session:
             self.orient = _rotation(orient)
         ext = Path(path).suffix.lower()
         name = Path(path).name
-        if ext in PDF_FORMATS:
+        if self._shown_as_pages(path):
             self.path, self.quality = path, quality
-            return self._open_pdf(path, progress)
-        if ext not in ALL_FORMATS:
+            return self._open_pages(path, progress)
+        if ext not in ALL_FORMATS or ext in ARCHIVE_FORMATS:
             raise ValueError(f"Can't open {ext or 'this kind of'} files.")
         self.path, self.quality = path, quality
         t0 = time.perf_counter()
@@ -243,6 +279,21 @@ class Session:
             self.model = self._load_parasolid(path, name, ext, quality, progress)
         elif ext in ASSEMBLY_FORMATS:
             self.model = self._load_assembly(path, name, quality, progress)
+        elif ext in DRAWING_FORMATS:
+            from . import drawing
+            from ..formats.dxf import DxfError
+            try:
+                if ext == ".dwg":
+                    self.model = _load_dwg(path, name, progress)
+                else:
+                    self.model = drawing.load(path, name, progress)
+            except DxfError as e:
+                raise ValueError(str(e)) from None
+            self.orient = None  # a flat drawing isn't turned by Align Part
+        elif ext in TOOLPATH_FORMATS:
+            from . import toolpath
+            self.model = toolpath.load(path, name, progress)
+            self.orient = None  # a program's moves are where the machine makes them
         else:
             from . import meshio
             self.model = meshio.load(path, name, MESH_FORMATS[ext], progress)
@@ -996,7 +1047,39 @@ def _closest_on_triangles(p, pts, tri):
     return out[int(best.argmin())]
 
 
+def _load_dwg(path, name, progress):
+    """A DWG drawing, turned into DXF by the ODA File Converter (in a folder of its own, as it converts folders)
+    and read as one."""
+    import subprocess
+    from . import drawing
+    from .pictures import dwg_converter
+    exe = dwg_converter()
+    progress("Converting the DWG", 0.1)
+    with tempfile.TemporaryDirectory(prefix="solidsmufs-dwg-") as tmp:
+        src, out = Path(tmp) / "in", Path(tmp) / "out"
+        src.mkdir()
+        out.mkdir()
+        shutil.copyfile(path, src / "drawing.dwg")
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            subprocess.run([str(exe), str(src), str(out), "ACAD2018", "DXF", "0", "1", "*.DWG"],
+                           creationflags=flags, timeout=300, capture_output=True)
+        except subprocess.TimeoutExpired:
+            raise ValueError("The ODA File Converter took too long with this DWG.") from None
+        dxf = out / "drawing.dxf"
+        if not dxf.is_file():
+            raise ValueError("The ODA File Converter couldn't convert this DWG (it may be damaged).")
+        m = drawing.load(dxf, name, progress, fmt="DWG")
+    m.path = path
+    m.info.pop("DXF version", None)  # that's what it was converted to; the DWG's own version is in its first bytes
+    version = Path(path).read_bytes()[:6].decode("ascii", "replace")
+    info = {"DWG version": f"AutoCAD {drawing.VERSIONS.get(version, version)}"}
+    m.info = {**info, **m.info}
+    return m
+
+
 EXACT_CMDS = ("measure", "massprops", "bbox", "section_props", "holes")
+SOLID_CMDS = ("massprops", "bbox", "section_props", "holes", "align", "facing", "save_step")  # need faces: not for a 2D drawing
 
 
 def main(conn):
@@ -1026,7 +1109,9 @@ def main(conn):
                 if s.model is None:
                     raise ValueError("Nothing is loaded.")
                 if s.model.kind == "pdf" and not cmd.startswith("pdf_"):
-                    raise ValueError("This PDF has no 3D model to work on.")
+                    raise ValueError("This has no 3D model to work on.")
+                if s.model.kind == "drawing" and cmd in SOLID_CMDS:
+                    raise ValueError("That works on 3D parts. A drawing or a toolpath is just lines, with no solid to work on.")
                 if cmd in EXACT_CMDS and not s.exact:
                     s.ensure_exact(progress=progress)
                 result = fn(**kw)

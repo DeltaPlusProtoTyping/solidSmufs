@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import __version__, settings
+from . import __version__, archive, settings
 from .documents import Documents, WorkerGone
 from .kernel.formats import ALL_FORMATS
 
@@ -59,6 +59,7 @@ class App:
         self.native = native or Native()
         self.upload_dir = Path(tempfile.mkdtemp(prefix="solidsmufs-up-"))
         self.httpd = None
+        self.browse_first = None  # a zip given at launch that holds several files: the page shows them
 
     def start(self, port=0):
         app = self
@@ -97,13 +98,15 @@ class App:
         shutil.rmtree(self.upload_dir, ignore_errors=True)
 
     def open(self, path, quality=None):
+        """Open a file (or one inside a zip). A zip holding several files raises archive.ChooseInArchive."""
         path = str(Path(path))
-        if not Path(path).is_file():
-            raise FileNotFoundError(f"Can't find {path}")
         if Path(path).suffix.lower() not in ALL_FORMATS:
             raise ValueError(f"SolidSmufs can't open {Path(path).suffix or 'this kind of'} files.")
+        real, shown = archive.resolve(path)
+        if not Path(real).is_file():
+            raise FileNotFoundError(f"Can't find {path}")
         q = quality or settings.load()["ui"].get("quality", "normal")
-        doc = self.docs.open(path, q)
+        doc = self.docs.open(real, q, shown)
         if not str(path).startswith(str(self.upload_dir)):
             settings.add_recent(path)
         return doc
@@ -205,12 +208,16 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if parts == ["hello"]:
                 s = settings.load()
+                browse, self.ctx.browse_first = self.ctx.browse_first, None
                 return self._json({"app": "SolidSmufs", "version": __version__, "native": self.ctx.native.available,
                                    "recent": s["recent"], "ui": s["ui"], "formats": sorted(ALL_FORMATS),
-                                   "docs": [d.status() for d in self.ctx.docs.all()]})
+                                   "docs": [d.status() for d in self.ctx.docs.all()], "browse": browse})
             if parts == ["open"] and method == "POST":
                 b = self._jbody()
-                doc = self.ctx.open(b["path"], b.get("quality"))
+                try:
+                    doc = self.ctx.open(b["path"], b.get("quality"))
+                except archive.ChooseInArchive as e:  # the page shows what's in the zip, to pick from
+                    return self._json({"browse": e.path})
                 return self._json(doc.status())
             if parts == ["upload"] and method == "POST":
                 q = parse_qs(url.query)
@@ -218,7 +225,10 @@ class _Handler(BaseHTTPRequestHandler):
                 name = re.sub(r"[^\w.\- ()]", "_", name) or "upload.step"
                 folder = Path(tempfile.mkdtemp(dir=self.ctx.upload_dir))
                 (folder / name).write_bytes(self._body())
-                doc = self.ctx.docs.open(folder / name, settings.load()["ui"].get("quality", "normal"), name)
+                try:
+                    doc = self.ctx.open(folder / name)
+                except archive.ChooseInArchive as e:
+                    return self._json({"browse": e.path})
                 return self._json(doc.status())
             if parts == ["settings"]:
                 if method == "POST":
@@ -359,6 +369,9 @@ def _fs_roots():
 
 
 def _fs_list(path):
+    inside = archive.split(str(Path(path).expanduser()))
+    if inside is not None:  # a zip, or a folder in one: browsed like a folder
+        return archive.listing(*inside)
     p = Path(path).expanduser()
     if not p.is_dir():
         raise ValueError(f"Not a folder: {path}")
@@ -374,6 +387,8 @@ def _fs_list(path):
         try:
             if e.is_dir():
                 dirs.append({"name": name, "path": e.path})
+            elif archive.is_archive(name):
+                dirs.append({"name": name, "path": e.path, "zip": True})
             elif Path(name).suffix.lower() in ALL_FORMATS:
                 files.append({"name": name, "path": e.path, "size": e.stat().st_size})
         except OSError:

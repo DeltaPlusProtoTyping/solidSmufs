@@ -115,6 +115,13 @@ class Model:
             },
             "buffers": layout,
         }
+        if getattr(self, "drawing", False):  # a 2D drawing: edges have their own colours and layers, and there's text
+            meta["drawing"] = True
+            meta["edges"]["color"] = self.edge_color
+            meta["edges"]["body"] = [int(b) for b in self.edge_body]
+            meta["texts"] = self.texts
+            if getattr(self, "toolpath", False):  # a G-code program: in 3D, so it opens in an iso view
+                meta["toolpath"] = True
         return meta, b"".join(parts)
 
 
