@@ -618,6 +618,7 @@ class App {
     def('reload', { label: 'Rebuild', icon: 'reload', kb: 'Ctrl+B', tip: 'Read the file again from disk', run: () => this.reload() });
     def('close', { label: 'Close', icon: 'close', kb: 'Ctrl+W', tip: 'Close the active document', run: () => this.active && this.closeDoc(this.active) });
     def('closeAll', { label: 'Close All', icon: 'close', tip: 'Close every open document', needsDoc: false, run: () => [...this.docs].forEach((d) => this.closeDoc(d)) });
+    def('print', { label: 'Print', icon: 'print', kb: 'Ctrl+P', tip: "A PDF's pages, or the model as shown on white", needsDoc: false, run: () => this.print() });
     def('savePicture', { label: 'Save Picture', icon: 'camera', tip: 'Save the graphics area as a PNG', run: () => this.savePicture() });
     def('saveStep', { label: 'Save As STEP', icon: 'file', tip: 'Save the part or assembly as a STEP file, for anyone without SolidWorks', run: () => this.saveStep() });
     def('copyPicture', { label: 'Copy Picture', icon: 'camera', kb: 'Ctrl+Shift+C', tip: 'Copy the graphics area to the clipboard', run: () => this.copyPicture() });
@@ -691,6 +692,36 @@ class App {
       const r = await api.saveImage(url, name);
       if (r.path) toast(`Saved ${r.path.split(/[\\/]/).pop()}`);
     } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ================================================================== printing
+  /** What's on show, on paper: a PDF's or picture's pages (all of them, or the range asked for), or the
+   *  model as it's shown, on white. */
+  async print() {
+    const doc = this.active;
+    if (!doc?.meta) { toast('Open a file first', 'info'); return; }
+    if (!this.native) { toast('Printing needs the desktop window.', 'warn'); return; }
+    const pages = doc.meta.pdf && doc.pdfMode === 'pages';
+    if (!pages && !doc.meta.bodies.length) { toast('There is nothing to print yet.', 'warn'); return; }
+    const name = doc.name;
+    let busy = null;
+    const later = setTimeout(() => { busy = toast(`Printing ${name}…`, 'info', 600000); }, 1500); // after the dialog
+    try {
+      const r = pages ? await api.printPages(doc.id) : await api.printImage(this.viewer.printPicture(), name);
+      if (r.sheets) toast(`Sent ${name} to the printer (${r.sheets} ${r.sheets === 1 ? 'sheet' : 'sheets'})`);
+    } catch (e) { toast(e.message, 'error'); } finally { clearTimeout(later); busy?.remove?.(); }
+  }
+
+  /** For printing from the command line: a picture of a document's model on white, once it's on show; null
+   *  until then (each call moves it along). */
+  printPicture(id) {
+    const doc = this.docs.find((d) => d.id === id);
+    if (!doc?.meta?.bodies?.length) return null;
+    if (this.active !== doc) { this.activate(doc); doc.printShown = performance.now(); return null; }
+    if (doc.meta.pdf && doc.pdfMode === 'pages') { this.setPdfMode('model'); doc.printShown = performance.now(); return null; }
+    doc.printShown ||= performance.now();
+    if (performance.now() - doc.printShown < 1500) return null; // let the fit and the silhouettes settle
+    return this.viewer.printPicture();
   }
 
   async saveStep() {
@@ -812,6 +843,7 @@ class App {
       const lk = k.toLowerCase();
       if (ctrl && lk === 'o') { e.preventDefault(); this.run('open'); return; }
       if (ctrl && lk === 'w') { e.preventDefault(); this.run('close'); return; }
+      if (ctrl && lk === 'p') { e.preventDefault(); this.run('print'); return; }
       if (ctrl && lk === 'f') { e.preventDefault(); this.$('cmd-search').focus(); return; }
       if (ctrl && k === 'Tab') { e.preventDefault(); this.cycleDocs(e.shiftKey ? -1 : 1); return; }
       if (k === 'F1' || k === '?') { e.preventDefault(); this.run('help'); return; }

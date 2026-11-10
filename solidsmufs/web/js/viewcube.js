@@ -132,7 +132,7 @@ export class ViewCube {
     this.triCam.updateMatrixWorld();
   }
 
-  render(renderer, w, h, quat, showCube = true) {
+  render(renderer, w, h, quat, showCube = true, showTriad = true) {
     this.syncCamera(quat);
     const r = this.rect(w);
     renderer.setScissorTest(true);
@@ -142,11 +142,13 @@ export class ViewCube {
       renderer.clearDepth();
       renderer.render(this.scene, this.camera);
     }
-    const t = this.triRect(h);
-    renderer.setViewport(t.x, h - t.y - t.h, t.w, t.h);
-    renderer.setScissor(t.x, h - t.y - t.h, t.w, t.h);
-    renderer.clearDepth();
-    renderer.render(this.triScene, this.triCam);
+    if (showTriad) {
+      const t = this.triRect(h);
+      renderer.setViewport(t.x, h - t.y - t.h, t.w, t.h);
+      renderer.setScissor(t.x, h - t.y - t.h, t.w, t.h);
+      renderer.clearDepth();
+      renderer.render(this.triScene, this.triCam);
+    }
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, w, h);
   }

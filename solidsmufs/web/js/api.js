@@ -46,6 +46,8 @@ export const api = {
   removeRecent: (path) => call('POST', '/api/recent/remove', { path }),
   openDialog: () => call('POST', '/api/dialog/open', {}),
   saveImage: (data, name) => call('POST', '/api/dialog/save-image', { data, name }),
+  printImage: (data, name) => call('POST', '/api/print/image', { data, name }),
+  printPages: (id) => call('POST', `/api/docs/${id}/print`, {}),
   reveal: (path) => call('POST', '/api/reveal', { path }),
   title: (title) => call('POST', '/api/title', { title }).catch(() => {}),
   fsRoots: () => call('GET', '/api/fs/roots'),

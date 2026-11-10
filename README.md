@@ -194,6 +194,31 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   plus stock weight. **Hole Report:** every hole by diameter, count and depth, with modelled
   thread sizes, and the rest matched to tap drills, minor diameters, clearance holes and drills. **Quote Summary:** all of it in one copyable list.
 
+## Printing
+
+**Print** (Ctrl+P, File menu or the quick access toolbar) prints what's on show. A PDF or a picture prints its pages,
+all of them or a range, each fitted to the paper, with the paper turned to suit each page. A model prints as it's shown, on
+white, without the view cube or triad. No Acrobat needed.
+
+From a script or the command line, with no window (each run is a process of its own that ends once the job is with
+Windows' spooler; exit code 0 when everything printed, 1 when anything didn't, 2 for a mistake in the command):
+
+```
+SolidSmurfs.exe --print drawing.pdf part.step --printer "\\server\KONICA MINOLTA" --copies 2 --pages 1-4,9
+SolidSmurfs.exe --print-to out.pdf drawing.pdf        (to a PDF file instead of a printer)
+SolidSmurfs.exe /t drawing.pdf "\\server\KONICA MINOLTA"    (Acrobat's form, so scripts written for it work)
+SolidSmurfs.exe /p /h drawing.pdf                     (the default printer, no dialog)
+SolidSmurfs.exe /p drawing.pdf                        (the print dialog first)
+```
+
+`SolidSmurfs.exe` is a window program, so cmd and PowerShell don't wait for it (Acrobat's the same). To wait for the job
+and get the exit code, use `start /wait "" SolidSmurfs.exe ...` in cmd, or
+`(Start-Process SolidSmurfs.exe -ArgumentList ... -Wait -PassThru).ExitCode` in PowerShell. When it ends, the job is in
+the printer's queue.
+
+Without `--printer` it uses the default printer. A printer is named in full (as `Get-Printer` lists it), never by part
+of its name. `--pages` takes `1-4,9`, `7-` (to the end) or `-2` (the last two). Several files go out as one job.
+
 ## SpaceMouse
 
 A 3Dconnexion SpaceMouse works without any extra software beyond its usual driver: the app reads the

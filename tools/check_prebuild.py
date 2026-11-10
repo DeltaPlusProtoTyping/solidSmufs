@@ -1,8 +1,10 @@
 """Checks a build from tools/solidsmurfs.spec before it's handed out: the files the app loads at run time are in it (the U3D
-decoder, the OCR script), and the frozen app starts, shows its page and opens a real STEP part and a picture in worker processes. Run from the repository root, with gmsh
+decoder, the OCR script), and the frozen app starts, shows its page and opens a real STEP part and a picture in worker processes, then prints both to a
+PDF with no window. Run from the repository root, with gmsh
 installed: python tools/check_prebuild.py picture.png"""
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -59,9 +61,19 @@ def main():
                              env=env, cwd=tmp, timeout=DELAY + 120)
         log = tmp / "SolidSmufs" / "log.txt"
         text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+        # printing with no window, to a PDF file: the model drawn off screen, the picture as a page (Qt's print support
+        # must be in the build)
+        printed = tmp / "printed.pdf"
+        printing = subprocess.run([str(program.resolve()), "--print-to", str(printed), str(part), str(picture_file)],
+                                  env=env, cwd=tmp, timeout=300)
+        sheets = len(re.findall(rb"/Type\s*/Page\b", printed.read_bytes())) if printed.is_file() else 0
+        log_after = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
     print(text)
     if run.returncode != 0:
         fail(f"the app exited with {run.returncode}")
+    if printing.returncode != 0 or sheets != 2:
+        print(log_after[len(text):])
+        fail(f"printing to a PDF exited with {printing.returncode} and made {sheets} sheets, not 2")
     if "Traceback" in text:
         fail("the log has a traceback")
     # a first open reads the exact geometry along with the tessellation, so there's no later "exact geometry ready" line

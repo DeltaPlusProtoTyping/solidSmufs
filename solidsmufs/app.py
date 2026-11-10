@@ -12,7 +12,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from . import APP_NAME, settings
+from . import APP_NAME, printing, settings
 from .archive import ChooseInArchive
 from .kernel.formats import ALL_FORMATS, EDRAWINGS_FORMATS, IMAGE_FORMATS, TOOLPATH_FORMATS
 from .server import WEB, App, Native
@@ -32,9 +32,17 @@ def run(argv):
     port = 0
     if "--port" in argv:
         port = int(argv[argv.index("--port") + 1])
+    try:
+        job = printing.parse_job(argv)  # printing with no window: --print, --print-to, or Acrobat's /t and /p
+    except printing.PrintError as e:
+        log.error("print: %s", e)
+        print(e, file=sys.stderr)
+        return 2
     valued = ("--port", "--snapshot", "--snapshot-js", "--snapshot-delay")  # options followed by a value, not a file
     files = [a for i, a in enumerate(argv) if not a.startswith("--") and Path(a).suffix.lower() in ALL_FORMATS
              and not (i and argv[i - 1] in valued)]
+    if job:
+        files = job["files"]
     # development: --snapshot out.png [--snapshot-js "script"] [--snapshot-delay seconds] renders the
     # window off screen, runs the script in the page, saves a picture of the window and quits
     snapshot = argv[argv.index("--snapshot") + 1] if "--snapshot" in argv else None
@@ -64,7 +72,7 @@ def run(argv):
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
     import getpass
     instance_key = f"SolidSmufs-{getpass.getuser()}"
-    if not browser_mode and not snapshot:
+    if not browser_mode and not snapshot and not job:  # a print job is a process of its own, start to finish
         # Explorer starts one process per selected file at once: the lock picks a single first
         # window, and the others wait for its listener instead of opening windows of their own
         from PySide6.QtCore import QLockFile
@@ -154,6 +162,55 @@ def run(argv):
                 path, _ = QFileDialog.getSaveFileName(window_ref.get("w"), title, start, file_filter)
                 return path or None
             return bridge(ask)
+
+        def _ask_printer(self, title, pages=0):
+            """The print dialog, on the GUI thread: a printer set up as chosen, or None if cancelled."""
+            def ask():
+                from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+                printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+                last = settings.load()["ui"].get("printer")
+                if last and last in printing.printer_names():
+                    printer.setPrinterName(last)
+                printer.setDocName(title)
+                dlg = QPrintDialog(printer, window_ref.get("w"))
+                dlg.setWindowTitle(f"Print {title}")
+                opts = QPrintDialog.PrintDialogOption
+                dlg.setOption(opts.PrintPageRange, pages > 1)
+                dlg.setOption(opts.PrintSelection, False)
+                dlg.setOption(opts.PrintCurrentPage, False)
+                if pages > 1:
+                    dlg.setMinMax(1, pages)
+                if dlg.exec() != QPrintDialog.DialogCode.Accepted:
+                    return None
+                if printer.outputFormat() == QPrinter.OutputFormat.NativeFormat:
+                    settings.set_ui({"printer": printer.printerName()})
+                return printer
+            return bridge(ask)
+
+        def print_pages(self, doc):
+            pages = doc.meta["pdf"]["pages"]
+            printer = self._ask_printer(doc.name, len(pages))
+            if printer is None:
+                return None
+            which = printing.dialog_pages(printer, len(pages))
+            job = printing.Job(printer, bridge)  # pages render on this thread; the printer is spoken to on the GUI thread
+            try:
+                job.add_pages(doc, pages, which)
+            finally:
+                job.finish()
+            return job.sheets
+
+        def print_image(self, data, name):
+            img = printing.image_from_data_url(data)
+            printer = self._ask_printer(name)
+            if printer is None:
+                return None
+            job = printing.Job(printer, bridge)
+            try:
+                job.add_image(img)
+            finally:
+                job.finish()
+            return job.sheets
 
         def reveal(self, path):
             if sys.platform == "win32" and Path(path).exists():
@@ -283,6 +340,16 @@ def run(argv):
             except Exception as e:
                 window.page.runJavaScript(f"window.SS && SS.toast({json.dumps(str(e))}, 'error')")
 
+    if job:
+        try:
+            code = _print_headless(job, app, Window, window_ref)
+        except printing.PrintError as e:
+            log.error("print: %s", e)
+            print(e, file=sys.stderr)
+            code = 1
+        app.stop()
+        return code
+
     window = Window()
     window_ref["w"] = window
     if snapshot:
@@ -367,3 +434,85 @@ def run(argv):
         reader.stop()
     app.stop()
     return code
+
+
+def _print_headless(job, app, Window, window_ref):
+    """Print the opened files with no window on screen, then return the exit code: 0 when every file printed.
+    Pages print straight from the document; a model is drawn in a window kept off screen, then printed as a
+    picture. The job is handed to the spooler before this returns, so the process can simply end."""
+    from PySide6.QtCore import QEventLoop, Qt, QTimer
+    from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+
+    def wait(ms):
+        loop = QEventLoop()
+        QTimer.singleShot(ms, loop.quit)
+        loop.exec()
+
+    docs = list(app.docs.all())
+    failed = len(job["files"]) - len(docs)  # couldn't be opened at all (logged by run)
+    if not docs:
+        raise printing.PrintError("None of the files could be opened.")
+    deadline = time.monotonic() + 600
+    while any(d.state == "loading" for d in docs) and time.monotonic() < deadline:
+        wait(100)
+
+    title = docs[0].name if len(docs) == 1 else f"{len(docs)} files"
+    if job["mode"] == "dialog":
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setDocName(title)
+        dlg = QPrintDialog(printer)
+        dlg.setWindowTitle(f"Print {title}")
+        lone = docs[0].meta["pdf"]["pages"] if len(docs) == 1 and docs[0].state == "ready" and docs[0].meta.get("pdf") else []
+        dlg.setOption(QPrintDialog.PrintDialogOption.PrintPageRange, len(lone) > 1)
+        if len(lone) > 1:
+            dlg.setMinMax(1, len(lone))
+        if dlg.exec() != QPrintDialog.DialogCode.Accepted:
+            return 1
+    else:
+        printer = printing.make_printer(job["printer"], job["out"], job["copies"], title)
+
+    out = printing.Job(printer)
+    window = None
+    try:
+        for d in docs:
+            if d.state != "ready":
+                log.error("print: %s: %s", d.name, d.error or d.locked or "didn't finish opening")
+                print(f"{d.name}: {d.error or d.locked or 'did not finish opening'}", file=sys.stderr)
+                failed += 1
+                continue
+            if d.meta.get("pdf"):  # a PDF, a picture or a preview: its pages
+                pages = d.meta["pdf"]["pages"]
+                which = printing.dialog_pages(printer, len(pages)) if job["mode"] == "dialog" \
+                    else printing.pick_pages(job.get("pages"), len(pages))
+                out.add_pages(d, pages, which)
+                log.info("print: %s, %d page(s)", d.name, len(which))
+                continue
+            if window is None:  # a model: the page draws it, off screen
+                window = Window()
+                window_ref["w"] = window
+                window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+                window.resize(1600, 1100)
+                window.show()
+            data, until = None, time.monotonic() + 300
+            while not data and time.monotonic() < until:
+                wait(400)
+                got = {}
+                loop = QEventLoop()
+                window.page.runJavaScript(
+                    f"window.SS && SS.printPicture ? SS.printPicture({json.dumps(d.id)}) : null", 0,
+                    lambda r: (got.setdefault("r", r), loop.quit()))
+                QTimer.singleShot(60000, loop.quit)
+                loop.exec()
+                data = got.get("r")
+            if not data:
+                log.error("print: %s: the view wasn't drawn", d.name)
+                print(f"{d.name}: the view could not be drawn", file=sys.stderr)
+                failed += 1
+                continue
+            out.add_image(printing.image_from_data_url(data))
+            log.info("print: %s, a picture of the model", d.name)
+    finally:
+        out.finish()
+        if window is not None:
+            window.hide()  # not close(): closing would save this off-screen size as the window's own
+    return 0 if out.sheets and not failed else 1

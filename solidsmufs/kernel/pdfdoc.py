@@ -76,15 +76,20 @@ class PdfFile:
         from PySide6.QtCore import QRect, QSize
         from PySide6.QtPdf import QPdfDocumentRenderOptions
         s = self.doc.pagePointSize(page)
-        pw, ph = (s.height(), s.width()) if turns % 2 else (s.width(), s.height())
+        W, H = max(round(s.width() * scale), 1), max(round(s.height() * scale), 1)  # the page unturned
+        # drawn unturned and turned here: QtPdf's own rotation squashes a turned page into the wrong shape. Turn 1 is
+        # a quarter turn clockwise: the turned page's (x, y) is the page's (y, H - x), as pdfview.js maps it back
+        turns %= 4
+        cx, cy, cw, ch = {0: (x, y, w, h), 1: (y, H - x - w, h, w), 2: (W - x - w, H - y - h, w, h),
+                          3: (W - y - h, x, h, w)}[turns]
         o = QPdfDocumentRenderOptions()
-        o.setRotation(QPdfDocumentRenderOptions.Rotation(turns % 4))
-        o.setScaledSize(QSize(max(round(pw * scale), 1), max(round(ph * scale), 1)))
-        o.setScaledClipRect(QRect(x, y, w, h))
-        img = self.doc.render(page, QSize(w, h), o)
+        o.setScaledSize(QSize(W, H))
+        o.setScaledClipRect(QRect(cx, cy, cw, ch))
+        img = self.doc.render(page, QSize(cw, ch), o)
         if img.isNull():
             raise ValueError("That page couldn't be drawn.")
         raw = np.frombuffer(img.constBits(), np.uint8, img.sizeInBytes()).reshape(img.height(), img.bytesPerLine() // 4, 4)
+        raw = np.rot90(raw[:ch, :cw], -turns)
         px = raw[:h, :w, [2, 1, 0, 3]].astype(np.uint16)  # Qt keeps BGRA in memory
         # on white paper: PDFium leaves bare paper transparent, and what's under a tile mustn't show through
         a = px[..., 3:]

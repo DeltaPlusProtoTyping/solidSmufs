@@ -13,7 +13,7 @@ const TABS = [
   { id: 'wagner', label: 'Tools', items: ['stock', 'holes', 'quote', '|', 'align', 'massProps', 'measure', '|', 'explorer'] },
 ];
 const HUD = ['zoomFit', 'zoomArea', 'prevView', 'sectionView', '|', 'orientation', 'displayStyle', 'hideShow', 'appearance', 'scene', 'viewSettings'];
-const QAT = ['open', 'reload', 'savePicture', '|', 'select', 'options'];
+const QAT = ['open', 'reload', 'print', 'savePicture', '|', 'select', 'options'];
 const SHORTCUTS = ['measure', 'massProps', 'sectionView', 'zoomFit', 'normalTo', 'orientation', 'displayStyle', 'hideShow', 'appearance', 'bbox', 'holes', 'stock'];
 const MENUS = {
   File: (app) => [
@@ -24,6 +24,7 @@ const MENUS = {
     { label: 'Close All', disabled: !app.docs.length, action: () => app.run('closeAll') },
     { sep: true },
     { label: 'Save As STEP…', icon: 'file', disabled: !app.meta || app.meta.kind !== 'brep' || !app.native, action: () => app.run('saveStep') },
+    { label: 'Print…', icon: 'print', kb: 'Ctrl+P', disabled: !app.active?.meta || !app.native, action: () => app.run('print') },
     { label: 'Save Picture…', icon: 'camera', disabled: !app.meta, action: () => app.run('savePicture') },
     { label: 'Copy Picture', icon: 'camera', kb: 'Ctrl+Shift+C', disabled: !app.meta, action: () => app.run('copyPicture') },
     { sep: true },

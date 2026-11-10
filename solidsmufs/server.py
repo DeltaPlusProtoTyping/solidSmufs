@@ -45,6 +45,14 @@ class Native:
         """Ask where to save a file; the chosen path, or None."""
         return None
 
+    def print_pages(self, doc):
+        """Ask how to print a document's pages and print them: the number of sheets, or None if not printed."""
+        return None
+
+    def print_image(self, data, name):
+        """Ask how to print a picture (a PNG data URL) and print it: the number of sheets, or None."""
+        return None
+
     def reveal(self, path):
         os.startfile(str(Path(path).parent)) if hasattr(os, "startfile") else None
 
@@ -245,6 +253,9 @@ class _Handler(BaseHTTPRequestHandler):
             if parts == ["dialog", "save-image"] and method == "POST":
                 b = self._jbody()
                 return self._json({"path": self.ctx.native.save_image(b["data"], b.get("name", "view.png"))})
+            if parts == ["print", "image"] and method == "POST":  # a picture of the model, on white
+                b = self._jbody()
+                return self._json({"sheets": self.ctx.native.print_image(b["data"], b.get("name", "SolidSmurfs"))})
             if parts == ["reveal"] and method == "POST":
                 self.ctx.native.reveal(self._jbody()["path"])
                 return self._json({"ok": True})
@@ -308,6 +319,10 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(200, doc.request("pdf_tile", timeout=120, page=int(b["page"]), scale=float(b["scale"]),
                                                x=int(b["x"]), y=int(b["y"]), w=int(b["w"]), h=int(b["h"]),
                                                turns=int(b.get("turns", 0))), "application/octet-stream")
+        if what == "print":  # every page of a PDF or picture, fitted to the paper
+            if doc.state != "ready" or not (doc.meta or {}).get("pdf"):
+                return self._error("Only a PDF's or a picture's pages print this way.", 409)
+            return self._json({"sheets": self.ctx.native.print_pages(doc)})
         if what == "pdf-select":
             return self._json(doc.request("pdf_select", timeout=60, page=int(b["page"]), ax=b["ax"], ay=b["ay"],
                                           bx=b["bx"], by=b["by"]))

@@ -7,7 +7,8 @@ import sys
 def _hand_to_running_window(argv):
     """When a SolidSmurfs window is already open, give it the files straight through its pipe and
     stop: this skips loading Qt, so a right-click on another part opens its tab at once."""
-    if sys.platform != "win32" or any(a.startswith("--") for a in argv):
+    # options, and Acrobat's print switches (/t, /p): those runs are their own process, start to finish
+    if sys.platform != "win32" or any(a.startswith("--") or a.lower() in ("/t", "/p", "/h") for a in argv):
         return False
     import getpass
     import json

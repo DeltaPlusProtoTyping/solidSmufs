@@ -405,7 +405,7 @@ export class Viewer {
     r.render(this.bgScene, this.bgCam);
     r.clearDepth();
     r.render(this.scene, cam);
-    this.cube.render(r, this.width, this.height, this.rig.quat, this.showCube);
+    this.cube.render(r, this.width, this.height, this.rig.quat, this.showCube && !this.forPaper, !this.forPaper);
     this._placeLabels();
   }
 
@@ -1725,6 +1725,28 @@ export class Viewer {
     r.setSize(this.width, this.height, false);
     this.requestRender();
     return url;
+  }
+
+  /** The view as it is, for paper: on white instead of the scene, without the view cube or triad, and with a
+   *  drawing's lines inked for a light background. About 3200 pixels across its longer side. */
+  printPicture() {
+    const u = this.bgMat.uniforms, top = u.top.value.clone(), bottom = u.bottom.value.clone();
+    const dark = this.darkScene;
+    u.top.value.set(0xffffff);
+    u.bottom.value.set(0xffffff);
+    this.darkScene = false;
+    this.forPaper = true;
+    this._applyStyle();
+    try {
+      return this.screenshot(Math.min(4, Math.max(2, 3200 / Math.max(this.width, this.height, 1))));
+    } finally {
+      u.top.value.copy(top);
+      u.bottom.value.copy(bottom);
+      this.darkScene = dark;
+      this.forPaper = false;
+      this._applyStyle();
+      this.requestRender();
+    }
   }
 
   // ================================================================== input
