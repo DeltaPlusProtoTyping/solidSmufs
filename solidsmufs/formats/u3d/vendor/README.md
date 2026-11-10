@@ -10,10 +10,9 @@
 | Purpose | Decodes Adobe's private U3D mesh ("RHAdobeMeshResource"), which the ECMA-363 standard doesn't define |
 | Used by | `../rhadobe.py`, which runs it in PySide6's JavaScript engine |
 
-**This file has no license.** The project states none, so its author keeps all rights. It was copied in for internal
-use only, at Wagner Machine Co.'s own decision and risk, knowing this. Don't distribute SolidSmurfs with this file in it
-outside Wagner unless the author grants a license. Wagner chose (2026-11-10) to include it in the prebuilt copies, which
-are for Wagner's own use and stay in this private repository's releases: keep the repository and its releases private.
+**This file has no license.** The project states none, so its author keeps all rights. It was copied in knowing this,
+and it's in the prebuilt copies in this repository's releases. Don't pass SolidSmurfs on with this file in it unless the
+author grants a license.
 
 One thing to raise if the author is ever asked: the project's `prc-brep.js` says in its header "Part of pdf-3d-extractor (MIT)",
 but the project has no license file, and this file doesn't say the same. That isn't enough to rely on.

@@ -6,8 +6,7 @@ from pathlib import Path
 ROOT = Path(SPECPATH).parent
 PKG = ROOT / "solidsmufs"
 ICONS = PKG / "web" / "img"
-# Everything in the package goes in, the U3D decoder in formats/u3d/vendor too. That decoder has no license and is for
-# Wagner's internal use only (see its README.md), so these builds are too: they stay in this private repository's releases.
+# Everything in the package goes in, the U3D decoder in formats/u3d/vendor too (it has no license: see its README.md).
 
 hidden, datas = [], []
 for f in sorted(PKG.rglob("*")):

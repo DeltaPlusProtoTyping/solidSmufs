@@ -7,6 +7,44 @@ CommandManager, FeatureManager tree, PropertyManager, heads-up view toolbar, Mea
 Properties windows), and it opens STEP, IGES, SolidWorks parts, Parasolid and mesh files without
 any CAD program installed.
 
+## How it compares
+
+How SolidSmurfs sits next to the other programs a shop uses to look at customer files (November 2026). SolidSmurfs'
+times were measured on our PC; the others are typical times, not measured here. Prices are US list prices before tax
+and vary by reseller.
+
+| | Cost per seat | Starts in | Opens a file in | Files stay on the PC | Measure 3D | Print hover tips | Runs on |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **SolidSmurfs** | $0 | ≈2.5 s | ≈1–1.5 s (a part seen before: under 0.5 s) | Yes | Yes, with mass properties, holes, stock size | Fits (H/h), metric → inches, French → English, with OCR | Windows, macOS, Linux |
+| SOLIDWORKS Standard | ≈$2,820/yr, or ≈$4,000–4,200 + ≈$1,295/yr | 20–60 s | 2–10 s | Yes | Yes (full CAD) | No | Windows |
+| eDrawings Viewer | Free | 5–10 s | 2–5 s | Yes | Yes (no mass properties) | No | Windows, macOS |
+| DraftSight Premium | ≈$599/yr (Professional ≈$299) | 5–10 s | 1–3 s | Yes | Some (2D CAD first) | No | Windows, macOS, Linux |
+| Adobe Acrobat Pro | ≈$240/yr (Reader free) | 2–5 s | 1–3 s | Yes, unless saved to Adobe's cloud | Only in 3D PDFs | No (has OCR) | Windows, macOS |
+| FreeCAD | Free | 5–15 s | 2–10 s | Yes | Yes (full CAD) | No | Windows, macOS, Linux |
+| Autodesk Viewer | Free (Autodesk account) | a browser tab | ≈1–5 min, uploaded and converted first | **No: every file is uploaded to Autodesk's cloud** | Basic | No | Any browser |
+
+What each one opens (✓ opens, ◐ partly, — no, ? not confirmed):
+
+| File type | SolidSmurfs | SOLIDWORKS | eDrawings | DraftSight | Acrobat | FreeCAD | Autodesk Viewer |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| STEP, IGES, BREP | ✓ | ✓ | ✓ | ? | — | ✓ | ✓ |
+| SolidWorks parts and assemblies | ✓ | ✓ | ✓ | — | — | — | ✓ |
+| SolidWorks drawings | ◐ preview picture | ✓ | ✓ | — | — | — | ? |
+| Parasolid | ✓ | ✓ | ✓ | — | — | — | ✓ |
+| Inventor, Creo, NX, CATIA | — | ◐ | ◐ Inventor, Solid Edge | — | — | — | ✓ |
+| Meshes (STL, OBJ, PLY, 3MF, glTF) | ✓ | ◐ | ◐ STL | — | — | ✓ | ✓ |
+| DXF and DWG | ✓ (DWG after a one-time converter set-up) | ✓ | ✓ | ✓ edits | — | ◐ | ✓ |
+| PDF prints | ✓ with hover tips and OCR | — | — | ◐ underlay | ✓ with OCR and markup | — | ✓ |
+| 3D PDFs (PRC, U3D) | ✓ measurable | — | — | — | ✓ | — | — |
+| G-code | ✓ 3D toolpath per tool | — | — | — | — | ◐ CAM workbench | — |
+| Plotter files and SVG | ✓ | — | — | ? | — | ◐ SVG | ? |
+| eDrawings files | ◐ preview picture | ✓ | ✓ | — | — | — | ? |
+| Scans and pictures | ✓ with OCR hover tips | — | — | ◐ | ◐ | — | ✓ |
+| Zip files | ✓ | — | — | — | — | — | ✓ |
+
+SOLIDWORKS is still what you need to model and change parts and make drawings; Acrobat is still the tool for marking up
+and signing PDFs; DraftSight for editing DWG. SolidSmurfs is for looking, measuring and quoting.
+
 ## Run it
 
 Double-click the **SolidSmurfs** shortcut on the desktop (drop files on it to open them), or
@@ -40,6 +78,14 @@ powershell -ExecutionPolicy Bypass -File tools\register-context-menu.ps1 -Remove
 | SolidWorks assembly (2015 and newer) | `.sldasm` | own reader: the component list and placements, then each part as above (needs the part files) |
 | Parasolid | `.x_t` `.x_b` `.xmt_txt` `.xmt_bin` | own reader, then OpenCASCADE |
 | Meshes | `.stl` `.obj` `.ply` `.off` `.3mf` `.glb` `.gltf` | own readers; faces split at sharp creases so flat faces and holes can be picked |
+| PDF prints | `.pdf` | PDFium (through Qt): pages, find, select, thumbnails, password-protected files; hover tips for fits, inches and French, with Windows OCR |
+| 3D PDFs and their models | `.pdf` `.prc` `.u3d` | own PRC and U3D readers (Adobe's private U3D mesh through a third-party decoder) |
+| DXF and DWG drawings | `.dxf` `.dwg` | own DXF reader: layers, blocks, dimensions, text; DWG through the free ODA File Converter, set up from inside the app |
+| Plotter files and SVG | `.plt` `.hpgl` `.hgl` `.svg` | own readers, as drawings with layers |
+| G-code | `.nc` `.tap` `.gcode` `.gc` `.ngc` `.cnc` `.eia` `.mpf` `.min` `.ptp` | own reader: the toolpath in 3D, a body per tool, arcs, drilling cycles, cutting time |
+| Pictures and scans | `.png` `.jpg` `.bmp` `.gif` `.tif` (multi-page) `.webp` `.tga` | Qt, shown as pages, with OCR hover tips |
+| SolidWorks drawings, eDrawings | `.slddrw` `.eprt` `.easm` `.edrw` (and the `x` versions) | the preview picture saved in the file |
+| Zip files | `.zip` | pick a file inside; unpacked once, so an assembly finds its parts |
 
 CAD files are measured on the exact geometry. Meshes are measured on their triangles.
 
@@ -183,6 +229,5 @@ py -3.15 -m venv .venv
 
 The repository's Releases page has builds for Windows, macOS (Apple Silicon and Intel, 14 or newer) and Linux (x64,
 glibc 2.35 or newer) that need no Python. Pushing a `v*` tag makes them (`.github/workflows/prebuilds.yml`, using
-`tools/solidsmurfs.spec`), after `tools/check_prebuild.py` has opened a part in each. They aren't signed, and they're as
-private as this repository. They include the unlicensed U3D decoder (`solidsmufs/formats/u3d/vendor/README.md`), so
-they're for Wagner's internal use only: keep this repository and its releases private.
+`tools/solidsmurfs.spec`), after `tools/check_prebuild.py` has opened a part in each. They aren't signed. They include the
+unlicensed U3D decoder (`solidsmufs/formats/u3d/vendor/README.md`).

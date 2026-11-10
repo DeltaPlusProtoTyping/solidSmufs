@@ -32,8 +32,6 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
             --title "SolidSmurfs $GITHUB_REF_NAME" --notes "$(cat <<'EOF'
-          Internal builds: keep this repository and these files private.
-
           - **Windows:** unzip, then double-click `Install SolidSmurfs.cmd`. It installs for you alone, with no admin: a Start menu
             shortcut, "Open with SolidSmurfs" on the right-click menu, and an entry in Settings > Apps to uninstall it. Or just
             run `SolidSmurfs.exe` from the unzipped folder. It isn't signed, so SmartScreen may ask first (More info, Run anyway).
@@ -41,7 +39,7 @@ jobs:
           - **macOS (14 or newer):** unzip, then run `xattr -cr SolidSmurfs.app` once, because it isn't notarized. Pick `arm64` for Apple Silicon, `x64` for Intel.
           - **Linux (x64, glibc 2.35 or newer):** untar and run `SolidSmurfs/SolidSmurfs`.
 
-          These builds include the unlicensed third-party decoder for Adobe's private U3D mesh (see `solidsmufs/formats/u3d/vendor/README.md`), for Wagner's internal use only: don't pass them on outside Wagner.
+          These builds read 3D PDFs that use Adobe's private U3D mesh, with a third-party decoder that has no license (see `solidsmufs/formats/u3d/vendor/README.md`).
 
           The builds don't change file associations.
           EOF
