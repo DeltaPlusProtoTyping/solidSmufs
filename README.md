@@ -2,6 +2,10 @@
 
 # SolidSmurfs
 
+**[Download SolidSmurfs](https://github.com/DeltaPlusProtoTyping/solidSmufs/releases/latest)** for Windows, macOS or
+Linux. No Python needed. On Windows, unzip it and double-click `Install SolidSmurfs.cmd`. All versions are on the
+[Releases page](https://github.com/DeltaPlusProtoTyping/solidSmufs/releases).
+
 Wagner Machine Co.'s 3D part viewer for Windows. It looks and works like SolidWorks (menus,
 CommandManager, FeatureManager tree, PropertyManager, heads-up view toolbar, Measure and Mass
 Properties windows), and it opens STEP, IGES, SolidWorks parts, Parasolid and mesh files without
