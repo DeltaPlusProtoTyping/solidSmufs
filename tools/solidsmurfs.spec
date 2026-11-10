@@ -6,12 +6,12 @@ from pathlib import Path
 ROOT = Path(SPECPATH).parent
 PKG = ROOT / "solidsmufs"
 ICONS = PKG / "web" / "img"
-# no license, internal use only, so never in a build that gets handed out: see its README.md
-LEFT_OUT = PKG / "formats" / "u3d" / "vendor"
+# Everything in the package goes in, the U3D decoder in formats/u3d/vendor too. That decoder has no license and is for
+# Wagner's internal use only (see its README.md), so these builds are too: they stay in this private repository's releases.
 
 hidden, datas = [], []
 for f in sorted(PKG.rglob("*")):
-    if not f.is_file() or "__pycache__" in f.parts or LEFT_OUT in f.parents:
+    if not f.is_file() or "__pycache__" in f.parts:
         continue
     if f.suffix == ".py":
         parts = f.relative_to(ROOT).with_suffix("").parts

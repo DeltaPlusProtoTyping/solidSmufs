@@ -270,26 +270,63 @@ def _qt_box(doc, page, start, length):
             max(r.y() + r.height() for r in rects))
 
 
+MAX_LOOKUPS = 1500  # QtPdf box lookups a page may take (each costs ms on a real drawing); past it, OCR covers the page
+
+
 def pdf_text_marks(doc, page, text):
-    """(marks, lines' texts, word boxes) for a page of a QPdfDocument whose text (getAllText) is `text`: a box per
-    word, as asking for every letter's box is slow on a busy sheet."""
-    lines = []
-    for m in re.finditer(r"[^\r\n]+", text):
-        line = []
-        for w in re.finditer(r"\S+", m.group()):
-            box = _qt_box(doc, page, m.start() + w.start(), len(w.group()))
-            if box:
-                line.append((w.group(), *box))
-        if line:
-            lines.append(line)
-    letters = sum(len(w[0]) for ln in lines for w in ln)
-    if lines and letters / len(lines) < 3:  # one letter at a time (some CAD exports): rebuild from each letter's place
-        chars = []
-        for i, ch in enumerate(text):
-            box = _qt_box(doc, page, i, 1) if ch.strip() else None
-            chars.append((ch, *(box or (0, 0, 0, 0))))
-        lines = _rebuilt_lines(chars)
-    return _from_lines(lines)
+    """(marks, lines' texts, word boxes) for a page of a QPdfDocument whose text (getAllText) is `text`, all at once."""
+    reader = PdfTextReader(doc, page, text)
+    while not reader.step(1e9):
+        pass
+    return reader.result()
+
+
+class PdfTextReader:
+    """A page's own text read into hover marks a slice at a time (step), so the page's pictures can be drawn in
+    between. QtPdf finds a run's box slowly (a few ms each on a real drawing), so it's asked once per line, and the
+    line's box shared among its words by their letters. A size on a drawing is usually a text of its own, so its box
+    is the line's, exactly. A PDF with one letter per line (some CAD exports) is rebuilt from each letter's place."""
+
+    def __init__(self, doc, page, text):
+        import time
+        self._clock = time.perf_counter
+        self.doc, self.page, self.text = doc, page, text
+        found = [m for m in re.finditer(r"[^\r\n]+", text) if m.group().strip()]
+        letters = sum(len(m.group().strip()) for m in found)
+        self.by_letter = bool(found) and letters / len(found) < 3
+        if self.by_letter:
+            self.todo = [] if letters > MAX_LOOKUPS else [(i, 1) for i, ch in enumerate(text) if ch.strip()]
+        else:
+            self.todo = [(m.start(), len(m.group())) for m in found[:MAX_LOOKUPS]]
+        self.boxes = {}  # (start, length) -> box
+        self.at = 0
+
+    def step(self, seconds):
+        """Look up boxes for about `seconds`; True once every one is done."""
+        end = self._clock() + seconds
+        while self.at < len(self.todo) and self._clock() < end:
+            start, n = self.todo[self.at]
+            self.boxes[(start, n)] = _qt_box(self.doc, self.page, start, n)
+            self.at += 1
+        return self.at >= len(self.todo)
+
+    def result(self):
+        if self.by_letter:
+            chars = [(ch, *(self.boxes.get((i, 1)) or (0, 0, 0, 0))) for i, ch in enumerate(self.text)]
+            return _from_lines(_rebuilt_lines(chars)) if self.todo else ([], [], [])
+        lines = [_share(self.text[s:s + n], self.boxes[(s, n)]) for s, n in self.todo if self.boxes.get((s, n))]
+        return _from_lines([ln for ln in lines if ln])
+
+
+def _share(line, box):
+    """A line's words with boxes from the line's box, each as wide as its share of the line's letters."""
+    x0, y0, x1, y1 = box
+    words = [(w.group(), w.start(), w.end()) for w in re.finditer(r"\S+", line)]
+    if not words:
+        return []
+    first, last = words[0][1], words[-1][2]
+    per = (x1 - x0) / max(last - first, 1)
+    return [(w, x0 + (a - first) * per, y0, x0 + (b - first) * per, y1) for w, a, b in words]
 
 
 # ---------------------------------------------------------------------------------------------- OCR

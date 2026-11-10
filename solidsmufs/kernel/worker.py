@@ -190,53 +190,45 @@ class Session:
     def pdf_tile(self, **kw):
         return self.pdf.tile(**kw)
 
+    SLICE = 0.25  # s: the most one hover-marks request works, so the page's pictures never wait long behind it
+
     def pdf_marks(self, page):
-        """What hovering a page's words shows (kernel/printmarks.py): {"marks", "ocr": "pending" | "done" | "off" |
-        "error", "metric"}. The page's own text answers at once; Windows OCR then reads the page's picture on a
-        thread of its own (one page at a time), so the page keeps drawing meanwhile. Ask again to see what OCR added."""
+        """What hovering a page's words shows (kernel/printmarks.py): {"marks", "reading": bool, "ocr": "pending" |
+        "done" | "off" | "error", "metric"}. Done a slice at a time: while "reading", ask again (the page's own text,
+        then drawing the page for OCR, in strips); Windows OCR then reads it on a thread of its own (one page at a
+        time) while "ocr" is "pending". Every request is short, so the page's pictures are drawn in between."""
         import threading
         from . import printmarks
+        from .pdfdoc import PdfFile
         if not hasattr(self, "_marks_lock"):
             self._marks_lock, self._ocr_turn = threading.Lock(), threading.Semaphore(1)
             self._marks = getattr(self, "_marks", {})
         with self._marks_lock:
             entry = self._marks.get(page)
         if entry is None:
-            from .pdfdoc import PdfFile
-            marks, texts, words = [], [], []
-            if isinstance(self.pdf, PdfFile):
-                marks, texts, words = printmarks.pdf_text_marks(self.pdf.doc, page, self.pdf.page_text(page))
-            entry = {"marks": marks, "texts": texts, "words": words, "ocr": "pending" if printmarks.ocr_available() else "off"}
+            reader = printmarks.PdfTextReader(self.pdf.doc, page, self.pdf.page_text(page)) if isinstance(self.pdf, PdfFile) else None
+            entry = {"marks": [], "texts": [], "words": [], "reader": reader, "drawing": None,
+                     "ocr": "pending" if printmarks.ocr_available() else "off"}
             with self._marks_lock:
                 self._marks[page] = entry
-            if entry["ocr"] == "pending":
-                img, k = self._ocr_picture(page)
+        end = time.perf_counter() + self.SLICE
+        if entry["reader"] is not None:  # the page's own text
+            if entry["reader"].step(self.SLICE):
+                marks, texts, words = entry["reader"].result()
+                with self._marks_lock:
+                    entry.update(marks=marks, texts=texts, words=words, reader=None)
+        elif entry["ocr"] == "pending" and not entry.get("started"):  # drawing the page for OCR, then reading it
+            if entry["drawing"] is None:
+                entry["drawing"] = _OcrDrawing(self.pdf, page)
+            if entry["drawing"].step(end):
+                img, k = entry["drawing"].image, entry["drawing"].k
+                entry["drawing"], entry["started"] = None, True
                 threading.Thread(target=self._ocr_page, args=(entry, img, k), daemon=True).start()
         with self._marks_lock:
             texts = [t for e in self._marks.values() for t in e["texts"]]
-            return {"marks": list(entry["marks"]), "ocr": entry["ocr"],
+            reading = entry["reader"] is not None or (entry["ocr"] == "pending" and not entry.get("started"))
+            return {"marks": list(entry["marks"]), "reading": reading, "ocr": entry["ocr"],
                     "metric": printmarks.is_metric(texts, [m for e in self._marks.values() for m in e["marks"]])}
-
-    def _ocr_picture(self, page):
-        """(the page drawn for OCR on white, points per pixel). Drawn here, as QtPdf is only used on this thread."""
-        from PySide6.QtCore import QSize, Qt
-        from PySide6.QtGui import QImage, QPainter
-        from . import printmarks
-        from .pdfdoc import PdfFile
-        if isinstance(self.pdf, PdfFile):
-            s = self.pdf.doc.pagePointSize(page)
-            scale = min(printmarks.OCR_DPI / 72, printmarks.OCR_MAX / max(s.width(), s.height(), 1))
-            src = self.pdf.doc.render(page, QSize(max(round(s.width() * scale), 1), max(round(s.height() * scale), 1)))
-            k = 1 / scale
-        else:  # a picture: its own pixels
-            from .pictures import POINTS_PER_PX
-            src, k = self.pdf.images[page], POINTS_PER_PX
-        img = QImage(src.size(), QImage.Format.Format_RGB32)
-        img.fill(Qt.GlobalColor.white)  # PDFium leaves bare paper transparent
-        p = QPainter(img)
-        p.drawImage(0, 0, src)
-        p.end()
-        return img, k
 
     def _ocr_page(self, entry, img, k):
         from . import printmarks
@@ -1111,6 +1103,55 @@ def _closest_on_triangles(p, pts, tri):
         best[closer] = d[closer]
         out[closer] = cand[closer]
     return out[int(best.argmin())]
+
+
+class _OcrDrawing:
+    """A page drawn for OCR (400 dpi, on white) in strips, a few per request (step), so the page's own pictures can be
+    drawn in between. QtPdf is only used on the worker's main thread. A picture is used as it is."""
+    STRIP = 1024  # px
+
+    def __init__(self, pdf, page):
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QImage
+        from . import printmarks
+        from .pdfdoc import PdfFile
+        self.pdf, self.page, self.y = pdf, page, 0
+        if isinstance(pdf, PdfFile):
+            s = pdf.doc.pagePointSize(page)
+            self.scale = min(printmarks.OCR_DPI / 72, printmarks.OCR_MAX / max(s.width(), s.height(), 1))
+            self.w, self.h = max(round(s.width() * self.scale), 1), max(round(s.height() * self.scale), 1)
+            self.k = 1 / self.scale
+            self.image = QImage(self.w, self.h, QImage.Format.Format_RGB32)
+            self.image.fill(Qt.GlobalColor.white)  # PDFium leaves bare paper transparent
+        else:  # a picture: its own pixels, on white
+            from .pictures import POINTS_PER_PX
+            from PySide6.QtGui import QPainter
+            src = pdf.images[page]
+            self.image = QImage(src.size(), QImage.Format.Format_RGB32)
+            self.image.fill(Qt.GlobalColor.white)
+            p = QPainter(self.image)
+            p.drawImage(0, 0, src)
+            p.end()
+            self.k, self.h = POINTS_PER_PX, 0
+
+    def step(self, end):
+        """Draw strips until perf_counter() passes `end`; True once the whole page is drawn."""
+        from PySide6.QtCore import QRect, QSize
+        from PySide6.QtGui import QPainter
+        from PySide6.QtPdf import QPdfDocumentRenderOptions
+        while self.y < self.h:
+            n = min(self.STRIP, self.h - self.y)
+            o = QPdfDocumentRenderOptions()
+            o.setScaledSize(QSize(self.w, self.h))
+            o.setScaledClipRect(QRect(0, self.y, self.w, n))
+            strip = self.pdf.doc.render(self.page, QSize(self.w, n), o)
+            p = QPainter(self.image)
+            p.drawImage(0, self.y, strip)
+            p.end()
+            self.y += n
+            if time.perf_counter() > end:
+                break
+        return self.y >= self.h
 
 
 def _load_dwg(path, name, progress):

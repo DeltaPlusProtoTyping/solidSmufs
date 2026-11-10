@@ -290,7 +290,6 @@ export class PdfView {
 
   // what the current view needs, nearest its middle first; replaces whatever was waiting
   _wanted() {
-    this.hints.need(this._visible());
     const s = this.scroller, dpr = window.devicePixelRatio || 1, want = [];
     const left = s.scrollLeft, right = left + s.clientWidth, top = s.scrollTop, bottom = top + s.clientHeight;
     const mx = (left + right) / 2, my = (top + bottom) / 2;
@@ -310,6 +309,7 @@ export class PdfView {
     this.queue = want;
     this._pump();
     this._retire();
+    this.hints.need(); // once the pages in view are drawn
   }
 
   _key3(p, ix, iy) { return `${p.W}:${ix}:${iy}`; }

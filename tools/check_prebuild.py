@@ -1,5 +1,5 @@
-"""Checks a build from tools/solidsmurfs.spec before it's handed out: the unlicensed decoder isn't in it, and the frozen
-app starts, shows its page and opens a real STEP part and a picture in worker processes. Run from the repository root, with gmsh
+"""Checks a build from tools/solidsmurfs.spec before it's handed out: the files the app loads at run time are in it (the U3D
+decoder, the OCR script), and the frozen app starts, shows its page and opens a real STEP part and a picture in worker processes. Run from the repository root, with gmsh
 installed: python tools/check_prebuild.py picture.png"""
 
 import os
@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 DELAY = 90  # seconds the app runs before it takes its picture and quits
-LEFT_OUT = "u3d-rhadobe-mesh"
+NEEDED = ("u3d-rhadobe-mesh.js", "ocr.ps1")  # read from disk when they're used, so a missing one only shows later
 
 
 def fail(message):
@@ -41,9 +41,10 @@ def main():
     bundle, program = locate()
     if not program.is_file():
         fail(f"no {program}")
-    found = [str(f) for f in bundle.rglob("*") if LEFT_OUT in f.name]
-    if found:
-        fail(f"the unlicensed decoder is in the build: {found}")
+    names = {f.name for f in bundle.rglob("*")}
+    missing = [n for n in NEEDED if n not in names]
+    if missing:
+        fail(f"not in the build: {missing}")
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)

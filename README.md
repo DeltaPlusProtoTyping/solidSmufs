@@ -184,5 +184,5 @@ py -3.15 -m venv .venv
 The repository's Releases page has builds for Windows, macOS (Apple Silicon and Intel, 14 or newer) and Linux (x64,
 glibc 2.35 or newer) that need no Python. Pushing a `v*` tag makes them (`.github/workflows/prebuilds.yml`, using
 `tools/solidsmurfs.spec`), after `tools/check_prebuild.py` has opened a part in each. They aren't signed, and they're as
-private as this repository. They leave out the unlicensed U3D decoder (`solidsmufs/formats/u3d/vendor/README.md`), so
-3D PDFs using Adobe's private mesh report it as unreadable; run from source to read those.
+private as this repository. They include the unlicensed U3D decoder (`solidsmufs/formats/u3d/vendor/README.md`), so
+they're for Wagner's internal use only: keep this repository and its releases private.

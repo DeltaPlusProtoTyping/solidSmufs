@@ -38,10 +38,14 @@ export class PrintHints {
     this.hide();
   }
 
-  /** The pages now in view: ask for any not asked yet. */
-  need(pages) {
+  /** Ask for the hints of the pages in view not asked yet, once their pictures are all drawn: reading a page's
+   *  words takes the worker a while, and the page itself mustn't wait behind it. */
+  need() {
+    clearTimeout(this._later);
     if (!this.doc) return;
-    for (const p of pages) if (!this.store.pages[p.i]) this._ask(p.i);
+    const v = this.v;
+    if (v.busy || v.queue?.length) { this._later = setTimeout(() => this.need(), 250); return; }
+    for (const p of v._visible()) if (!this.store.pages[p.i]) { this._ask(p.i); return; } // one at a time, the view first
   }
 
   async _ask(i) {
@@ -49,12 +53,24 @@ export class PrintHints {
     store.pages[i] = { ...(store.pages[i] || { marks: [] }), waiting: true };
     let r;
     try { r = await api.pdfMarks(doc.id, i); } catch { delete store.pages[i]; return; }
-    store.pages[i] = { marks: r.marks, ocr: r.ocr, waiting: r.ocr === 'pending' };
-    if (store.inches === null && (r.metric || r.ocr !== 'pending')) store.inches = !!r.metric; // metric prints turn it on
+    store.pages[i] = { marks: r.marks, ocr: r.ocr, reading: r.reading, waiting: r.reading || r.ocr === 'pending' };
+    if (store.inches === null && !r.reading && (r.metric || r.ocr !== 'pending')) store.inches = !!r.metric; // metric prints turn it on
     if (doc !== this.doc) return; // another document's on screen: it asks again when it's back
     this._button();
     this._status();
-    if (r.ocr === 'pending') setTimeout(() => { if (doc === this.doc && store.pages[i]?.waiting) this._ask(i); }, AGAIN);
+    if (r.reading) this._again(i, 0); // more of the page to read: the next slice, between the page's pictures
+    else if (r.ocr === 'pending') this._again(i, AGAIN); // OCR is reading it on its own
+    else this.need(); // the next page in view, if any
+  }
+
+  /** Ask about page i again after `ms`, once no page pictures are waiting to be drawn. */
+  _again(i, ms) {
+    const doc = this.doc;
+    setTimeout(() => {
+      if (doc !== this.doc || !this.store.pages[i]?.waiting) return;
+      if (this.v.busy || this.v.queue?.length) { this._again(i, 150); return; }
+      this._ask(i);
+    }, ms);
   }
 
   _inches(on) {
@@ -69,7 +85,7 @@ export class PrintHints {
 
   _status() {
     const pages = Object.values(this.store?.pages || {});
-    const reading = pages.some((e) => e.ocr === 'pending'), failed = pages.some((e) => e.ocr === 'error');
+    const reading = pages.some((e) => e.reading || e.ocr === 'pending'), failed = pages.some((e) => e.ocr === 'error');
     this.status.hidden = !reading && !failed;
     this.status.textContent = reading ? 'Reading the print…' : 'OCR couldn\'t read this print';
     this.status.title = reading ? 'Windows OCR is reading the page, for sizes drawn as lines' : '';
