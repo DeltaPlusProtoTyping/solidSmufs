@@ -31,6 +31,7 @@ class App {
     this.units = new Units('MMGS');
     this.viewer = new Viewer(this.$('viewport'));
     this.pdf = new PdfView(this.$('viewport'), (mode) => this.setPdfMode(mode));
+    this.pdf.app = this; // the PDF editor saves signatures in the settings and marks unsaved tabs
     this.viewer.formatLength = (mm) => this.units.len(mm); // labels drawn in the graphics area use the document units
     this.docs = [];
     this.active = null;
@@ -124,6 +125,7 @@ class App {
     this.units.setSystem(system, decimals);
     this.save({ system, decimals });
     if (this.viewer.shownBox) this.viewer.showBox(this.viewer.shownBox); // its size labels in the new units
+    else if (this.viewer.shownCyl) this.viewer.showCylinder(this.viewer.shownCyl);
     this.refreshAll();
     this.tools.refresh();
   }
@@ -311,6 +313,14 @@ class App {
     this.refreshAll();
   }
 
+  // is the active document a PDF that can be edited (and saved)? Shows its pages if it is
+  pdfEditing() {
+    const d = this.active;
+    if (!d?.meta?.pdf || d.meta.pdf.picture) { toast('Only a PDF can be edited and saved here.', 'info'); return false; }
+    if (d.pdfMode !== 'pages') this.setPdfMode('pages');
+    return true;
+  }
+
   // a 3D PDF's two sides: its model, and its pages
   setPdfMode(mode) {
     const doc = this.active;
@@ -325,7 +335,30 @@ class App {
     requestAnimationFrame(() => this.viewer.requestRender());
   }
 
+  // a PDF with edits not saved: Save, Don't Save, or Cancel (false: keep it open)
+  async unsavedOk(doc, verb = 'closing') {
+    if (!doc.pdfDirty) return true;
+    const answer = await new Promise((res) => {
+      let done = false;
+      const pick = (a) => { done = true; d.close(); res(a); };
+      const d = modal('Unsaved changes', h('div', { class: 'pe-confirm' },
+        h('p', { text: `Save the changes to ${doc.name} before ${verb}?` }),
+        h('div', { class: 'pe-pop-foot' },
+          h('button', { class: 'btn', text: 'Cancel', onclick: () => pick('cancel') }),
+          h('button', { class: 'btn', text: "Don't Save", onclick: () => pick('discard') }),
+          h('button', { class: 'btn primary', text: 'Save', onclick: () => pick('save') }))), { width: 420 });
+      const was = d.onClose;
+      d.onClose = () => { was?.(); if (!done) res('cancel'); };
+    });
+    if (answer === 'cancel') return false;
+    if (answer === 'discard') return true;
+    if (this.active !== doc) this.activate(doc);
+    return this.pdf.editor.save(); // (takes in whatever is still being typed first)
+  }
+
   async closeDoc(doc) {
+    if (this.docs.indexOf(doc) < 0) return;
+    if (!await this.unsavedOk(doc)) return;
     const i = this.docs.indexOf(doc);
     if (i < 0) return;
     this.docs.splice(i, 1);
@@ -385,6 +418,8 @@ class App {
   async reload(quality = this.prefs.quality, config) {
     const doc = this.active;
     if (!doc) return;
+    if (doc.pdfDirty && !await this.pdf.editor._confirm('Read the file again', `Throw away the changes to ${doc.name} that aren't saved, and read it again from disk?`, 'Throw away')) return;
+    doc.pdfDirty = false;
     try {
       await api.reload(doc.id, quality, config);
       doc.envelope = null; doc.envelopeKey = null;
@@ -617,7 +652,9 @@ class App {
     def('open', { label: 'Open', icon: 'open', kb: 'Ctrl+O', tip: 'Open a part, assembly or mesh file', needsDoc: false, run: () => this.openDialog() });
     def('reload', { label: 'Rebuild', icon: 'reload', kb: 'Ctrl+B', tip: 'Read the file again from disk', run: () => this.reload() });
     def('close', { label: 'Close', icon: 'close', kb: 'Ctrl+W', tip: 'Close the active document', run: () => this.active && this.closeDoc(this.active) });
-    def('closeAll', { label: 'Close All', icon: 'close', tip: 'Close every open document', needsDoc: false, run: () => [...this.docs].forEach((d) => this.closeDoc(d)) });
+    def('closeAll', { label: 'Close All', icon: 'close', tip: 'Close every open document', needsDoc: false, run: async () => { for (const d of [...this.docs]) await this.closeDoc(d); } });
+    def('pdfSave', { label: 'Save', icon: 'file', kb: 'Ctrl+S', tip: 'Save the edits to the PDF', needsDoc: false, run: () => this.pdfEditing() && this.pdf.editor.save() });
+    def('pdfSaveAs', { label: 'Save As', icon: 'file', kb: 'Ctrl+Shift+S', tip: 'Save the PDF somewhere else', needsDoc: false, run: () => this.pdfEditing() && this.pdf.editor.saveAs() });
     def('print', { label: 'Print', icon: 'print', kb: 'Ctrl+P', tip: "A PDF's pages, or the model as shown on white", needsDoc: false, run: () => this.print() });
     def('savePicture', { label: 'Save Picture', icon: 'camera', tip: 'Save the graphics area as a PNG', run: () => this.savePicture() });
     def('saveStep', { label: 'Save As STEP', icon: 'file', tip: 'Save the part or assembly as a STEP file, for anyone without SolidWorks', run: () => this.saveStep() });
@@ -779,7 +816,7 @@ class App {
     } else if (this.meta) html = this.prefs.mouse === 'sw'
       ? 'Middle-drag to rotate · Ctrl+middle to pan · Wheel to zoom · Right-drag for gestures'
       : 'Drag to rotate · Right-drag to pan · Wheel to zoom';
-    else if (this.active?.meta?.pdf && this.active.pdfMode === 'pages') html = `Drag to pan · ${this.active.meta.pdf.picture ? '' : 'Shift+drag to select text · '}${this.active.meta.pdf.pages.length > 1 ? 'Ctrl+wheel' : 'Wheel'} to zoom`;
+    else if (this.active?.meta?.pdf && this.active.pdfMode === 'pages') html = this.pdf.editor.hint() || `${this.active.meta.pdf.picture ? 'Drag to pan' : 'Drag across text to select it · drag bare paper (or hold Space) to pan · click a comment to select it · right-click for more'} · ${this.active.meta.pdf.pages.length > 1 ? 'Ctrl+wheel' : 'Wheel'} to zoom`;
     else html = 'Open a part to begin.';
     if (this.active && this.active.state === 'ready' && this.active.exact === false) html += '<span class="sep">|</span>Loading exact geometry for measuring…';
     el.innerHTML = html;

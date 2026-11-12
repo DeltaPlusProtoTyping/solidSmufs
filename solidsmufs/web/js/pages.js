@@ -37,17 +37,22 @@ export class Pages {
   section(opts = {}) {
     const s = this.sec;
     if (opts.plane) { s.plane = opts.plane; s.custom = null; s.rotX = s.rotY = 0; s.reset = true; }
-    const pf = this.app.planarSelection();
-    if (!opts.plane && pf && !this.viewer.section) {
-      const p = this.meta.faces.params[pf.index];
-      s.custom = { label: `Face<${pf.index + 1}>`, normal: p.normal, origin: p.origin };
+    // a flat face or a plane already picked is where it cuts; one picked later, with the page open, moves the cut there
+    const adopt = () => {
+      const cut = this._pickedCut();
+      if (!cut || (s.custom && s.custom.label === cut.label)) return false;
+      s.custom = cut;
+      s.rotX = s.rotY = 0;
       s.reset = true;
-    }
+      return true;
+    };
+    if (!opts.plane) adopt();
     this._applySection(true);
     const u = this.app.units;
     const page = {
       id: 'section', title: 'Section View', icon: 'sectionView',
-      message: 'Graphics-only section. Measurements still use the whole part.',
+      message: 'Click a flat face or a plane (in the view or the tree) to cut along it. Graphics-only section: measurements still use the whole part.',
+      onSelection: () => { if (adopt()) this._applySection(true); },
       groups: () => {
         const [lo, hi] = this._range(this._normal());
         const planeBtns = h('div', { class: 'seg' }, ...Object.entries(PLANES).map(([k, [label]]) => {
@@ -55,7 +60,7 @@ export class Pages {
           b.addEventListener('click', () => { s.plane = k; s.custom = null; s.rotX = s.rotY = 0; s.reset = true; this._applySection(true); this.mgr.updatePM(); });
           return b;
         }));
-        const facePf = this.app.planarSelection();
+        const facePf = this._pickedCut();
         const slider = h('input', { type: 'range', min: lo, max: hi, step: (hi - lo) / 1000 || 0.01, value: s.offset });
         const off = spinBox(+(s.offset / u.u.factor).toFixed(u.decimals), {
           step: Math.pow(10, -Math.min(u.decimals, 3)) * 10, format: (v) => (+v).toFixed(u.decimals),
@@ -68,16 +73,15 @@ export class Pages {
           { title: 'Section 1', body: [
             h('div', { class: 'pm-row' }, h('label', { text: 'Reference' }), planeBtns),
             h('div', { class: 'pm-row' }, h('label', { text: '' }), h('button', { class: `btn${s.custom ? ' primary' : ''}`, disabled: !facePf && !s.custom,
-              title: 'Cut along the selected flat face',
+              title: 'Cut along the selected flat face or plane (clicking one does this too); click again to put the cut back on it',
               onclick: () => {
-                const f = this.app.planarSelection();
-                if (!f) return;
-                const p = this.meta.faces.params[f.index];
-                s.custom = { label: `Face<${f.index + 1}>`, normal: p.normal, origin: p.origin };
+                const cut = this._pickedCut() || s.custom;
+                if (!cut) return;
+                s.custom = cut;
                 s.rotX = s.rotY = 0; s.reset = true;
                 this._applySection(true);
                 this.mgr.updatePM();
-              } }, h('span', { html: tool('face'), style: { width: '15px', height: '15px', display: 'inline-flex' } }), s.custom ? s.custom.label : 'Selected Face')),
+              } }, h('span', { html: tool('face'), style: { width: '15px', height: '15px', display: 'inline-flex' } }), s.custom ? s.custom.label : 'Click a face or plane')),
             h('div', { class: 'pm-row' }, h('label', { text: `Offset (${u.label})` }), off),
             slider,
             rot('rotX', 'Rotate X'), rot('rotY', 'Rotate Y'),
@@ -96,6 +100,19 @@ export class Pages {
     };
     this.mgr.openPM(page);
     this.app.shell.refresh();
+  }
+
+  // the flat face or plane that's selected, as a place to cut: {label, normal, origin}
+  _pickedCut() {
+    const pf = this.app.planarSelection();
+    if (pf) {
+      const p = this.meta.faces.params[pf.index];
+      return { label: `Face<${pf.index + 1}>`, normal: p.normal, origin: p.origin };
+    }
+    const plane = this.app.sel.find((x) => x.kind === 'plane');
+    if (!plane) return null;
+    const n = this.viewer.planeNormal(plane.index);
+    return { label: this.viewer.planeName(plane.index), normal: Array.isArray(n) ? n : n.toArray(), origin: [0, 0, 0] };
   }
 
   _normal() {
@@ -382,7 +399,7 @@ export class Pages {
         && sv.dir.x === (k === 0 ? 1 : 0) && sv.dir.y === (k === 1 ? 1 : 0) && sv.dir.z === (k === 2 ? 1 : 0));
       return hit ? ` · ${hit[0][0].toUpperCase()}${hit[0].slice(1)}` : '';
     };
-    const centre = (r) => {
+    const center = (r) => {
       const pts = v.entityPoints(r);
       if (!pts?.length) return null;
       const at = [0, 0, 0];
@@ -405,7 +422,7 @@ export class Pages {
         if (error) { error = null; }
         this.mgr.updatePM();
         if (o.mode === 'views') {
-          if (turn) v.showAxesPreview(centre(ps[0]), turn, [COLORS.x, COLORS.y, COLORS.z], [0, 1, 2].map((n) => `${'XYZ'[n]}${viewName(n)}`));
+          if (turn) v.showAxesPreview(center(ps[0]), turn, [COLORS.x, COLORS.y, COLORS.z], [0, 1, 2].map((n) => `${'XYZ'[n]}${viewName(n)}`));
           else v.clearAxesPreview();
           return;
         }
@@ -418,7 +435,7 @@ export class Pages {
         error = 'The pick has no direction: use a flat or round face, or a straight edge.';
         this.mgr.updatePM(); v.clearAxesPreview(); return;
       }
-      const at = facing[0].at || centre(ps[0]), d = derived();
+      const at = facing[0].at || center(ps[0]), d = derived();
       v.showPickArrows([0, 1, 2].map((i) => {
         if (d && d.k === i) return { at, dir: d.dir, color: COLORS[d.axis], widget: bar(i), width: 2.5 };
         const s = tri[i];

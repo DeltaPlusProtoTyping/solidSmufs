@@ -43,7 +43,7 @@ class Mesh:
     def __init__(self, name):
         self.name = name
         self.exclude_normals = False
-        self.shadings = []  # (uses diffuse colours, uses specular colours, texture layers)
+        self.shadings = []  # (uses diffuse colors, uses specular colors, texture layers)
         self.position_quant = 1.0
         self.points = []  # (x, y, z)
         self.faces = []  # [a, b, c]
@@ -265,7 +265,7 @@ def _read_declaration(s):
     s.u32()  # its place in the chain
     mesh.exclude_normals = bool(s.u32() & EXCLUDE_NORMALS)
     mesh.declared = (s.u32(), s.u32())
-    s.u32(), s.u32(), s.u32(), s.u32()  # how many normals, colours and texture coordinates
+    s.u32(), s.u32(), s.u32(), s.u32()  # how many normals, colors and texture coordinates
     for _ in range(s.u32()):
         attributes = s.u32()
         layers = s.u32()
@@ -333,14 +333,14 @@ def _new_values(s, count_context, sign_context, contexts):
 
 
 def _change(s, keep_change, change_type, index_new, index_local, index_global):
-    """A moved corner's colour or texture coordinate: which isn't needed for the shape, but has to be read past."""
+    """A moved corner's color or texture coordinate: which isn't needed for the shape, but has to be read past."""
     if s.cu8(keep_change) == CHANGE:
         kind = s.cu8(change_type)
         s.cu32(index_new if kind == NEW_INDEX else index_local if kind == LOCAL_INDEX else index_global)
 
 
 def _duplicates(s, flag, index_type, index_local, index_global):
-    """The colour or texture index at each of a new face's corners, unless it's flagged as the last one again."""
+    """The color or texture index at each of a new face's corners, unless it's flagged as the last one again."""
     flags = s.cu8(flag)
     for bit in (1, 2, 4):
         if not flags & bit:
@@ -561,7 +561,7 @@ def _build(out):
         lists = out.resource_shaders.get(node.name) or out.resource_shaders.get(node.resource)
         shadings = sorted(set(np.asarray(mesh.shading).tolist()))
         colors = {_color(out, lists, k) for k in shadings}
-        split = shadings if len(colors) > 1 else [None]  # a piece has one colour
+        split = shadings if len(colors) > 1 else [None]  # a piece has one color
         for k in split:
             piece = piece_of(mesh, k)
             if piece is None:

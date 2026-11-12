@@ -23,6 +23,8 @@ const MENUS = {
     { label: 'Close', icon: 'close', kb: 'Ctrl+W', disabled: !app.active, action: () => app.run('close') },
     { label: 'Close All', disabled: !app.docs.length, action: () => app.run('closeAll') },
     { sep: true },
+    { label: 'Save', icon: 'file', kb: 'Ctrl+S', disabled: !app.active?.meta?.pdf || app.active.meta.pdf.picture || !app.native, action: () => app.run('pdfSave') },
+    { label: 'Save As…', icon: 'file', kb: 'Ctrl+Shift+S', disabled: !app.active?.meta?.pdf || app.active.meta.pdf.picture || !app.native, action: () => app.run('pdfSaveAs') },
     { label: 'Save As STEP…', icon: 'file', disabled: !app.meta || app.meta.kind !== 'brep' || !app.native, action: () => app.run('saveStep') },
     { label: 'Print…', icon: 'print', kb: 'Ctrl+P', disabled: !app.active?.meta || !app.native, action: () => app.run('print') },
     { label: 'Save Picture…', icon: 'camera', disabled: !app.meta, action: () => app.run('savePicture') },
@@ -141,9 +143,22 @@ export class Shell {
     const row = document.getElementById('cm-row');
     const tabs = document.getElementById('cm-tabs');
     const t = TABS.find((x) => x.id === this.tab);
-    row.replaceChildren(...t.items.map((id) => (id === '|' ? h('div', { class: 'cm-sep' }) : this.cmButton(id))));
+    row.replaceChildren(...t.items.map((id) => (id === '|' ? h('div', { class: 'cm-sep' }) : this.cmButton(id))), ...this.partDifficulty());
     tabs.replaceChildren(...TABS.map((x) => h('button', { class: `cm-tab${x.id === this.tab ? ' on' : ''}`, text: x.label, onclick: () => this.selectTab(x.id) })));
     void app;
+  }
+
+  // the whole part's difficulty, from the geometric tolerances read off its print: far right of the command bar
+  partDifficulty() {
+    const d = this.app.active, p = d?.partDifficulty;
+    if (!p) return [];
+    const n = Math.round(p.score);
+    const cells = Array.from({ length: 10 }, (_, i) => h('i', { class: i < n ? 'on' : '', style: i < n ? { background: `hsl(${Math.round(125 - (125 * i) / 9)} 75% 42%)` } : null }));
+    const el = h('button', { class: 'cm-diff', title: `Part difficulty ${p.score}/10, from ${p.count} geometric tolerance${p.count === 1 ? '' : 's'} on the print (${p.points} points)${p.whole ? '' : '\nStill reading the print: this may go up'}\nClick to see what it's made of` },
+      h('span', { class: 'cd-top' }, h('span', { class: 'cd-l', text: 'Part difficulty' }), h('b', { text: `${p.score.toFixed(1)}/10${p.whole ? '' : '…'}` })),
+      h('span', { class: 'cd-bar' }, ...cells));
+    el.addEventListener('click', () => this.app.tools.partDifficulty());
+    return [h('div', { class: 'cm-grow' }), el];
   }
 
   cmButton(id) {
@@ -265,7 +280,7 @@ export class Shell {
       const asm = d.meta && d.meta.bodies.some((b) => (b.path || []).length > 1);
       const t = h('div', { class: `doc-tab${d === app.active ? ' on' : ''}`, title: d.path || d.name },
         d.state === 'loading' ? h('span', { class: 'spin' }) : h('span', { class: 'dt-icon', html: tool(d.state === 'error' ? 'close' : asm ? 'assembly' : 'part') }),
-        h('span', { class: 'dt-name', text: d.name }),
+        h('span', { class: 'dt-name', text: d.pdfDirty ? `${d.name} •` : d.name, title: d.pdfDirty ? 'Changes not saved' : '' }),
         h('span', { class: 'dt-x', title: 'Close', text: '×', onclick: (e) => { e.stopPropagation(); app.closeDoc(d); } }));
       t.addEventListener('click', () => app.activate(d));
       t.addEventListener('auxclick', (e) => { if (e.button === 1) app.closeDoc(d); });
@@ -278,7 +293,7 @@ export class Shell {
     const app = this.app;
     const el = document.getElementById('doc-title');
     const d = app.active;
-    el.innerHTML = d ? `${escapeHtml(d.name)}${d.meta ? ` <span class="dim">— ${escapeHtml(d.meta.format)}</span>` : ''}` : PRODUCT;
+    el.innerHTML = d ? `${escapeHtml(d.name)}${d.pdfDirty ? ' •' : ''}${d.meta ? ` <span class="dim">— ${escapeHtml(d.meta.format)}</span>` : ''}` : PRODUCT;
   }
 
   _buildBottomTabs() {

@@ -18,15 +18,15 @@ def unit_rows(v):
 
 
 def circumcircle(a, b, c):
-    """(centre, radius, unit normal) of the circle through three points, or None if they're in a line."""
+    """(center, radius, unit normal) of the circle through three points, or None if they're in a line."""
     a, b, c = (np.asarray(p, np.float64) for p in (a, b, c))
     ab, ac = b - a, c - a
     n = np.cross(ab, ac)
     nn = float(n @ n)
     if nn <= 1e-30 * max(float(ab @ ab), float(ac @ ac), 1e-30) ** 2:
         return None
-    centre = a + (float(ac @ ac) * np.cross(n, ab) + float(ab @ ab) * np.cross(ac, n)) / (2 * nn)
-    return centre, float(np.linalg.norm(a - centre)), n / math.sqrt(nn)
+    center = a + (float(ac @ ac) * np.cross(n, ab) + float(ab @ ab) * np.cross(ac, n)) / (2 * nn)
+    return center, float(np.linalg.norm(a - center)), n / math.sqrt(nn)
 
 
 def vertex_normals(pts, tri):

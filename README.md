@@ -38,7 +38,7 @@ What each one opens (✓ opens, ◐ partly, — no, ? not confirmed):
 | Inventor, Creo, NX, CATIA | — | ◐ | ◐ Inventor, Solid Edge | — | — | — | ✓ |
 | Meshes (STL, OBJ, PLY, 3MF, glTF) | ✓ | ◐ | ◐ STL | — | — | ✓ | ✓ |
 | DXF and DWG | ✓ (DWG after a one-time converter set-up) | ✓ | ✓ | ✓ edits | — | ◐ | ✓ |
-| PDF prints | ✓ with hover tips and OCR | — | — | ◐ underlay | ✓ with OCR and markup | — | ✓ |
+| PDF prints | ✓ with hover tips, OCR, markup, forms, signing and editing | — | — | ◐ underlay | ✓ with OCR and markup | — | ✓ |
 | 3D PDFs (PRC, U3D) | ✓ measurable | — | — | — | ✓ | — | — |
 | G-code | ✓ 3D toolpath per tool | — | — | — | — | ◐ CAM workbench | — |
 | Plotter files and SVG | ✓ | — | — | ? | — | ◐ SVG | ? |
@@ -46,8 +46,10 @@ What each one opens (✓ opens, ◐ partly, — no, ? not confirmed):
 | Scans and pictures | ✓ with OCR hover tips | — | — | ◐ | ◐ | — | ✓ |
 | Zip files | ✓ | — | — | — | — | — | ✓ |
 
-SOLIDWORKS is still what you need to model and change parts and make drawings; Acrobat is still the tool for marking up
-and signing PDFs; DraftSight for editing DWG. SolidSmurfs is for looking, measuring and quoting.
+SOLIDWORKS is still what you need to model and change parts and make drawings; DraftSight for editing DWG. SolidSmurfs
+is for looking, measuring and quoting, and it marks up, fills in, signs and edits PDFs (see [Editing PDFs](#editing-pdfs)).
+What it doesn't do that Acrobat does: certificate (digital ID) signatures, radio-button and signature fields, OCR saved into the file,
+comparing two versions, and editing whole paragraphs that reflow.
 
 ## Run it
 
@@ -82,7 +84,7 @@ powershell -ExecutionPolicy Bypass -File tools\register-context-menu.ps1 -Remove
 | SolidWorks assembly (2015 and newer) | `.sldasm` | own reader: the component list and placements, then each part as above (needs the part files) |
 | Parasolid | `.x_t` `.x_b` `.xmt_txt` `.xmt_bin` | own reader, then OpenCASCADE |
 | Meshes | `.stl` `.obj` `.ply` `.off` `.3mf` `.glb` `.gltf` | own readers; faces split at sharp creases so flat faces and holes can be picked |
-| PDF prints | `.pdf` | PDFium (through Qt): pages, find, select, thumbnails, password-protected files; hover tips for fits, inches and French, with Windows OCR |
+| PDF prints | `.pdf` | MuPDF (PyMuPDF) draws and edits them, PDFium (through Qt) reads their text: pages, find, select, thumbnails, password-protected files; hover tips for fits, inches and French, with Windows OCR |
 | 3D PDFs and their models | `.pdf` `.prc` `.u3d` | own PRC and U3D readers (Adobe's private U3D mesh included) |
 | DXF and DWG drawings | `.dxf` `.dwg` | own DXF reader: layers, blocks, dimensions, text; DWG through the free ODA File Converter, set up from inside the app |
 | Plotter files and SVG | `.plt` `.hpgl` `.hgl` `.svg` | own readers, as drawings with layers |
@@ -156,7 +158,7 @@ parts. Meshes can't be saved as STEP.
 
 Mouse buttons default to SolidWorks (middle-drag rotate, Ctrl+middle pan, Shift+middle zoom,
 left-drag box select, right-drag gestures). As in SolidWorks, the view turns about the model's
-centre; middle-click a vertex, edge or face to turn about it instead (a straight edge becomes the
+center; middle-click a vertex, edge or face to turn about it instead (a straight edge becomes the
 axis), and middle-click empty space to go back. Rolling the wheel toward you zooms in. Right-click ›
 **Select Other** lists every face under the cursor, to pick one hidden behind another. On a laptop without a middle button, switch to
 "Left-drag rotates" in Tools → Options → Mouse. Press `F1` for every shortcut.
@@ -190,9 +192,34 @@ axis), and middle-click empty space to go back. Rolling the wheel toward you zoo
   Front, Right, ...); Ctrl+click a second pick to set the turn about it, or let the part's length run
   left to right. The geometry itself turns, exactly, so views, X / Y / Z, the bounding box, Stock Size,
   mass properties and Save As STEP all follow. The orientation is remembered for that file (it reopens turned, with a notice); Reset puts it back as modelled.
-- **Stock Size:** smallest block (or one standing on picked faces, as in Bounding Box), and round bar for round parts, with allowance and rounding,
+- **Stock Size:** smallest block (or one standing on picked faces, as in Bounding Box) or, with **Round bar**, the smallest bar around the part (along the best direction, or along a picked round face, edge or flat face), drawn in the view, with allowance and rounding,
   plus stock weight. **Hole Report:** every hole by diameter, count and depth, with modelled
   thread sizes, and the rest matched to tap drills, minor diameters, clearance holes and drills. **Quote Summary:** all of it in one copyable list.
+
+## Geometric tolerances on hover
+
+With **TP on hover** on (the PDF toolbar; on by default), hovering a feature control frame on a print shows what it
+means in plain words, its zone in mm and inches, its datums, what Ⓜ or Ⓛ does, and a difficulty from 1 to 10 for
+holding it and for measuring it. True position is the main one; flatness, perpendicularity, profile, runout and the
+rest read the same way.
+
+It reads every part of a frame: the 14 symbols, a Ø or spherical SØ zone, the circled modifiers after the tolerance
+(Ⓜ Ⓛ Ⓢ, Ⓟ projected, Ⓕ free state, Ⓣ tangent plane, Ⓤ unequally disposed, ST, CF) and the ones on each datum
+(A Ⓜ, A Ⓢ). Hole callout symbols explain themselves too: ⌴ counterbore, ⌵ countersink, ↧ depth.
+
+A frame is read from the PDF's own text (the symbols themselves, or a CAD GD&T font's letters) or, on a scan, from
+the picture. Windows OCR reads the numbers and datum letters but not the symbols (it gives a circled letter as "@"),
+so `solidsmufs/kernel/gdtsee.py` looks at the pixels: the symbol in the frame's first cell and the letter in each
+circle are matched by shape against how they're drawn. It only names one when it fits clearly better than the others
+and sits in a drawn frame; otherwise the tip says the symbol couldn't be read (a Ø zone with datums is then taken as
+position, and said to be a guess). Nothing leaves the computer. The scores are a first guess: they come from the
+tables at the top of `solidsmufs/kernel/gdt.py` (the tolerance, then an amount per kind of tolerance and for Ⓜ).
+
+**Part difficulty.** Once the print has been read, the far right of the command bar shows the whole part's difficulty
+from 1 to 10, with a gauge; click it for what it's made of. Each geometric tolerance gives points from its two scores
+(routine ones give none), some kinds count extra (a tapped hole's position ×1.5), and the points are totalled: 20 points
+is a 5/10 part, 40 is 7.5. A part is never easier than its hardest callout less one. The multipliers are with the
+other tables at the top of `solidsmufs/kernel/gdt.py`. Only geometric tolerances count so far.
 
 ## Printing
 
@@ -219,11 +246,61 @@ the printer's queue.
 Without `--printer` it uses the default printer. A printer is named in full (as `Get-Printer` lists it), never by part
 of its name. `--pages` takes `1-4,9`, `7-` (to the end) or `-2` (the last two). Several files go out as one job.
 
+## Editing PDFs
+
+A PDF's pages have a second toolbar with Acrobat's tool sets. Everything is saved as standard PDF, so Acrobat and other
+readers show it, and comments stay comments they can change.
+
+- **Comment:** sticky notes, text boxes, highlight, underline, strikethrough and squiggly (drag across the words),
+  freehand drawing, rectangles, ovals, revision clouds, lines, arrows and stamps (Approved, Draft, Confidential and the
+  rest, or any picture). Pick a color, line width, opacity and text size for the next one or the selected one.
+  **Select** a comment to drag it, size it by its handles, nudge it with the arrow keys, double-click to change its
+  words, or Delete it. **Comments** lists them all by page, with author and date, to edit, reply to or delete.
+- **Fill & Sign:** type into a form's fields (text, check boxes, lists). Where a form has no fields, add text, check
+  marks, crosses, dots and today's date anywhere. **Sign** and **Initials**: draw or type them once (they're kept on
+  this computer) and click or drag where they go. **Flatten** makes comments, signatures and filled-in fields part of
+  the pages, so nobody can change them.
+- **Prepare Form:** make any PDF fillable. **Detect fields** finds the blanks (rules to write on, boxes, a table's
+  empty cells, squares to tick, runs of underscores; a scanned form's lines are found in its picture) and puts a field
+  on each, named from the words beside it. The fields show as boxes: drag one to move it, its corner to size it,
+  double-click for its name, tip, text size, choices, required or read-only; Delete removes it. Text fields, boxes of
+  several lines, check boxes and drop-down lists can be drawn by hand too. The saved file fills in anywhere,
+  Acrobat included.
+- **Edit:** click a line of the page's own text to change it (the old words are taken out of the file and the new ones
+  set in the nearest standard font), add new words, and select a picture to move, size or delete it, or add one.
+- **Pages:** in the side bar, Ctrl+click or Shift+click to pick pages and drag them to reorder; right-click or use the
+  toolbar to turn, delete, duplicate, insert blank pages, insert other PDFs or pictures (combining files), replace,
+  extract to a new PDF, split into several PDFs, and crop (drag the part to keep) or uncrop.
+- **Redact:** mark words, areas, or everything the Find box finds, then **Apply**: what's under the marks is taken out
+  of the file for good (words, the covered parts of pictures and drawing, and form fields with what's filled into
+  them: click a field with Mark text to mark all of it). **Fill** chooses what's left behind: black, or white for
+  blank paper. **Remove hidden info** takes out the
+  document's details, attachments, scripts and hidden text.
+
+It works as Acrobat does, with some of the rough edges taken off:
+
+- **Select** (V) does what's under the pointer: drag across words to select them, click a comment to grab it, drag bare
+  paper to pan. Hold **Space** to pan with any tool. Right-click selected words or a comment for what can be done to it.
+- Selected words get a small bar: copy, highlight, underline, strike through, highlight with a note, mark for redaction.
+  A selected comment gets one too: quick colors, its words, duplicate, delete.
+- A comment being dragged carries its picture along, and stops at the page's edge. A line has a handle on each end.
+  A signature, stamp or picture about to be placed shows under the pointer at the size a click gives it.
+- Comments copy and paste (Ctrl+C, Ctrl+V onto the page in view) and duplicate (Ctrl+D). Arrow keys nudge.
+- One key picks a comment tool: V select, N note, T text box, H highlight, U underline, K strikethrough, D draw,
+  B rectangle, E oval, C cloud, L line, A arrow. A tool that places one thing hands back to Select with the new
+  comment selected; double-click its button to keep it on. The status bar says what the tool in hand does.
+- Text boxes grow to fit what's typed into them.
+
+Ctrl+Z and Ctrl+Y undo and redo anything, page changes too. **Save** (Ctrl+S, File menu) writes over the PDF (a
+password-protected PDF keeps its password); **Save As** (Ctrl+Shift+S) saves a copy somewhere else, which then becomes the
+open document. A tab with unsaved changes shows a dot, and closing it or the window asks first. A file dropped in from a
+browser or opened from a zip is a copy, so it's saved with Save As.
+
 ## SpaceMouse
 
 A 3Dconnexion SpaceMouse works without any extra software beyond its usual driver: the app reads the
 device directly (Windows HID). The part follows the cap: slide to pan, pull toward you to zoom in, tilt,
-twist and roll to turn it about its centre (the entity you middle-clicked, or when zoomed in past the centre, the part at the middle of the view; a dot shows where). System Options has a
+twist and roll to turn it about its center (the entity you middle-clicked, or when zoomed in past the center, the part at the middle of the view; a dot shows where). System Options has a
 part / camera switch and a reverse for each axis. Set `SOLIDSMURFS_SPACEMOUSE=off` to leave it to
 3DxWare.
 
@@ -232,6 +309,8 @@ part / camera switch and a reverse for each axis. Set `SOLIDSMURFS_SPACEMOUSE=of
 - `solidsmufs/app.py`: the Qt window (PySide6 WebEngine), file dialogs, dropped files, single instance.
 - `solidsmufs/server.py`: local HTTP API on 127.0.0.1 with a per-session token.
 - `solidsmufs/documents.py`: one worker process per open file.
+- `solidsmufs/kernel/pdfdoc.py` and `pdfedit.py`: PDF pages and every PDF edit (PyMuPDF), with undo;
+  `web/js/pdfview.js` and `pdfedit.js`: the page view and its tools.
 - `solidsmufs/kernel/`: loading (`cad.py` via gmsh/OpenCASCADE, `meshio.py`), the cache and tools
   (`worker.py`), measuring (`measure.py`), thread sizes (`threads.py`), mass properties and
   bounding boxes (`massprops.py`).
@@ -241,7 +320,7 @@ part / camera switch and a reverse for each axis. Set `SOLIDSMURFS_SPACEMOUSE=of
   `solidsmufs/kernel/looks.py`: the finish each body gets from them.
 - `tests/`: `smoke.py` opens every sample file; `test_measure.py` checks measuring, mass properties
   and bounding boxes on a block with known answers; `test_sldasm.py` the assembly reader;
-  `test_looks.py` colours, materials and configurations; `test_threads.py` thread recognition on
+  `test_looks.py` colors, materials and configurations; `test_threads.py` thread recognition on
   modelled M6 and 1/4-20 threads (`.venv\Scripts\python -m unittest discover -s tests`).
 - `solidsmufs/web/`: the interface (three.js graphics, SolidWorks-style shell, Wagner theme).
 

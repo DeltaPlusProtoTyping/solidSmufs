@@ -1,4 +1,4 @@
-// Units and number formatting, SolidWorks-style unit systems. The model is always in millimetres.
+// Units and number formatting, SolidWorks-style unit systems. The model is always in millimeters.
 export const LENGTH = {
   mm: { label: 'mm', factor: 1, decimals: 2 },
   cm: { label: 'cm', factor: 10, decimals: 3 },

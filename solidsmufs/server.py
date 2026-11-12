@@ -30,6 +30,16 @@ mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
 
 
+def needs_save_as(doc, upload_dir):
+    """A dropped-in or unzipped copy (or a file that can't be written) is saved somewhere chosen instead."""
+    path = Path(doc.path or "")
+    local = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "SolidSmufs"
+    temp = [Path(upload_dir), Path(tempfile.gettempdir()), local]
+    if not doc.path or not path.is_file() or not os.access(path, os.W_OK):
+        return True
+    return any(str(path.resolve()).lower().startswith(str(t.resolve()).lower()) for t in temp)
+
+
 class Native:
     """What only the desktop window can do (file dialogs, Explorer). The Qt app replaces this."""
 
@@ -44,6 +54,10 @@ class Native:
     def save_file(self, title, suggested, file_filter):
         """Ask where to save a file; the chosen path, or None."""
         return None
+
+    def open_files(self, title, file_filter):
+        """Ask for one or more files to use; their paths (empty if cancelled)."""
+        return []
 
     def print_pages(self, doc):
         """Ask how to print a document's pages and print them: the number of sheets, or None if not printed."""
@@ -253,6 +267,27 @@ class _Handler(BaseHTTPRequestHandler):
             if parts == ["dialog", "save-image"] and method == "POST":
                 b = self._jbody()
                 return self._json({"path": self.ctx.native.save_image(b["data"], b.get("name", "view.png"))})
+            if parts == ["dialog", "save-pdf"] and method == "POST":  # where to save a PDF (Save As, extracting pages)
+                b = self._jbody()
+                return self._json({"path": self.ctx.native.save_file(b.get("title", "Save PDF As"), b.get("name", "Untitled.pdf"),
+                                                                     "PDF (*.pdf)")})
+            if parts == ["dialog", "open-files"] and method == "POST":  # files to insert into a PDF, or pictures to place
+                b = self._jbody()
+                filters = {"pdf": "PDFs and pictures (*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif);;All files (*)",
+                           "image": "Pictures (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff);;All files (*)"}
+                paths = self.ctx.native.open_files(b.get("title", "Choose files"), filters.get(b.get("kind"), filters["pdf"]))
+                out = []
+                for path in paths or []:
+                    if b.get("kind") == "image":  # handed to the page as data, to place
+                        import base64
+                        raw = Path(path).read_bytes()
+                        if len(raw) > 40_000_000:
+                            return self._error(f"{Path(path).name} is too big to place (over 40 MB).")
+                        mime = mimetypes.guess_type(path)[0] or "image/png"
+                        out.append({"path": path, "data": f"data:{mime};base64,{base64.b64encode(raw).decode()}"})
+                    else:
+                        out.append({"path": path})
+                return self._json({"files": out})
             if parts == ["print", "image"] and method == "POST":  # a picture of the model, on white
                 b = self._jbody()
                 return self._json({"sheets": self.ctx.native.print_image(b["data"], b.get("name", "SolidSmurfs"))})
@@ -296,6 +331,8 @@ class _Handler(BaseHTTPRequestHandler):
         if what == "meta":
             if doc.state != "ready":
                 return self._error("Not ready", 409)
+            if doc.meta.get("pdf") is not None:
+                doc.meta["pdf"]["saveAs"] = needs_save_as(doc, self.ctx.upload_dir)
             return self._json(doc.meta)
         if what == "mesh":
             if doc.state != "ready":
@@ -328,6 +365,21 @@ class _Handler(BaseHTTPRequestHandler):
                                           bx=b["bx"], by=b["by"]))
         if what == "pdf-marks":  # what hovering a page's words shows
             return self._json(doc.request("pdf_marks", timeout=120, page=int(b["page"])))
+        if what == "pdf-edit":  # an edit to a PDF (comments, pages, forms, its own text), or a question about it
+            op = str(b.get("op", ""))
+            args = {k: v for k, v in b.items() if k != "op"}
+            if op == "save" and args.get("path") is None and needs_save_as(doc, self.ctx.upload_dir):
+                return self._error("This copy can't be saved over: choose where to save it.", 409)
+            r = doc.request("pdf_edit", timeout=600, op=op, args=args)
+            if isinstance(r, dict) and "state" in r:
+                doc.pdf_dirty = r["state"]["dirty"]
+                if op == "save" and r["state"]["path"] != doc.path:  # Save As: the document is that file now
+                    doc.path = r["state"]["path"]
+                    doc.name = Path(doc.path).name
+                    if doc.meta:
+                        doc.meta["path"] = doc.path
+                        doc.meta["name"] = doc.name
+            return self._json(r)
         if what == "pdf-find":
             return self._json(doc.request("pdf_find", timeout=120, query=str(b.get("query", ""))))
         if what == "facing":  # which way each Align Part pick faces, for its arrow

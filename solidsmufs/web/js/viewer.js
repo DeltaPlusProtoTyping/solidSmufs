@@ -321,7 +321,7 @@ export class Viewer {
   // SpaceMouse: the app hands over the cap's latest [tx, ty, tz, rx, ry, rz] (about ±350 each; x left to
   // right, y far to near, z high to low, rotations right-handed); the view moves by them every frame,
   // scaled by the frame's time, the way 3Dconnexion's object mode works: the part follows the cap. Slide
-  // to pan, pull to bring it closer, tilt, twist and roll to turn about the model's centre (as SolidWorks).
+  // to pan, pull to bring it closer, tilt, twist and roll to turn about the model's center (as SolidWorks).
   // spaceSigns (Options) reverses any axis.
   spaceNav(v) {
     this.space = v;
@@ -366,12 +366,12 @@ export class Viewer {
     return true;
   }
 
-  // What the cap turns the part about: the entity last middle-clicked, else the part's centre, else (zoomed
-  // in with that centre out of view) the part at the middle of the view, so what you're looking at stays put
+  // What the cap turns the part about: the entity last middle-clicked, else the part's center, else (zoomed
+  // in with that center out of view) the part at the middle of the view, so what you're looking at stays put
   _spacePivotNow() {
     if (this.rotCenter?.point) return this.rotCenter.point;
-    const box = this.visibleBox(), centre = box.getCenter(new THREE.Vector3()), s = this.project(centre);
-    if (!s.behind && s.x >= 0 && s.y >= 0 && s.x <= this.width && s.y <= this.height) return centre;
+    const box = this.visibleBox(), center = box.getCenter(new THREE.Vector3()), s = this.project(center);
+    if (!s.behind && s.x >= 0 && s.y >= 0 && s.x <= this.width && s.y <= this.height) return center;
     return this.pointAt(this.width / 2, this.height / 2) || box.clampPoint(this.rig.target, new THREE.Vector3());
   }
 
@@ -577,7 +577,7 @@ export class Viewer {
     const F = this.model.meta.faces;
     const col = body.geometry.attributes.color;
     const c = new THREE.Color();
-    // a metal tint stands in for SolidWorks' pale "no appearance" colour while RealView is on
+    // a metal tint stands in for SolidWorks' pale "no appearance" color while RealView is on
     const base = (this.realView && body.finish?.tint) || body.color;
     for (let f = body.f0; f < body.f0 + body.fn; f++) {
       const rgb = body.override || F.color[f] || base || DEFAULT_COLOR;
@@ -604,7 +604,7 @@ export class Viewer {
       let n = 0;
       for (const e of list) n += E.scount[e];
       const arr = new Float32Array(n * 6), ids = new Float32Array(n * 6);
-      const inks = E.color ? [] : null; // a drawing's lines: each edge's own colour (null: the drawing's ink), per segment
+      const inks = E.color ? [] : null; // a drawing's lines: each edge's own color (null: the drawing's ink), per segment
       let k = 0;
       for (const e of list) {
         const s0 = E.sstart[e], sn = E.scount[e];
@@ -642,8 +642,8 @@ export class Viewer {
     }
   }
 
-  /** A drawing colour as it shows on this background: its ink (null) black on light and white on dark, and
-   *  colours too pale (or too dark) to see against it toned until they can be. Linear RGB, for the GPU. */
+  /** A drawing color as it shows on this background: its ink (null) black on light and white on dark, and
+   *  colors too pale (or too dark) to see against it toned until they can be. Linear RGB, for the GPU. */
   _inkColor(rgb) {
     const c = new THREE.Color();
     if (!rgb) return this.darkScene ? c.set(0xe2e8f0) : c.set(0x0b0d10);
@@ -654,7 +654,7 @@ export class Viewer {
     return c.setRGB(r, g, b, THREE.SRGBColorSpace);
   }
 
-  /** Colour a drawing's lines and text for the current background. */
+  /** Color a drawing's lines and text for the current background. */
   _paintInks() {
     for (const [, o] of this.edgeObjs || []) {
       if (!o.inks) continue;
@@ -685,7 +685,7 @@ export class Viewer {
   }
 
   /** Set a drawing's text: each line is drawn once in white into big shared images (2048 px square),
-   *  then shown on a flat strip in the drawing, tinted its colour. Lines lie where the file places them,
+   *  then shown on a flat strip in the drawing, tinted its color. Lines lie where the file places them,
    *  sized by capital height, wrapped and lined up as AutoCAD would (Arial stands in for its fonts). */
   _buildTexts() {
     this._clearTexts();
@@ -1234,7 +1234,7 @@ export class Viewer {
   }
 
   // SolidWorks: middle-click a vertex, edge or face to rotate about it (a straight edge is an axis);
-  // middle-click empty space to go back to the model's centre
+  // middle-click empty space to go back to the model's center
   setRotationCenter(hit) {
     this.rotCenter = null;
     if (!hit) return;
@@ -1428,6 +1428,7 @@ export class Viewer {
     this.labels = this.labels.filter((l) => { if (l.box) { l.el.remove(); l.lead?.remove(); return false; } return true; });
     this.bboxShown = !!b;
     this.shownBox = null;
+    this.shownCyl = null;
     if (!b) { this.requestRender(); return; }
     const ax = b.axes.map((a) => new THREE.Vector3(...a));
     const corner = (i) => ax[0].clone().multiplyScalar(i & 1 ? b.max[0] : b.min[0]).addScaledVector(ax[1], i & 2 ? b.max[1] : b.min[1]).addScaledVector(ax[2], i & 4 ? b.max[2] : b.min[2]);
@@ -1443,6 +1444,30 @@ export class Viewer {
     });
     this.boxCorner = corner;
     this.shownBox = b;
+    this.requestRender();
+  }
+
+  // a round bar around the part, drawn as the stock box is: {center, axis, r, len} in mm (null clears it)
+  showCylinder(c) {
+    this.showBox(null);
+    if (!c) return;
+    const a = new THREE.Vector3(...c.axis).normalize(), mid = new THREE.Vector3(...c.center);
+    const u = new THREE.Vector3(Math.abs(a.x) < 0.9 ? 1 : 0, Math.abs(a.x) < 0.9 ? 0 : 1, 0).cross(a).normalize();
+    const v = new THREE.Vector3().crossVectors(a, u);
+    const N = 72, ends = [-c.len / 2, c.len / 2].map((t) => mid.clone().addScaledVector(a, t));
+    const rim = (e, k) => { const t = (k / N) * 2 * Math.PI; return e.clone().addScaledVector(u, c.r * Math.cos(t)).addScaledVector(v, c.r * Math.sin(t)); };
+    const pts = [];
+    for (const e of ends) for (let k = 0; k < N; k++) pts.push(...rim(e, k).toArray(), ...rim(e, k + 1).toArray());
+    for (let k = 0; k < N; k += N / 4) pts.push(...rim(ends[0], k).toArray(), ...rim(ends[1], k).toArray());
+    pts.push(...ends[0].toArray(), ...ends[1].toArray()); // its axis
+    this._fatLine(pts, 0xd99a1c, 1.6, { group: this.boxGroup, noClip: true, order: 30, dashed: true, dashSize: this.rig.radius * 0.03, gapSize: this.rig.radius * 0.015 });
+    const fmt = this.formatLength || ((mm) => `${mm.toFixed(2)} mm`);
+    this.addLabel(rim(ends[1], N / 8), `Ø${fmt(2 * c.r)}`, 'box');
+    this.labels[this.labels.length - 1].box = true;
+    this.addLabel(rim(mid, 0), fmt(c.len), 'box');
+    this.labels[this.labels.length - 1].box = true;
+    this.bboxShown = true;
+    this.shownCyl = c;
     this.requestRender();
   }
 
@@ -1590,7 +1615,7 @@ export class Viewer {
     }
   }
 
-  // What labels keep clear of, as centre / size boxes in viewport pixels
+  // What labels keep clear of, as center / size boxes in viewport pixels
   _labelObstacles() {
     const out = [];
     const c = this.canvas.getBoundingClientRect();
@@ -1775,7 +1800,7 @@ export class Viewer {
       d.mode = modeFor(d.e);
       if (d.mode === 'rotate') {
         this.rig.anim = null;
-        // SolidWorks turns about the model's centre, or about the entity last middle-clicked;
+        // SolidWorks turns about the model's center, or about the entity last middle-clicked;
         // the other mouse scheme turns about the point under the cursor
         const sw = this.mouseMode === 'sw';
         const pt = !this.model ? null : sw ? (this.rotCenter?.point || this.visibleBox().getCenter(new THREE.Vector3())) : this.pointAt(d.x0, d.y0);

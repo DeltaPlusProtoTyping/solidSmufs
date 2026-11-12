@@ -33,7 +33,7 @@ def prc_placed(piece):
 
 
 def _placed_piece(one, unit_mm, default_name):
-    """(name, points in mm, triangles, faces, corner normals, planar flags, colour) of a piece in its place."""
+    """(name, points in mm, triangles, faces, corner normals, planar flags, color) of a piece in its place."""
     p, m = one.piece, one.matrix
     points = (p.points @ m[:3, :3].T + m[:3, 3]) * unit_mm
     triangles, normals = p.triangles, p.normals
@@ -227,16 +227,33 @@ class Session:
         with self._marks_lock:
             texts = [t for e in self._marks.values() for t in e["texts"]]
             reading = entry["reader"] is not None or (entry["ocr"] == "pending" and not entry.get("started"))
-            return {"marks": list(entry["marks"]), "reading": reading, "ocr": entry["ocr"],
-                    "metric": printmarks.is_metric(texts, [m for e in self._marks.values() for m in e["marks"]])}
+            every = [m for e in self._marks.values() for m in e["marks"]]
+            # the print's units, from its notes or title block on any page read so far: geometric tolerances are
+            # worded in them (and again as OCR reads more of the print)
+            unit = printmarks.units(texts, every)
+            # how hard the whole part is, from the geometric tolerances on every page read so far; "whole" once every
+            # page has been read through, OCR and all
+            part = printmarks.part_difficulty(every, unit)
+            settled = [not (e["reader"] is not None or (e["ocr"] == "pending")) for e in self._marks.values()]
+            pages = len(self.pdf.pages()) if hasattr(self.pdf, "pages") else len(self._marks)
+            if part:
+                part["whole"] = len(settled) >= pages and all(settled)
+            return {"marks": printmarks.with_units(entry["marks"], unit), "reading": reading, "part": part,
+                    "pages_read": sum(settled), "ocr": entry["ocr"], "metric": printmarks.is_metric(texts, every)}
 
     def _ocr_page(self, entry, img, k):
         from . import printmarks
         with self._ocr_turn:
             try:
+                # the frames the PDF's own text holds without their symbols, named from the picture: these are exact,
+                # and come before what OCR makes of the same frames
+                try:
+                    have = printmarks.confirm_frames(entry["marks"], img, k)
+                except Exception:
+                    have = entry["marks"]
                 marks, texts = printmarks.ocr_marks(img, k)
                 with self._marks_lock:
-                    entry["marks"] = printmarks.merge(entry["marks"], marks, entry["words"])
+                    entry["marks"] = printmarks.merge(have, marks, entry["words"])
                     entry["texts"] = entry["texts"] + texts
                     entry["ocr"] = "done"
             except Exception as e:  # the PDF's own text still shows
@@ -245,6 +262,21 @@ class Session:
 
     def pdf_select(self, **kw):
         return self.pdf.select(**kw)
+
+    def pdf_edit(self, op, args=None):
+        """An edit to a PDF's pages, or a question about them, by kernel/pdfedit.py: {"op", ...}."""
+        from .pdfdoc import PdfFile
+        from .pdfedit import PdfEditor
+        if not isinstance(self.pdf, PdfFile):
+            raise ValueError("Only a PDF can be edited. (A picture can be printed to a PDF, then edited.)")
+        if getattr(self, "editor", None) is None or self.editor.pdf is not self.pdf:
+            self.editor = PdfEditor(self.pdf, self.path)
+        out = self.editor.run(op, args or {})
+        if isinstance(out, dict) and (out.get("structure") or out.get("changed") is None) and "state" in out:
+            self._marks = {}  # hover marks belong to the pages they were read from
+        if op == "save":
+            self.path = self.editor.path
+        return out
 
     def pdf_find(self, query):
         return self.pdf.find(query)

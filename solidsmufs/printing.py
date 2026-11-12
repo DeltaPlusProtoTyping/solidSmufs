@@ -1,7 +1,7 @@
 """Printing: a PDF's (or a picture's) pages, or a picture of a model, fitted to the paper.
 
 Pages are drawn by the document's worker at up to DPI dots per inch on the paper, turned to match the paper's
-orientation and centred. A model is printed from a picture of the view the page makes on a white background.
+orientation and centerd. A model is printed from a picture of the view the page makes on a white background.
 
 From the command line, with no window (as Acrobat's /t), in a process of its own that ends once the job is with
 the Windows spooler: exit code 0 when every file printed, 1 when any didn't, 2 for a mistake in the command.

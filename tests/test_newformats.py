@@ -29,7 +29,7 @@ class GcodeTest(unittest.TestCase):
     def test_straight_moves_and_units(self):
         p = gcode.read_gcode(prog("G21 G90", "G0 X0 Y0 Z5", "G1 Z-1 F100", "X10", "Y10"))
         self.assertEqual(p.unit_mm, 1.0)
-        self.assertEqual(p.units, "millimetres")
+        self.assertEqual(p.units, "millimeters")
         self.assertEqual([m.kind for m in p.moves], ["feed", "feed", "feed"])
         np.testing.assert_allclose(p.moves[-1].points[-1], [10, 10, -1])
 
@@ -275,7 +275,7 @@ class SvgTest(unittest.TestCase):
                       '<g inkscape:label="Cut" stroke="red" fill="none"><circle cx="20" cy="20" r="10"/><line x1="0" y1="0" x2="200" y2="0"/></g>'
                       '<g id="Marks"><rect x="0" y="0" width="10" height="10"/></g></svg>')
         self.assertEqual([b["name"] for b in m.bodies], ["Cut", "Marks"])
-        self.assertEqual(m.info["Units"], "millimetres")
+        self.assertEqual(m.info["Units"], "millimeters")
         circle = m.edge_params[0]
         self.assertAlmostEqual(circle["radius"], 5.0)  # 200 user units across 100 mm
         np.testing.assert_allclose(circle["center"], [10, 40, 0])  # y flipped: 20 down from the top of 50 mm

@@ -4,6 +4,7 @@
 import { api } from './api.js';
 import { h, toast } from './ui.js';
 import { PrintHints } from './printhints.js';
+import { PdfEditor } from './pdfedit.js';
 
 const TILE = 1536; // device pixels: large, as a word cut by a seam can differ by a pixel across it
 const PREVIEW = 900; // long side of the whole-page picture that shows until the tiles land
@@ -25,7 +26,10 @@ export class PdfView {
     this.scroller = h('div', { class: 'pv-scroll', tabindex: '0' });
     this.sheet = h('div', { class: 'pv-sheet' });
     this.scroller.append(this.sheet);
-    this.el.append(this.bar, h('div', { class: 'pv-body' }, this.side, this.scroller));
+    // the page thumbnails are a side bar on the left, with an arrow on its edge to open and close it
+    this.sideTab = h('button', { class: 'pv-sidetab', onclick: () => this._toggleSide() }, h('span'));
+    this.body = h('div', { class: 'pv-body' }, this.side, this.sideTab, this.scroller);
+    this.el.append(this.bar, this.body);
     host.append(this.el);
     // a 3D PDF's switch between its model and its pages
     this.toModel = h('button', { class: 'pv-sw', text: '3D model', onclick: () => this.onMode('model') });
@@ -33,6 +37,7 @@ export class PdfView {
     this.modeSwitch = h('div', { class: 'pv-switch', hidden: true }, this.toModel, this.toPages);
     host.append(this.modeSwitch);
     this._buildBar();
+    this.editor = new PdfEditor(this); // comments, pages, forms, signing, the pages' own text: Acrobat's tools
     this.hints = new PrintHints(this); // fits, inches and French on hover
     this.scroller.addEventListener('scroll', () => { this._schedule(); this._pageNumber(); });
     this.scroller.addEventListener('wheel', (e) => this._wheel(e), { passive: false });
@@ -63,8 +68,6 @@ export class PdfView {
     this.findCount = h('span', { class: 'pv-of' });
     this.chip = h('span', { class: 'pv-chip', hidden: true });
     this.bar.append(
-      btn('☰', 'Page thumbnails', () => this._toggleSide()),
-      h('span', { class: 'pv-sep' }),
       btn('‹', 'Previous page (Page Up)', () => this.goto(this.current - 1)), this.pageIn, this.pageOf,
       btn('›', 'Next page (Page Down)', () => this.goto(this.current + 1)),
       h('span', { class: 'pv-sep' }),
@@ -82,8 +85,17 @@ export class PdfView {
 
   _toggleSide() {
     this.state.side = !this.state.side;
-    this.side.hidden = !this.state.side;
+    this._showSide();
     if (this.state.side) this._thumbs();
+    this._resized();
+  }
+
+  _showSide() {
+    const on = !!this.state?.side;
+    this.side.hidden = !on;
+    this.sideTab.classList.toggle('open', on);
+    this.sideTab.title = on ? 'Close the pages side bar' : 'Open the pages side bar';
+    this.sideTab.firstChild.textContent = on ? '‹' : '›';
   }
 
   // ================================================================== opening
@@ -101,9 +113,10 @@ export class PdfView {
     this.chip.textContent = `3D model inside (${models.join(', ')}): can't be shown yet`;
     this.modeSwitch.hidden = !hasModel;
     this.findIn.hidden = !!doc.meta.pdf.picture; // a picture has no text to find
-    this.side.hidden = !this.state.side;
+    this._showSide();
     this._buildPages();
     this.hints.open(doc);
+    this.editor.open(doc);
     this.setMode(doc.pdfMode);
   }
 
@@ -125,6 +138,7 @@ export class PdfView {
     if (this.doc?.pdfState && !this.el.hidden) this.doc.pdfState.top = this.scroller.scrollTop;
     this.doc = null;
     this.hints?.close();
+    this.editor?.close();
     this.run++;
     this.el.hidden = true;
     this.modeSwitch.hidden = true;
@@ -142,10 +156,11 @@ export class PdfView {
     this.pages = this.pagesInfo.map((p, i) => {
       const el = h('div', { class: 'pv-pagebox' });
       const marks = h('div', { class: 'pv-marks' });
-      el.append(marks);
+      const edit = h('div', { class: 'pe-layer' }); // the editor's: selected comments, fields, what's being drawn
+      el.append(marks, edit);
       this.sheet.append(el);
       el.dataset.page = i;
-      return { i, el, marks, info: p, tiles: new Map(), preview: null };
+      return { i, el, marks, edit, info: p, tiles: new Map(), preview: null, v: 0 };
     });
   }
 
@@ -192,6 +207,7 @@ export class PdfView {
     this.sheet.style.height = `${y}px`;
     this.zoomLabel.textContent = `${Math.round(z * 100)}%`;
     this._pageNumber();
+    this.editor?.layout();
   }
 
   // ================================================================== moving around
@@ -261,7 +277,8 @@ export class PdfView {
 
   _key(e) {
     if (!this.doc || this.el.hidden) return;
-    const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName || '');
+    if (this.editor.key(e)) return;
+    const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
     const done = () => { e.preventDefault(); e.stopPropagation(); };
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { this.findIn.focus(); this.findIn.select(); done(); return; }
     if (typing) return;
@@ -312,7 +329,7 @@ export class PdfView {
     this.hints.need(); // once the pages in view are drawn
   }
 
-  _key3(p, ix, iy) { return `${p.W}:${ix}:${iy}`; }
+  _key3(p, ix, iy) { return `${p.W}:${p.v}:${ix}:${iy}`; }
 
   _pump() {
     while (this.busy < IN_FLIGHT && this.queue.length) {
@@ -344,21 +361,22 @@ export class PdfView {
     if (run !== this.run) return;
     const c = this._paint(buf, W, H);
     c.className = 'pv-preview';
+    p.preview?.remove();
     p.el.prepend(c);
     p.preview = c;
   }
 
   async _tile({ p, ix, iy }, run) {
-    const W = p.W, H = p.H, key = this._key3(p, ix, iy);
+    const W = p.W, H = p.H, v = p.v, key = this._key3(p, ix, iy);
     const x = ix * TILE, y = iy * TILE, w = Math.min(TILE, W - x), hh = Math.min(TILE, H - y);
     if (w <= 0 || hh <= 0) return;
     const buf = await api.pdfTile(this.doc.id, { page: p.i, scale: p.scale, x, y, w, h: hh, turns: this.state.turns });
-    if (run !== this.run || p.W !== W) return; // zoomed on meanwhile (its replacement is on the way)
+    if (run !== this.run || p.W !== W || p.v !== v) return; // zoomed or edited meanwhile (its replacement is on the way)
     const c = this._paint(buf, w, hh);
     c.className = 'pv-tile';
     c.style.cssText = `left:${x / W * 100}%;top:${y / H * 100}%;width:${w / W * 100}%;height:${hh / H * 100}%`;
     p.el.insertBefore(c, p.marks);
-    p.tiles.set(key, { c, W });
+    p.tiles.set(key, { c, W, v });
   }
 
   // tiles from other zooms go once the view's own have landed; tiles far away go when there are too many
@@ -368,7 +386,7 @@ export class PdfView {
     let count = 0;
     for (const p of this.pages) {
       for (const [k, t] of p.tiles) {
-        if (t.W !== p.W && (settled || !shown.has(p))) { t.c.remove(); p.tiles.delete(k); } else count++;
+        if ((t.W !== p.W || t.v !== p.v) && (settled || !shown.has(p))) { t.c.remove(); p.tiles.delete(k); } else count++;
       }
     }
     if (count > MAX_TILES) {
@@ -379,10 +397,45 @@ export class PdfView {
     }
   }
 
+  // ================================================================== after an edit
+  // draw pages again (a list of numbers, or every page): what's there stays until the new drawing lands
+  redraw(which) {
+    if (!this.pages) return;
+    const list = which == null ? this.pages : which.map((i) => this.pages[i]).filter(Boolean);
+    for (const p of list) {
+      p.v++;
+      p.previewAsked = false;
+      const t = this.side.querySelector(`.pv-thumb[data-page="${p.i}"]`);
+      if (t) { delete t.dataset.done; this._thumbIO?.unobserve(t); this._thumbIO?.observe(t); }
+    }
+    this._schedule();
+  }
+
+  // the pages themselves changed (moved, added, taken out, turned or cropped): build them again
+  reloadPages(pagesInfo) {
+    const top = this.scroller.scrollTop, at = this.current || 0;
+    this.pagesInfo = pagesInfo;
+    this.doc.meta.pdf.pages = pagesInfo;
+    this.pageOf.textContent = `/ ${pagesInfo.length}`;
+    this.run++;
+    this.queue = [];
+    this.busy = 0;
+    this.selection = null;
+    this._clearFind();
+    this._buildPages();
+    this.side.replaceChildren();
+    this._resized();
+    this.scroller.scrollTop = top;
+    if (this.state.side) this._thumbs();
+    if (at >= pagesInfo.length) this.goto(pagesInfo.length - 1);
+    this.hints.close();
+    this.hints.open(this.doc);
+  }
+
   // ================================================================== thumbnails
   _thumbs() {
     if (this.side.children.length) return;
-    const io = new IntersectionObserver((rows) => {
+    const io = this._thumbIO = new IntersectionObserver((rows) => {
       for (const r of rows) {
         if (!r.isIntersecting || r.target.dataset.done) continue;
         r.target.dataset.done = '1';
@@ -394,6 +447,7 @@ export class PdfView {
       const t = h('button', { class: 'pv-thumb', title: `Page ${p.i + 1}`, onclick: () => this.goto(p.i) },
         h('span', { class: 'pv-tpage', style: { aspectRatio: `${w} / ${hh}` } }), h('span', { class: 'pv-tnum', text: String(p.i + 1) }));
       t.dataset.page = p.i;
+      this.editor.thumb(t, p.i);
       this.side.append(t);
       io.observe(t);
     }
@@ -405,7 +459,7 @@ export class PdfView {
     const [w, hh] = this._size(p), scale = 2 * 112 / w, W = 224, H = Math.max(Math.round(hh * scale), 1);
     try {
       const buf = await api.pdfTile(this.doc.id, { page: p.i, scale, x: 0, y: 0, w: W, h: H, turns: this.state.turns });
-      if (run === this.run) el.firstChild.append(this._paint(buf, W, H));
+      if (run === this.run) el.firstChild.replaceChildren(this._paint(buf, W, H));
     } catch { /* the page itself will say */ }
   }
 
@@ -424,6 +478,7 @@ export class PdfView {
 
   _down(e) {
     const s = this.scroller;
+    if (this.editor.down(e)) return;
     if (e.button === 1 || (e.button === 0 && !e.shiftKey)) { // left or middle drag pans; Shift+left-drag selects text
       e.preventDefault();
       s.focus({ preventScroll: true });
@@ -443,8 +498,13 @@ export class PdfView {
     if (!box) return;
     e.preventDefault();
     s.focus({ preventScroll: true });
-    const p = this.pages[+box.dataset.page], from = this._pagePoint(p, e);
-    let pending = false, last = null;
+    this._selectDrag(this.pages[+box.dataset.page], e);
+  }
+
+  // select text from where a drag starts; `done(selection)` once the button's up
+  _selectDrag(p, e, done) {
+    const from = this._pagePoint(p, e);
+    let pending = false, last = null, up = false;
     const ask = async () => {
       if (pending || !last) return;
       pending = true;
@@ -456,12 +516,18 @@ export class PdfView {
         this._showSelection();
       } catch { /* nothing selected */ }
       pending = false;
-      ask();
+      if (last) ask();
+      else if (up) done?.(this.selection);
     };
     const move = (m) => { last = this._pagePoint(p, m); ask(); };
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      up = true;
+      if (!pending && !last) done?.(this.selection);
+    };
     window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+    window.addEventListener('pointerup', stop);
   }
 
   // a rectangle in the page's own points, as percentages of the page as shown

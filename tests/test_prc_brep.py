@@ -53,14 +53,14 @@ class Arcs(unittest.TestCase):
         self.assertAlmostEqual(a.sweep, 1.5 * math.pi)
         np.testing.assert_allclose(a.at(np.array([1.0]))[0], (0, 1, 0), atol=1e-12)
 
-    def test_off_centre_it_finds_the_true_centre(self):
+    def test_off_center_it_finds_the_true_center(self):
         a = br._arc_through((6, 3, 2), (5, 4, 2), (4, 3, 2))
         np.testing.assert_allclose(a.center, (5, 3, 2), atol=1e-12)
 
     def test_three_in_a_row_are_a_line(self):
         self.assertIsInstance(br._arc_through((0, 0, 0), (1, 0, 0), (2, 0, 0)), br.Segment)
 
-    def test_short_and_long_about_a_centre(self):
+    def test_short_and_long_about_a_center(self):
         short = br._arc_about((1, 0, 0), (0, 1, 0), (0, 0, 0), False)
         long = br._arc_about((1, 0, 0), (0, 1, 0), (0, 0, 0), True)
         self.assertAlmostEqual(short.sweep, math.pi / 2)
@@ -222,7 +222,7 @@ class RealFiles(unittest.TestCase):
         self.assertTrue(all(isinstance(p.key[1], int) for p in r.pieces))
 
     def test_a_context_scale_is_applied(self):
-        r = self.read("mower_carb.stream-23")  # in metres in its body, millimetres at its scale of 1000
+        r = self.read("mower_carb.stream-23")  # in meters in its body, millimeters at its scale of 1000
         self.assertGreater(max(float(np.ptp(p.points, axis=0).max()) for p in r.pieces), 1.0)
 
 

@@ -2,7 +2,8 @@
 French in English. From the Quote Board's preview/printmarks.py, with the PDF's text read through QtPdf.
 
 Marks are boxes on a page, in points from the top left of the page as shown (a picture's pixel is 0.75 point):
-{"x", "y", "w", "h", "kind": "dim" | "fit" | "fr", "text", "tip", "ocr": bool}
+{"x", "y", "w", "h", "kind": "dim" | "fit" | "fr" | "gdt", "text", "tip", "ocr": bool}
+("gdt" is a geometric tolerance, true position above all: what it means and how hard it is, from kernel/gdt.py.)
 A PDF's own text is exact and instant (text_marks); Windows' own OCR finds what's drawn as lines (ocr_marks). Both
 run on this computer only: nothing is sent anywhere.
 """
@@ -15,7 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import fits, french
+from . import fits, french, gdt
 
 OCR_SCRIPT = Path(__file__).with_name("ocr.ps1")
 OCR_MAX = 9800  # px: Windows OCR's largest image side is 10000
@@ -93,6 +94,58 @@ def describe(text, ocr=False):
     return "dim", f"{m.group('pre') or ''}{_in(size)} in"
 
 
+SAYS_UNITS = re.compile(r"(?:DIMENSIONS?|DIMS?\.?|UNITS?|ALL\s+DIMENSIONS?|COTES?)\s*(?:ARE|IS|SONT)?\s*(?:IN|EN|:|=|-)?\s*\(?"
+                        r"(?P<u>INCH(?:ES)?|IN\b\.?|POUCES?|MILLIM[EÈ]T(?:ER|RE)S?|MM\b)", re.I)
+
+
+def units(lines, marks=()):
+    """The units a print says it's in, from its notes or title block: "in", "mm", or None when it doesn't say.
+    ("DIMENSIONS ARE IN INCHES", "UNITS: MM", "INCH [MM]" with the first one the print's own; else a mention of inches
+    or thread series against one of millimeters or an ISO standard.)"""
+    text = " ".join(lines)
+    m = SAYS_UNITS.search(text)
+    if m:
+        return "in" if re.match(r"IN|POUCE", m.group("u"), re.I) else "mm"
+    # (ASME Y14.5 is cited on metric prints too: it doesn't say)
+    inch, metric = bool(re.search(r"\b(inch|inches|pouces|unc|unf)\b", text, re.I)), bool(METRIC.search(text))
+    if inch != metric:
+        return "in" if inch else "mm"
+    if not inch and (french.looks_french(lines) or any(k["kind"] == "fit" for k in marks)
+                     or re.search(r"(?<![\d.,])\d{1,3},\d{1,3}(?![\d.,])", text)):
+        return "mm"
+    return None
+
+
+def with_units(marks, unit):
+    """The marks with the geometric tolerances' tips worded for the print's units ("in", "mm" or None)."""
+    metric = None if unit is None else unit == "mm"
+    out = []
+    for m in marks:
+        if m.get("kind") == gdt.PENDING:
+            continue  # not confirmed by the picture (yet)
+        if m.get("g"):
+            m = {**m, "tip": gdt.tip(m["g"], metric), "card": gdt.card(m["g"], metric)}
+            del m["g"]
+        out.append(m)
+    return out
+
+
+def part_difficulty(marks, unit):
+    """The part's overall difficulty from every geometric tolerance among these marks (gdt.part), in the print's
+    units ("in", "mm" or None)."""
+    frames = [m["g"] for m in marks if m.get("kind") == "gdt" and m.get("g")]
+    return gdt.part(frames, None if unit is None else unit == "mm")
+
+
+def confirm_frames(marks, img, k):
+    """With a page's picture (a QImage; k: points per pixel): the feature control frames a CAD PDF's text holds
+    without their symbols, confirmed and named from it (kernel/gdtsee.py). A new list of marks."""
+    from . import gdtsee
+    if not any(m.get("kind") == gdt.PENDING for m in marks):
+        return list(marks)
+    return gdtsee.confirm(marks, gdtsee.gray(img), k)
+
+
 def is_metric(lines, marks=()):
     """Does this print look like it's in millimeters? (A fit class, a French print or decimal commas say yes.)"""
     text = " ".join(lines)
@@ -148,24 +201,53 @@ def _wrap(text, width=64):
     return "\n".join(out + [line])
 
 
-def lines_marks(lines, ocr):
+def lines_marks(lines, ocr, keep=False):
     """lines: [[word box, ...], ...]. (Size marks, then English for the lines of a French print; the lines' texts.)"""
     texts = [" ".join(w[0] for w in ln) for ln in lines]
-    marks = [m for ln in lines for m in _scan(ln, ocr)]
+    # geometric tolerances first, so OCR's reading of a frame isn't lost to the size in it. OCR gives a frame's cells
+    # as lines of their own: its words are put back into rows across the page
+    marks = [m for ln in (gdt.rows([w for ln in lines for w in ln]) if ocr else lines) for m in gdt.scan(ln, ocr)]
+    marks += [m for ln in lines for m in _scan(ln, ocr)]
     if french.looks_french(texts):
         marks += [m for ln in lines for m in _fr(ln, ocr)]
+    gdt.tapped(marks, lines)
+    if not keep:
+        _bare(marks)
     return marks, texts
+
+
+def _bare(marks):
+    """Take off what gdt.scan leaves on its marks for a look at the picture."""
+    for m in marks:
+        if m.get("kind") != gdt.PENDING:  # (a frame waiting for the picture keeps its words' places for it)
+            m.pop("_run", None)
 
 
 def merge(have, new, words=()):
     """OCR's marks that aren't over a mark already there, or over the PDF's own text (which is exact; OCR's reading of it isn't)."""
+    have = [o for o in have if o.get("kind") != gdt.PENDING]
     out = list(have)
     boxes = [(o["x"], o["y"], o["x"] + o["w"], o["y"] + o["h"]) for o in have] + list(words)
+    frames = [(o["x"], o["y"], o["x"] + o["w"], o["y"] + o["h"]) for o in have if o["kind"] == "gdt"]
     for m in new:
         x0, y0, x1, y1 = m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"]
-        if not any(x0 < b[2] and b[0] < x1 and y0 < b[3] and b[1] < y1 for b in boxes):
+        # a feature control frame read from the picture stays, over the PDF's own text too: a CAD system's PDF has the
+        # frame's numbers and letters as text but draws its symbol and circles as lines, which only the picture shows
+        over = frames if m["kind"] == "gdt" else boxes
+        if m["kind"] == "gdt" and m.get("g") and not m["g"]["guess"]:
+            # OCR read this frame's symbol (// for parallelism) where the picture's shape wasn't clear: the frame
+            # already there, from the PDF's exact text, takes the name
+            for o in out:
+                g = o.get("g")
+                if (o["kind"] == "gdt" and g and g["guess"] and x0 < o["x"] + o["w"] and o["x"] < x1 and y0 < o["y"] + o["h"] and o["y"] < y1
+                        and g["tol"].lstrip("0") == m["g"]["tol"].lstrip("0")):
+                    g.update(kind=m["g"]["kind"], guess=False)
+                    o["tip"] = gdt.tip(g)
+        if not any(x0 < b[2] and b[0] < x1 and y0 < b[3] and b[1] < y1 for b in over):
             out.append(m)
             boxes.append((x0, y0, x1, y1))
+            if m["kind"] == "gdt":
+                frames.append((x0, y0, x1, y1))
     return out
 
 
@@ -342,7 +424,7 @@ def ocr_images(imgs):
     try:
         for i, img in enumerate(imgs):
             f = os.path.join(tmp, f"{i}.png")
-            # grey: OCR doesn't use colour, and a grey PNG of a big sheet saves 3x faster
+            # gray: OCR doesn't use color, and a gray PNG of a big sheet saves 3x faster
             if not img.convertToFormat(QImage.Format.Format_Grayscale8).save(f, "PNG"):
                 raise ValueError("Couldn't prepare the page for reading.")
             files.append(f)
@@ -390,7 +472,7 @@ def ocr_marks(img, k=1.0):
         p.fillRect(QRect(ln["x"] - 2, ln["y"] - 2, ln["w"] + 4, ln["h"] + 4), Qt.GlobalColor.white)
     p.end()
     res = [level, ocr_images([blank.transformed(QTransform().rotate(90))])[0]]
-    lines = []
+    lines, level_words = [], []
     for n, page in enumerate(res):
         for ln in page or []:
             words = ln.get("words") or []
@@ -403,4 +485,15 @@ def ocr_marks(img, k=1.0):
                 boxes.append((w["text"], x * k, y * k, (x + ww) * k, (y + hh) * k))
             if boxes:
                 lines.append(boxes)
-    return lines_marks(lines, True)
+                if n == 0:
+                    level_words += boxes
+    marks, texts = lines_marks(lines, True, keep=True)
+    try:  # what OCR can't read in a feature control frame, from the picture: its symbol and its circled letters
+        from . import gdtsee
+        gdtsee.refine(marks, level_words, gdtsee.gray(img), k)
+        gdt.tapped(marks, lines)  # the frames the picture added, too
+    except Exception:
+        import logging
+        logging.getLogger("solidsmufs").exception("reading the frames' symbols from the picture")
+    _bare(marks)
+    return marks, texts

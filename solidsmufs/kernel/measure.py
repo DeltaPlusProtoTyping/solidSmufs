@@ -1,8 +1,8 @@
 """The measure tool: what to report for a selection of faces, edges, vertices and picked points,
-SolidWorks-style (distance, centre distance, normal distance, angle, dX/dY/dZ, radius, area, …).
+SolidWorks-style (distance, center distance, normal distance, angle, dX/dY/dZ, radius, area, …).
 
 Distances between B-rep entities come from OpenCASCADE (exact); everything else from the
-analytic data the loader worked out (plane normals, axes, circle centres). For mesh documents the
+analytic data the loader worked out (plane normals, axes, circle centers). For mesh documents the
 same questions are answered from the triangles.
 
 Results are in mm and degrees; the browser formats them in the user's units. Each result row:
@@ -45,8 +45,8 @@ class Entity:
             return self.pick
         return None
 
-    def centre(self):
-        """A circle / arc / sphere centre, or a round flat face's (a disk or ring), else None."""
+    def center(self):
+        """A circle / arc / sphere center, or a round flat face's (a disk or ring), else None."""
         p = self.params or {}
         if self.type in ("circle", "ellipse", "sphere") and p.get("center") is not None:
             return np.asarray(p["center"], np.float64)
@@ -64,7 +64,7 @@ class Entity:
         return (ring[0], ring[1]) if ring else None
 
     def ring(self):
-        """(centre, normal, radius) of a flat face whose edge is mostly circles round one centre (a disk, or
+        """(center, normal, radius) of a flat face whose edge is mostly circles round one center (a disk, or
         a ring such as a bore's rim, where the radius is the inner circle's; small notches don't matter),
         else None."""
         if self.kind != "face" or self.type != "plane":
@@ -113,12 +113,12 @@ class Entity:
         return self.radius()
 
     def round(self):
-        """A radius the measure tool can measure to its centre or either tangent: a circle / arc edge, a
+        """A radius the measure tool can measure to its center or either tangent: a circle / arc edge, a
         cylindrical or conical face, or a flat disk or ring."""
         if not self.radius():
             return False
         if self.type == "circle":
-            return self.centre() is not None
+            return self.center() is not None
         if self.type in ("cylinder", "cone"):
             return self.axis() is not None
         return self.ring() is not None
@@ -399,9 +399,9 @@ def pair(a, b, opts, exact_distance):
                  {"label": "dZ", "value": abs(delta[2]), "kind": "length", "axis": "z"}]
         gfx.append({"type": "line", "p1": p1, "p2": p2, "value": d, "xyz": True})
 
-    # 2. centre distance for round things (when the main distance wasn't already that)
+    # 2. center distance for round things (when the main distance wasn't already that)
     if main is None or main[0] != "Center distance":
-        cd = _centre_distance(a, b)
+        cd = _center_distance(a, b)
         if cd is not None:
             d, p1, p2 = cd
             rows.append({"label": "Center distance", "value": d, "kind": "length"})
@@ -472,10 +472,10 @@ def _anchor(e):
 
 
 def arc_modes(ents, opts):
-    """Where each round item is measured from: "center" (centreline), "min" (close tangent) or "max"
+    """Where each round item is measured from: "center" (centerline), "min" (close tangent) or "max"
     (far tangent); None for items that aren't round. opts["arcs"] picks per item; otherwise
     opts["arc"] applies, except that round faces start at the close tangent, the way SolidWorks
-    measures faces, while arcs start at the centre. A flat disk or ring (a bore's rim) only counts as
+    measures faces, while arcs start at the center. A flat disk or ring (a bore's rim) only counts as
     round next to another round item; against a corner or a flat face it measures as the face it is."""
     picked = list(opts.get("arcs") or [])
     default = opts.get("arc", "center")
@@ -493,9 +493,9 @@ def arc_modes(ents, opts):
 
 
 def _as_geom(e):
-    """The entity as a point ("p"), line ("l") or plane ("pl") for centre measurements, else None."""
-    if e.centre() is not None:
-        return "p", e.centre(), None
+    """The entity as a point ("p"), line ("l") or plane ("pl") for center measurements, else None."""
+    if e.center() is not None:
+        return "p", e.center(), None
     if e.type in ("cylinder", "cone") and e.axis() is not None:
         return "l", *e.axis()
     if e.point() is not None:
@@ -540,10 +540,10 @@ def _foot(g, q):
     return q - d * float((q - x) @ d)
 
 
-def _centre_distance(a, b):
-    """Centre-to-centre / axis-to-axis / centre-to-plane distance when either side is round."""
-    ra = a.centre() is not None or (a.axis() is not None and a.type in ("cylinder", "cone"))
-    rb = b.centre() is not None or (b.axis() is not None and b.type in ("cylinder", "cone"))
+def _center_distance(a, b):
+    """Center-to-center / axis-to-axis / center-to-plane distance when either side is round."""
+    ra = a.center() is not None or (a.axis() is not None and a.type in ("cylinder", "cone"))
+    rb = b.center() is not None or (b.axis() is not None and b.type in ("cylinder", "cone"))
     if not (ra or rb):
         return None
     ga, gb = _as_geom(a), _as_geom(b)
@@ -557,17 +557,17 @@ def _centre_distance(a, b):
 
 
 def _arc_distance(a, b, modes):
-    """The distance with each round item measured from its centreline, close tangent or far tangent.
-    Starts from the centre / axis measurement, then slides each tangent end out by the radius, across
+    """The distance with each round item measured from its centerline, close tangent or far tangent.
+    Starts from the center / axis measurement, then slides each tangent end out by the radius, across
     the circle's plane or the hole's axis, towards (close) or away from (far) the other end. For two
-    holes side by side that's the centre distance minus or plus each radius."""
+    holes side by side that's the center distance minus or plus each radius."""
     ga, gb = _as_geom(a), _as_geom(b)
     if ga is None or gb is None:
         return None
     res = _closest(ga, gb)
     if res is None:
         return None
-    centres, ends = list(res), list(res)
+    centers, ends = list(res), list(res)
     geoms, ents = (ga, gb), (a, b)
     for _ in range(4 if any(m in ("min", "max") for m in modes) else 0):  # skewed circles take a few rounds
         for i in (0, 1):
@@ -575,10 +575,10 @@ def _arc_distance(a, b, modes):
                 continue
             e, j = ents[i], 1 - i
             n = e.axis()[1]
-            v = ends[j] - centres[i]
+            v = ends[j] - centers[i]
             v = v - n * float(v @ n)
             if np.linalg.norm(v) > 1e-12:
-                ends[i] = centres[i] + (1 if modes[i] == "min" else -1) * e.radius_at(centres[i]) * unit(v)
+                ends[i] = centers[i] + (1 if modes[i] == "min" else -1) * e.radius_at(centers[i]) * unit(v)
             if modes[j] is None or (modes[j] == "center" and geoms[j][0] == "l"):
                 ends[j] = _foot(geoms[j], ends[i])  # the other side's nearest point to the new end
     label = "Center distance" if all(m in (None, "center") for m in modes) else "Distance"
@@ -588,7 +588,7 @@ def _arc_distance(a, b, modes):
 # ---------------------------------------------------------------------------------------------- many entities
 def from_radius(ents, opts, exact_distance):
     """A hole or arc and two or more other items: the distance from the radius (its close tangent,
-    centerline or far tangent) to each of the others, and with two others how far off centre it
+    centerline or far tangent) to each of the others, and with two others how far off center it
     sits between them. None when nothing in the selection is round."""
     modes = arc_modes(ents, opts)
     hub = next((i for i, mo in enumerate(modes) if mo), None)

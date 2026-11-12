@@ -15,7 +15,7 @@ from pathlib import Path
 from . import APP_NAME, printing, settings
 from .archive import ChooseInArchive
 from .kernel.formats import ALL_FORMATS, EDRAWINGS_FORMATS, IMAGE_FORMATS, TOOLPATH_FORMATS
-from .server import WEB, App, Native
+from .server import WEB, App, Native, needs_save_as
 
 log = logging.getLogger("solidsmufs")
 
@@ -163,6 +163,15 @@ def run(argv):
                 return path or None
             return bridge(ask)
 
+        def open_files(self, title, file_filter):
+            def ask():
+                start = settings.load()["ui"].get("lastDir") or str(Path.home())
+                paths, _ = QFileDialog.getOpenFileNames(window_ref.get("w"), title, start, file_filter)
+                if paths:
+                    settings.set_ui({"lastDir": str(Path(paths[0]).parent)})
+                return paths
+            return bridge(ask) or []
+
         def _ask_printer(self, title, pages=0):
             """The print dialog, on the GUI thread: a printer set up as chosen, or None if cancelled."""
             def ask():
@@ -292,6 +301,36 @@ def run(argv):
             self.page.setBackgroundColor(QColor("#151a25" if theme == "dark" else "#f6f8fa"))
             self.view.setUrl(QUrl(f"{app.url}&theme={theme}"))
 
+        def _unsaved_ok(self):
+            """PDFs with edits not saved: ask to save them (True to go on closing, False to stay open)."""
+            from PySide6.QtWidgets import QMessageBox
+            dirty = [d for d in app.docs.all() if getattr(d, "pdf_dirty", False)]
+            if not dirty:
+                return True
+            names = "\n".join(f"  {d.name}" for d in dirty)
+            box = QMessageBox(QMessageBox.Icon.Warning, APP_NAME, f"Save the changes to these PDFs before closing?\n\n{names}",
+                              QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+                              | QMessageBox.StandardButton.Cancel, self)
+            box.button(QMessageBox.StandardButton.Discard).setText("Don't Save")
+            answer = box.exec()
+            if answer == QMessageBox.StandardButton.Cancel:
+                return False
+            if answer == QMessageBox.StandardButton.Discard:
+                return True
+            for d in dirty:
+                try:
+                    path = None
+                    if needs_save_as(d, app.upload_dir):
+                        path, _ = QFileDialog.getSaveFileName(self, f"Save {d.name} As", d.name, "PDF (*.pdf)")
+                        if not path:
+                            return False
+                    d.request("pdf_edit", timeout=600, op="save", args={"path": path})
+                    d.pdf_dirty = False
+                except Exception as e:
+                    QMessageBox.critical(self, APP_NAME, f"{d.name} couldn't be saved: {e}")
+                    return False
+            return True
+
         def _hook_drops(self, ok):
             proxy = self.view.focusProxy()
             for w in (self.view, proxy):
@@ -319,6 +358,9 @@ def run(argv):
             return super().eventFilter(obj, ev)
 
         def closeEvent(self, ev):
+            if not self._unsaved_ok():
+                ev.ignore()
+                return
             QSettings().setValue("geometry", self.saveGeometry())
             super().closeEvent(ev)
             self.view.setPage(None)

@@ -1,6 +1,6 @@
 """Checks a build from tools/solidsmurfs.spec before it's handed out: the files the app loads at run time are in it (the OCR
-script), and the frozen app starts, shows its page and opens a real STEP part and a picture in worker processes, then prints both to a
-PDF with no window. Run from the repository root, with gmsh
+script), and the frozen app starts, shows its page and opens a real STEP part and a picture in worker processes, then prints both and
+a PDF (drawn by MuPDF, so PyMuPDF must be in the build) to a PDF with no window. Run from the repository root, with gmsh
 installed: python tools/check_prebuild.py picture.png"""
 
 import os
@@ -55,6 +55,12 @@ def main():
         picture_file = tmp / "swatch.png"  # a picture too: Qt's image plugins must be in the build
         from PIL import Image
         Image.new("RGB", (64, 48), (40, 120, 200)).save(picture_file)
+        pdf_file = tmp / "sheet.pdf"
+        import pymupdf
+        sheet = pymupdf.open()
+        sheet.new_page().insert_text((72, 72), "SolidSmurfs prebuild check")
+        sheet.save(pdf_file)
+        sheet.close()
         # its own settings and caches, so the log holds this run alone and nothing comes from an earlier one
         env = {**os.environ, "APPDATA": str(tmp), "LOCALAPPDATA": str(tmp)}
         run = subprocess.run([str(program.resolve()), "--snapshot", str(picture), "--snapshot-delay", str(DELAY), str(part), str(picture_file)],
@@ -64,16 +70,16 @@ def main():
         # printing with no window, to a PDF file: the model drawn off screen, the picture as a page (Qt's print support
         # must be in the build)
         printed = tmp / "printed.pdf"
-        printing = subprocess.run([str(program.resolve()), "--print-to", str(printed), str(part), str(picture_file)],
+        printing = subprocess.run([str(program.resolve()), "--print-to", str(printed), str(part), str(picture_file), str(pdf_file)],
                                   env=env, cwd=tmp, timeout=300)
         sheets = len(re.findall(rb"/Type\s*/Page\b", printed.read_bytes())) if printed.is_file() else 0
         log_after = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
     print(text)
     if run.returncode != 0:
         fail(f"the app exited with {run.returncode}")
-    if printing.returncode != 0 or sheets != 2:
+    if printing.returncode != 0 or sheets != 3:
         print(log_after[len(text):])
-        fail(f"printing to a PDF exited with {printing.returncode} and made {sheets} sheets, not 2")
+        fail(f"printing to a PDF exited with {printing.returncode} and made {sheets} sheets, not 3")
     if "Traceback" in text:
         fail("the log has a traceback")
     # a first open reads the exact geometry along with the tessellation, so there's no later "exact geometry ready" line

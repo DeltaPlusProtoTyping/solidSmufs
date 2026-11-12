@@ -3,7 +3,7 @@ polylines to draw, plus what the measure tool needs to know about each entity.
 
 Faces are stored body by body, each face with its own run of vertices (so normals can be smooth
 inside a face and sharp between faces) and its own run of triangles. Edges are runs of line
-segments. Everything is in millimetres.
+segments. Everything is in millimeters.
 """
 
 import json
@@ -115,7 +115,7 @@ class Model:
             },
             "buffers": layout,
         }
-        if getattr(self, "drawing", False):  # a 2D drawing: edges have their own colours and layers, and there's text
+        if getattr(self, "drawing", False):  # a 2D drawing: edges have their own colors and layers, and there's text
             meta["drawing"] = True
             meta["edges"]["color"] = self.edge_color
             meta["edges"]["body"] = [int(b) for b in self.edge_body]

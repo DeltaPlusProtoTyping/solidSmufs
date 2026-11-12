@@ -16,6 +16,8 @@ for f in sorted(PKG.rglob("*")):
     else:
         datas.append((str(f), str(f.parent.relative_to(ROOT))))
 
+hidden += ["pymupdf"]  # PDFs: drawn and edited by MuPDF (imported where it's used)
+
 # gmsh.py looks for its library beside itself, and the wheel puts it in the environment's lib folder
 gmsh_lib = {"win32": "gmsh-*.dll", "darwin": "libgmsh*.dylib"}.get(sys.platform, "libgmsh.so*")
 binaries = [(str(f), ".") for f in Path(sys.prefix).glob(f"[Ll]ib*/{gmsh_lib}")]

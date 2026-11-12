@@ -1,6 +1,6 @@
 """A DXF drawing as a model the viewer can show: no faces, just edges (each line, arc, circle, ellipse and
 spline its own edge, so the measure tool can pick them) and text. Each layer is a body, so it can be
-shown and hidden from the tree. Everything is in millimetres."""
+shown and hidden from the tree. Everything is in millimeters."""
 
 import math
 from pathlib import Path
@@ -11,7 +11,7 @@ from ..formats import dxf
 from .geom import unit
 from .model import Model
 
-INK = [0.05, 0.05, 0.06]  # AutoCAD colour 7: black on a light background (the viewer swaps it on a dark one)
+INK = [0.05, 0.05, 0.06]  # AutoCAD color 7: black on a light background (the viewer swaps it on a dark one)
 
 VERSIONS = {"AC1009": "R11/R12", "AC1012": "R13", "AC1014": "R14", "AC1015": "2000", "AC1018": "2004", "AC1021": "2007",
             "AC1024": "2010", "AC1027": "2013", "AC1032": "2018"}
@@ -164,7 +164,7 @@ def from_drawing(d, path, name, fmt, progress=lambda *a: None):
         m.info["Text items"] = str(len(m.texts))
     if d.units is None:
         m.notices.append("This drawing doesn't say what units it's in, so it's shown in inches. "
-                         "If it was drawn in millimetres, its sizes read 25.4 times too big.")
+                         "If it was drawn in millimeters, its sizes read 25.4 times too big.")
     if d.space == "paper":
         m.notices.append("This drawing has nothing in model space, so its paper layout is shown.")
     if d.skipped:

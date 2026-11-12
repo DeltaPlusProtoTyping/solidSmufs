@@ -65,7 +65,7 @@ class Placed:
 class Prc:
     def __init__(self):
         self.pieces = []
-        self.unit_mm = 1.0  # millimetres per file unit
+        self.unit_mm = 1.0  # millimeters per file unit
         self.name = ""
         self.warnings = []
         self.notices = []
@@ -116,7 +116,7 @@ def read_prc(data):
     try:
         _read_model_file(_section(data, model_offset), out)
     except (PrcError, struct.error, IndexError) as e:
-        out.warnings.append(f"The file's units couldn't be read ({e}); taken as millimetres.")
+        out.warnings.append(f"The file's units couldn't be read ({e}); taken as millimeters.")
     for k, offsets in enumerate(structures):
         if len(offsets) > TESSELLATION_SECTION:
             _read_tessellations(_section(data, offsets[TESSELLATION_SECTION]), out, k)
@@ -139,7 +139,7 @@ def _place(data, structures, ids, out):
             try:
                 global_data = read_globals(head, out.version)
             except (PrcError, IndexError, ValueError, OverflowError):
-                global_data = None  # its local coordinates and colours go without
+                global_data = None  # its local coordinates and colors go without
             files.append({"parts": parts, "products": products, "globals": global_data})
         where = placements(files, ids, out.roots)
         _mesh_exact(data, structures, schemas, {(f, t) for f, t, *_ in where if isinstance(t, tuple)}, out)
@@ -250,7 +250,7 @@ def _skip_coordinates(b):
 
 
 def _skip_colors(b, points, segments, is_face=False):
-    """Vertex colours: the first in full, then a same-as-before bit and a colour only when it differs."""
+    """Vertex colors: the first in full, then a same-as-before bit and a color only when it differs."""
     width = 32 if b.bit() else 24
     count = points
     if not is_face and b.bit():
@@ -328,7 +328,7 @@ def _compressed(b, version):
         angles = b.huffman(width, True, wide=True)
         planar = b.flags(face_count).tolist()
     stated = face_count if has_faces else 1
-    if b.bit():  # colours at points
+    if b.bit():  # colors at points
         b.flags(stated)
         b.huffman(8, False)
     if b.bit():  # several line styles on a face
@@ -360,7 +360,7 @@ def _face_record(b):
     start = b.u()
     sizes = _u_list(b)
     textures = b.u()
-    if b.bit():  # vertex colours
+    if b.bit():  # vertex colors
         _skip_colors(b, _corners_in(flags, sizes), 0, is_face=True)
     if styles:
         b.u()
@@ -386,7 +386,7 @@ def _groups(flags, sizes):
 
 def _corners_in(flags, sizes):
     if flags & _POLYFACES:
-        raise PrcError("Coloured polyfaces in the PRC data aren't handled.")
+        raise PrcError("Colored polyfaces in the PRC data aren't handled.")
     return sum(g[3] * 3 if g[0] == TRIANGLES else sum(g[3]) for g in _groups(flags, sizes))
 
 

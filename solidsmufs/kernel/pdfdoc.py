@@ -1,7 +1,8 @@
-"""PDF pages, drawn by PDFium through QtPdf. It runs in the document's worker, so a damaged file only takes its
+"""PDF pages, drawn by MuPDF (PyMuPDF), with their text read by PDFium through QtPdf. It runs in the document's worker, so a damaged file only takes its
 own document down, and pages come back as raw pixels: nothing is spent encoding images for a local window.
 """
 
+import math
 import os
 import re
 import time
@@ -31,71 +32,106 @@ def models_inside(path):
 
 
 class PdfFile:
+    """A PDF open for showing and editing. MuPDF (PyMuPDF) holds the document and draws its pages, so edits show
+    at once; QtPdf (PDFium) reads its text for selecting, finding and the hover marks, from a copy brought up to
+    date after an edit that changes what's on the pages."""
+
     def __init__(self, path, password=None):
         _qt()
+        import pymupdf
+        data = Path(path).read_bytes()  # from memory, so the file isn't held: it can be replaced or saved over while it's on screen
+        try:
+            self.fz = pymupdf.open(stream=data, filetype="pdf")
+        except Exception:
+            raise ValueError("This PDF can't be read (it may be damaged).") from None
+        if self.fz.needs_pass and not (password and self.fz.authenticate(password)):
+            raise ValueError(PASSWORD_WRONG if password else PASSWORD_NEEDED)
+        if self.fz.page_count < 1:
+            raise ValueError("This PDF can't be read (it may be damaged).")
+        self.password = password
+        self._qt_doc = None
+        self._load_qt(data)
+        self.text = {}
+
+    def _load_qt(self, data):
         from PySide6.QtCore import QBuffer, QByteArray, QCoreApplication, QIODevice
         from PySide6.QtPdf import QPdfDocument
-        self.doc = QPdfDocument()
-        if password:
-            self.doc.setPassword(password)
-        # from memory, so the file isn't held: it can be replaced or saved over while it's on screen
-        self._data = QByteArray(Path(path).read_bytes())
+        if self._qt_doc is not None:
+            self._qt_doc.close()
+        doc = QPdfDocument()
+        if self.password:
+            doc.setPassword(self.password)
+        self._data = QByteArray(data)
         self._buffer = QBuffer(self._data)
         self._buffer.open(QIODevice.OpenModeFlag.ReadOnly)
-        self.doc.load(self._buffer)
+        doc.load(self._buffer)
         for _ in range(2000):
-            if self.doc.status() not in (QPdfDocument.Status.Null, QPdfDocument.Status.Loading):
+            if doc.status() not in (QPdfDocument.Status.Null, QPdfDocument.Status.Loading):
                 break
             QCoreApplication.processEvents()
             time.sleep(0.002)
-        err = self.doc.error()
+        err = doc.error()
         if err == QPdfDocument.Error.IncorrectPassword:
-            raise ValueError(PASSWORD_WRONG if password else PASSWORD_NEEDED)
-        if err != QPdfDocument.Error.None_ or self.doc.pageCount() < 1:
+            raise ValueError(PASSWORD_WRONG if self.password else PASSWORD_NEEDED)
+        if err != QPdfDocument.Error.None_ or doc.pageCount() < 1:
             raise ValueError("This PDF can't be read (it may be damaged).")
+        self._qt_doc = doc
+        self._qt_stale = False
+
+    @property
+    def doc(self):
+        """QtPdf's copy, for text: read again from MuPDF's when an edit has changed the pages."""
+        if self._qt_stale:
+            import pymupdf
+            self._load_qt(self.fz.tobytes(encryption=pymupdf.PDF_ENCRYPT_KEEP))
+        return self._qt_doc
+
+    def changed(self):
+        """The pages' text or order changed: QtPdf's copy and the text read from it are out of date."""
+        self._qt_stale = True
         self.text = {}
 
     def close(self):
-        self.doc.close()
+        if self._qt_doc is not None:
+            self._qt_doc.close()
+        self.fz.close()
 
     def pages(self):
-        """[{"w", "h" in points, "label"}]"""
+        """[{"w", "h" in points, "label"}]: as shown, turned by the page's own /Rotate"""
         out = []
-        for i in range(self.doc.pageCount()):
-            s = self.doc.pagePointSize(i)
-            out.append({"w": round(s.width(), 3), "h": round(s.height(), 3), "label": self.doc.pageLabel(i) or str(i + 1)})
+        for i, pg in enumerate(self.fz):
+            r = pg.rect
+            out.append({"w": round(r.width, 3), "h": round(r.height, 3), "label": pg.get_label() or str(i + 1)})
         return out
 
     def title(self):
-        from PySide6.QtPdf import QPdfDocument
-        return self.doc.metaData(QPdfDocument.MetaDataField.Title) or ""
+        return (self.fz.metadata or {}).get("title") or ""
 
     def tile(self, page, scale, x, y, w, h, turns=0):
         """RGBA pixels of a piece of a page drawn at `scale` pixels per point, turned by `turns` quarter turns:
         (x, y) is the piece's corner on the whole drawn page."""
-        from PySide6.QtCore import QRect, QSize
-        from PySide6.QtPdf import QPdfDocumentRenderOptions
-        s = self.doc.pagePointSize(page)
-        W, H = max(round(s.width() * scale), 1), max(round(s.height() * scale), 1)  # the page unturned
-        # drawn unturned and turned here: QtPdf's own rotation squashes a turned page into the wrong shape. Turn 1 is
-        # a quarter turn clockwise: the turned page's (x, y) is the page's (y, H - x), as pdfview.js maps it back
+        import pymupdf
+        pg = self.fz[page]
+        r = pg.rect
+        W, H = max(round(r.width * scale), 1), max(round(r.height * scale), 1)  # the page unturned
+        # drawn unturned and turned here. Turn 1 is a quarter turn clockwise: the turned page's (x, y) is the page's
+        # (y, H - x), as pdfview.js maps it back
         turns %= 4
         cx, cy, cw, ch = {0: (x, y, w, h), 1: (y, H - x - w, h, w), 2: (W - x - w, H - y - h, w, h),
                           3: (W - y - h, x, h, w)}[turns]
-        o = QPdfDocumentRenderOptions()
-        o.setScaledSize(QSize(W, H))
-        o.setScaledClipRect(QRect(cx, cy, cw, ch))
-        img = self.doc.render(page, QSize(cw, ch), o)
-        if img.isNull():
-            raise ValueError("That page couldn't be drawn.")
-        raw = np.frombuffer(img.constBits(), np.uint8, img.sizeInBytes()).reshape(img.height(), img.bytesPerLine() // 4, 4)
-        raw = np.rot90(raw[:ch, :cw], -turns)
-        px = raw[:h, :w, [2, 1, 0, 3]].astype(np.uint16)  # Qt keeps BGRA in memory
-        # on white paper: PDFium leaves bare paper transparent, and what's under a tile mustn't show through
-        a = px[..., 3:]
-        px[..., :3] = (px[..., :3] * a + 255 * (255 - a) + 127) // 255
-        px[..., 3] = 255
-        return px.astype(np.uint8).tobytes()
+        sx, sy = W / r.width, H / r.height  # exactly W x H pixels for the whole page
+        clip = pymupdf.Rect(cx / sx, cy / sy, (cx + cw) / sx, (cy + ch) / sy)  # as shown: MuPDF turns by /Rotate itself
+        try:
+            pix = pg.get_pixmap(matrix=pymupdf.Matrix(sx, sy), clip=clip, alpha=False)
+        except Exception as e:
+            raise ValueError(f"That page couldn't be drawn: {e}") from None
+        raw = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride // pix.n, pix.n)[:, :pix.width, :3]
+        # MuPDF rounds the clip outwards to whole pixels: the piece starts (ox, oy) into what it drew
+        ox, oy = cx - pix.x, cy - pix.y
+        piece = np.full((ch, cw, 4), 255, np.uint8)
+        src = raw[max(oy, 0):max(oy, 0) + ch, max(ox, 0):max(ox, 0) + cw]
+        piece[:src.shape[0], :src.shape[1], :3] = src
+        return np.ascontiguousarray(np.rot90(piece, -turns)[:h, :w]).tobytes()
 
     def page_text(self, page):
         if page not in self.text:
@@ -111,10 +147,50 @@ class PdfFile:
         return out
 
     def select(self, page, ax, ay, bx, by):
-        """The text between two points on a page: {"text", "rects"} (points from the page's top left)."""
-        from PySide6.QtCore import QPointF
-        sel = self.doc.getSelection(page, QPointF(ax, ay), QPointF(bx, by))
-        return {"text": sel.text(), "rects": self._rects(sel)}
+        """The text between two points on a page, a whole word at a time, in reading order: {"text", "rects"}
+        (points from the page's top left, as shown). By MuPDF: PDFium's hit test misses whole lines of some PDFs."""
+        import pymupdf
+        pg = self.fz[page]
+        words = pg.get_text("words")  # (x0, y0, x1, y1, word, block, line, n) in reading order, unturned points
+        if not words:
+            return {"text": "", "rects": []}
+        m = pg.derotation_matrix
+        boxes = [pymupdf.Rect(w[:4]) for w in words]
+
+        def nearest(p, reach=12):
+            """The word under p; else the nearest on its line, however far along (past a line's end is its end);
+            else the nearest within `reach`."""
+            best = along = None
+            for i, r in enumerate(boxes):
+                if r.contains(p):
+                    return i
+                dx, dy = max(r.x0 - p.x, 0, p.x - r.x1), max(r.y0 - p.y, 0, p.y - r.y1)
+                if dy == 0 and (along is None or dx < along[0]):
+                    along = (dx, i)
+                d = math.hypot(dx, dy)
+                if d < reach and (best is None or d < best[0]):
+                    best = (d, i)
+            if along is not None:
+                return along[1]
+            return None if best is None else best[1]
+        ia, ib = nearest(pymupdf.Point(ax, ay) * m), nearest(pymupdf.Point(bx, by) * m)
+        if ia is None or ib is None:
+            return {"text": "", "rects": []}
+        i0, i1 = min(ia, ib), max(ia, ib)
+        text, lines, last = [], {}, None
+        for w, r in zip(words[i0:i1 + 1], boxes[i0:i1 + 1]):
+            key = (w[5], w[6])
+            if last is not None:
+                text.append(" " if key == last else "\n")
+            text.append(w[4])
+            lines[key] = lines[key] | r if key in lines else pymupdf.Rect(r)
+            last = key
+        rects = []
+        for r in lines.values():
+            q = r * pg.rotation_matrix
+            q.normalize()
+            rects.append([round(q.x0, 2), round(q.y0, 2), round(q.width, 2), round(q.height, 2)])
+        return {"text": "".join(text), "rects": rects}
 
     def find(self, query, limit=1000):
         """Every place `query` appears, ignoring case: [{"page", "rects"}]."""

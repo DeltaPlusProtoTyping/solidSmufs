@@ -21,7 +21,7 @@ export class Tools {
     this.projected = 'none';
     this.history = [];
     this.dialogs = {};
-    this.stockOpts = { allowance: null, round: true, align: 'best' };
+    this.stockOpts = { allowance: null, round: true, align: 'best', shape: 'block' };
   }
 
   get viewer() { return this.app.viewer; }
@@ -440,20 +440,31 @@ export class Tools {
       try {
         const bodies = this.meta.bodies.map((_, i) => i).filter((i) => this.viewer.bodies[i]?.visible);
         box = await api.bbox(app.active.id, bodies, o.align === 'faces' ? 'reference' : 'oriented', o.align === 'faces' ? refs() : undefined);
-        round = roundStock(this.viewer, box);
-        this.viewer.showBox(box);
+        // the bar runs along whichever side of the box makes it smallest; on picked faces, along the first pick
+        // (square to a flat face, down the middle of a round one, along a straight edge)
+        round = roundStock(this.viewer, box, bodies, o.align === 'faces' ? [box.axes[2]] : box.axes);
+        show();
       } catch (e) { error = e.message; }
       app.manager.refresh();
       render();
     };
+    const show = () => {
+      if (o.shape === 'round' && round) this.viewer.showCylinder(round);
+      else this.viewer.showBox(box);
+    };
     this._stockRecalc = () => { if (o.align === 'faces' && JSON.stringify(refs()) !== this._stockRefs) measureBox(); };
     const alignRow = () => h('div', { class: 'stack', style: { gap: '4px' } },
+      h('div', { class: 'row' }, h('span', { text: 'Stock', style: { minWidth: '160px' } }),
+        h('div', { class: 'seg' }, ...[['block', 'Block'], ['round', 'Round bar']].map(([k, label]) =>
+          h('button', { class: o.shape === k ? 'on' : '', text: label, onclick: () => { o.shape = k; if (box) show(); render(); } })))),
       h('div', { class: 'row' }, h('span', { text: 'Orientation', style: { minWidth: '160px' } }),
         h('div', { class: 'seg' }, ...[['best', 'Best fit'], ['faces', 'Selected faces']].map(([k, label]) =>
           h('button', { class: o.align === k ? 'on' : '', text: label, onclick: () => { o.align = k; measureBox(); } })))),
       o.align === 'faces' ? h('div', { class: 'hint', text: refs().length
-        ? `Standing on ${refs().map((r, i) => `${app.describe(r, true)}${i ? ' (length)' : ' (thickness)'}`).join(', ')}. Ctrl+click another face to set the length.`
-        : 'Click the face the stock should sit on (or a round face or straight edge for its axis). Ctrl+click a second face to set the length direction.' }) : null);
+        ? (o.shape === 'round' ? `The bar runs along ${app.describe(refs()[0], true)}: square to a flat face, down the middle of a round one, along an edge.`
+          : `Standing on ${refs().map((r, i) => `${app.describe(r, true)}${i ? ' (length)' : ' (thickness)'}`).join(', ')}. Ctrl+click another face to set the length.`)
+        : (o.shape === 'round' ? "Click a round face or a straight edge for the bar's axis, or a flat face the bar's end sits on."
+          : 'Click the face the stock should sit on (or a round face or straight edge for its axis). Ctrl+click a second face to set the length direction.') }) : null);
     const render = () => {
       if (!box) {
         d.setBody(h('div', { class: 'stack' }, alignRow(), error ? h('div', { class: 'pm-msg', style: { margin: 0 }, text: error }) : null));
@@ -467,7 +478,17 @@ export class Tools {
       const mat = app.active.material;
       const vol = stock[0] * stock[1] * stock[2];
       const part = app.active.envelope?.part;
-      const rows = [
+      const bar = round ? { dia: up(round.d + 2 * o.allowance), len: up(round.len + 2 * o.allowance) } : null;
+      const barVol = bar ? Math.PI * (bar.dia / 2) ** 2 * bar.len : 0;
+      const rows = o.shape === 'round' && bar ? [
+        ['Part envelope (Ø × length)', `Ø${u.len(round.d, false)} × ${u.len(round.len, false)} ${u.label}`],
+        ['Envelope volume', u.vol(round.vol)],
+        ['Round bar (Ø × length)', `Ø${u.len(bar.dia, false)} × ${u.len(bar.len, false)} ${u.label}`],
+        ['Stock volume', u.vol(barVol)],
+        ...(part > 0 ? [['Part volume', u.vol(part)], ['Removed from stock', `${u.vol(Math.max(barVol - part, 0))} (${Math.round((100 * Math.max(barVol - part, 0)) / barVol)}%)`]] : []),
+        mat?.density != null ? ['Stock weight', `${u.mass(barVol * mat.density * 1e-3)} (${mat.name})`] : ['Stock weight', 'pick a material to see the weight'],
+        ['Rectangular stock instead', stock.map((x) => u.len(x, false)).join(' × ') + ` ${u.label}`],
+      ] : [
         ['Part envelope (L × W × T)', dims.map((x) => u.len(x, false)).join(' × ') + ` ${u.label}`],
         ['Envelope volume', u.vol(dims[0] * dims[1] * dims[2])],
         ['Rectangular stock', stock.map((x) => u.len(x, false)).join(' × ') + ` ${u.label}`],
@@ -476,7 +497,7 @@ export class Tools {
         mat?.density != null ? ['Stock weight', `${u.mass(vol * mat.density * 1e-3)} (${mat.name})`] : ['Stock weight', 'pick a material to see the weight'],
       ];
       // round bar only when the part is roughly round (no bar suggestions for plates)
-      if (round && round.vol <= 1.3 * dims[0] * dims[1] * dims[2]) {
+      if (o.shape !== 'round' && round && round.vol <= 1.3 * dims[0] * dims[1] * dims[2]) {
         const dia = up(round.d + 2 * o.allowance), len = up(round.len + 2 * o.allowance);
         rows.push(['Round bar (Ø × length)', `Ø${u.len(dia, false)} × ${u.len(len, false)} ${u.label}`]);
         if (mat?.density != null) rows.push(['Round bar weight', u.mass(Math.PI * (dia / 2) ** 2 * len * mat.density * 1e-3)]);
@@ -488,9 +509,28 @@ export class Tools {
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: o.round, onchange: (e) => { o.round = e.target.checked; render(); } }), `Round up to the next ${u.unit === 'in' ? '1/8"' : '1 mm'}`),
         h('table', { class: 'table' }, h('tbody', {}, ...rows.map(([k, v]) => h('tr', {}, h('td', { text: k }), h('td', { class: 'num', text: v }))))),
         h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => copyText(text).then(() => toast('Stock size copied')) }, 'Copy'),
-          h('span', { class: 'subtle', text: o.align === 'faces' ? 'Box on the picked faces, from the exact surfaces; shown in the view.' : 'Smallest box from the exact surfaces; shown in the view.' }))));
+          h('span', { class: 'subtle', text: o.shape === 'round' ? (o.align === 'faces' ? 'Smallest bar along the picked direction; shown in the view.' : 'Smallest bar along a side of the best-fit box; shown in the view.')
+            : o.align === 'faces' ? 'Box on the picked faces, from the exact surfaces; shown in the view.' : 'Smallest box from the exact surfaces; shown in the view.' }))));
     };
     await measureBox();
+  }
+
+  // ================================================================== part difficulty: what it's made of
+  partDifficulty() {
+    const doc = this.app.active, p = doc?.partDifficulty;
+    if (!p) return;
+    const rows = p.items.map((i) => h('tr', {}, h('td', { text: i.head }), h('td', { class: 'num', text: `${i.machining}` }), h('td', { class: 'num', text: `${i.measuring}` }),
+      h('td', { class: 'num', text: i.mult === 1 ? '' : `×${i.mult}` }), h('td', { class: 'num', text: i.points ? i.points.toFixed(1) : '—' })));
+    const text = [`Part difficulty: ${p.score}/10 (${p.points} points from ${p.count} geometric tolerances)`,
+      ...p.items.map((i) => `${i.head}\tmachining ${i.machining}\tmeasuring ${i.measuring}\t${i.points} points`)].join('\n');
+    const d = this._dialog('partDifficulty', { title: 'Part Difficulty', icon: 'quote', width: 520, body: h('div') });
+    d.setBody(h('div', { class: 'stack' },
+      h('div', { class: 'row' }, h('b', { text: `${p.score.toFixed(1)} / 10`, style: { fontSize: '18px' } }),
+        h('span', { class: 'subtle', text: `${p.points} points from ${p.count} geometric tolerance${p.count === 1 ? '' : 's'} on ${doc.name}${p.whole ? '' : ' (still reading the print)'}` })),
+      h('table', { class: 'table' }, h('thead', {}, h('tr', {}, h('th', { text: 'Callout' }), h('th', { class: 'num', text: 'Machining' }), h('th', { class: 'num', text: 'Measuring' }), h('th', { class: 'num', text: '' }), h('th', { class: 'num', text: 'Points' }))),
+        h('tbody', {}, ...rows)),
+      h('div', { class: 'hint', text: 'Each callout gives points from its two scores (routine ones give none), some kinds count extra, and the points are totalled: 20 points is a 5/10 part, 40 is 7.5. A part is never easier than its hardest callout less one. A first guess, to be tuned: only geometric tolerances count so far.' }),
+      h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: () => copyText(text).then(() => toast('Part difficulty copied')) }, 'Copy'))));
   }
 
   // ================================================================== Wagner: Hole Report
@@ -685,7 +725,7 @@ export class Tools {
     const sw = this.app.prefs.mouse === 'sw';
     modal('Mouse and Keyboard', h('div', { class: 'keys' },
       h('h3', { text: `Mouse (${sw ? 'SolidWorks buttons' : 'left-drag rotates'} — change in Options)` }),
-      sw ? row('Rotate (about the model\'s centre)', '<kbd>Middle-drag</kbd>') : row('Rotate (about the point under the cursor)', '<kbd>Left-drag</kbd> · <kbd>Middle-drag</kbd>'),
+      sw ? row('Rotate (about the model\'s center)', '<kbd>Middle-drag</kbd>') : row('Rotate (about the point under the cursor)', '<kbd>Left-drag</kbd> · <kbd>Middle-drag</kbd>'),
       sw ? row('Rotate about a vertex, edge or face', '<kbd>Middle-click</kbd> it, then <kbd>Middle-drag</kbd> (middle-click empty space to go back)') : null,
       row('Pick a face hidden behind another', 'Right-click › <b>Select Other</b>'),
       row('Pan', sw ? '<kbd>Ctrl</kbd>+<kbd>Middle-drag</kbd>' : '<kbd>Right-drag</kbd> · <kbd>Ctrl</kbd>+<kbd>Middle-drag</kbd>'),
@@ -735,29 +775,39 @@ function tensorLines(p, t, u) {
   return ax.map((a, i) => `\t${ax.map((b, j) => `${p}${a}${b} = ${u.inertia(t[i][j])}`).join('\t')}`);
 }
 
-// smallest round bar along one of the box axes: enclosing circle of the drawn vertices
-function roundStock(viewer, box) {
+// smallest round bar along one of the given directions: the smallest circle around the shown bodies' drawn points,
+// looking down the direction. {d, len, vol, r, center, axis} in mm
+function roundStock(viewer, box, bodies, axes = box.axes) {
   const m = viewer.model;
   if (!m) return null;
   const pos = m.pos;
-  const n = pos.length / 3;
-  const stepI = Math.max(1, Math.floor(n / 40000));
+  // the shown bodies' points (every body when the model doesn't say whose is whose)
+  const spans = (bodies || []).map((i) => viewer.bodies[i]).filter((b) => b && Number.isFinite(b.v0) && b.geometry?.attributes?.position).map((b) => [b.v0, b.v0 + b.geometry.attributes.position.count]);
+  const ranges = spans.length ? spans : [[0, pos.length / 3]];
+  const n = ranges.reduce((s, [a, b]) => s + b - a, 0);
+  const stepI = Math.max(1, Math.floor(n / 150000));
   let best = null;
-  for (const axis of box.axes) {
+  for (const axis of axes) {
     const a = new THREE.Vector3(...axis).normalize();
     const u1 = new THREE.Vector3(Math.abs(a.x) < 0.9 ? 1 : 0, Math.abs(a.x) < 0.9 ? 0 : 1, 0).cross(a).normalize();
     const u2 = new THREE.Vector3().crossVectors(a, u1);
     const pts = [];
     let lo = Infinity, hi = -Infinity;
-    for (let i = 0; i < n; i += stepI) {
-      const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
-      const t = x * a.x + y * a.y + z * a.z;
-      lo = Math.min(lo, t); hi = Math.max(hi, t);
-      pts.push([x * u1.x + y * u1.y + z * u1.z, x * u2.x + y * u2.y + z * u2.z]);
+    for (const [from, to] of ranges) {
+      for (let i = from; i < to; i += stepI) {
+        const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+        const t = x * a.x + y * a.y + z * a.z;
+        lo = Math.min(lo, t); hi = Math.max(hi, t);
+        pts.push([x * u1.x + y * u1.y + z * u1.z, x * u2.x + y * u2.y + z * u2.z]);
+      }
     }
+    if (!pts.length) continue;
     const c = minCircle(pts);
     const vol = Math.PI * c.r * c.r * (hi - lo);
-    if (!best || vol < best.vol) best = { d: 2 * c.r, len: hi - lo, vol };
+    if (!best || vol < best.vol) {
+      const center = a.clone().multiplyScalar((lo + hi) / 2).addScaledVector(u1, c.x).addScaledVector(u2, c.y);
+      best = { d: 2 * c.r, len: hi - lo, vol, r: c.r, center: center.toArray(), axis: a.toArray() };
+    }
   }
   return best;
 }

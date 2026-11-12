@@ -630,3 +630,160 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .pdf-pass p { margin: 0; overflow-wrap: anywhere; }
 .pdf-pass-wrong { color: var(--danger, #c0392b); font-weight: 500; }
 .pdf-pass-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ===================================================================== PDF editor (pdfedit.js) */
+.pe-row { flex: none; display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 8px; background: var(--panel); border-bottom: 1px solid var(--line); font: 12px var(--ui); color: var(--ink); white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.pe-row[hidden] { display: none; }
+.pe-row > * { flex: none; }
+.pe-row > .pv-grow { flex: 1; min-width: 8px; }
+.pe-row .pv-btn { display: inline-flex; align-items: center; gap: 5px; }
+.pe-row .pv-btn svg { flex: none; }
+.pe-row .pv-btn:disabled { opacity: .4; pointer-events: none; }
+.pe-tool.on { background: var(--btn-on); border-color: var(--btn-on-line); }
+.pe-dirty { color: var(--accent); font-weight: 600; }
+.pe-sets { display: flex; gap: 1px; padding: 2px; border-radius: 7px; background: var(--panel-3); }
+.pe-set { height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--ink-2); font: 12px var(--ui); }
+.pe-set:hover { background: var(--btn-hover); }
+.pe-set.on { background: var(--panel); border-color: var(--line-2); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.pe-swatch span { display: block; width: 16px; height: 16px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); }
+.pe-colors { display: grid; grid-template-columns: repeat(6, 24px); gap: 5px; padding: 6px; }
+.pe-c { width: 24px; height: 24px; border: 0; border-radius: 5px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); cursor: pointer; }
+.pe-c.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pe-layer { position: absolute; inset: 0; pointer-events: none; }
+.pe-ghost { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.pe-sel { position: absolute; outline: 1.5px solid #2a6ff0; outline-offset: 1px; background: rgba(42, 111, 240, .06); }
+.pe-sel.img { outline-style: dashed; }
+.pe-h { position: absolute; width: 9px !important; height: 9px !important; margin: -5px 0 0 -5px; background: #fff; border: 1.5px solid #2a6ff0; border-radius: 2px; pointer-events: auto; cursor: nwse-resize; z-index: 2; }
+.pe-h[data-mx="0"] { cursor: ns-resize; }
+.pe-h[data-my="0"] { cursor: ew-resize; }
+.pe-h[data-mx="1"][data-my="-1"], .pe-h[data-mx="-1"][data-my="1"] { cursor: nesw-resize; }
+.pv-scroll.pe-drawing { cursor: crosshair; }
+.pv-scroll.pe-over-text { cursor: text; }
+.pv-scroll.pe-over-annot { cursor: move; }
+.pv-scroll.pe-drawing[data-tool="editText"] { cursor: text; }
+.pv-scroll.pe-drawing[data-tool="editImage"] { cursor: default; }
+.pe-field { position: absolute; box-sizing: border-box; margin: 0; padding: 0 2px; border: 1px solid rgba(42, 111, 240, .45); border-radius: 1px; background: #dde7fd; color: #000; font-family: Helvetica, Arial, sans-serif; pointer-events: auto; outline: none; resize: none; }
+.pe-field:focus { border-color: #2a6ff0; background: #fff; box-shadow: 0 0 0 2px rgba(42, 111, 240, .3); }
+.pe-field:disabled { background: rgba(230, 230, 230, .7); }
+.pe-field.check { appearance: auto; accent-color: #2a6ff0; padding: 0; }
+.pe-inline { position: absolute; box-sizing: border-box; margin: 0; padding: 0 1px; border: 1px dashed #2a6ff0; background: transparent; line-height: 1.2; overflow: hidden; resize: none; outline: none; pointer-events: auto; white-space: pre; z-index: 3; }
+.pe-inline.grow { field-sizing: content; min-height: 1.3em; background: rgba(255, 255, 255, .85); }
+.pe-inline.pe-editline { white-space: nowrap; }
+.pe-pop { position: fixed; z-index: 200; width: 280px; padding: 8px; border-radius: 8px; background: var(--panel); color: var(--ink); border: 1px solid var(--line-2); box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .25)); font: 12px var(--ui); }
+.pe-pop-head { font-weight: 600; margin-bottom: 6px; }
+.pe-pop-text { width: 100%; height: 110px; box-sizing: border-box; padding: 6px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--panel-2); color: inherit; font: 13px var(--ui); resize: vertical; }
+.pe-pop-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.pe-pop-foot .pv-of { margin-right: auto; }
+.pe-sign p, .pe-confirm p { margin: 0 0 10px; line-height: 1.45; }
+.pe-pad { display: block; width: 100%; height: 160px; background: #fff; border: 1px solid var(--line-2); border-radius: 6px; touch-action: none; cursor: crosshair; }
+.pe-type { width: 100%; box-sizing: border-box; height: 30px; margin-top: 8px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--panel); color: var(--ink); font: 13px var(--ui); }
+.pe-num { width: 60px; height: 26px; margin: 0 4px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--panel); color: var(--ink); }
+.pe-line { display: flex; align-items: center; margin-bottom: 4px; }
+.pv-thumb.pick { background: var(--btn-on); border-color: var(--accent); color: var(--ink); }
+.pv-thumb.drop-before { box-shadow: 0 -3px 0 var(--accent); }
+.pv-thumb.drop-after { box-shadow: 0 3px 0 var(--accent); }
+.pe-panel { flex: none; width: 290px; display: flex; flex-direction: column; background: var(--panel-2); border-left: 1px solid var(--line); font: 12px var(--ui); color: var(--ink); }
+.pe-panel[hidden] { display: none; }
+.pe-ph { display: flex; align-items: center; height: 34px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); }
+.pe-list { flex: 1; overflow-y: auto; padding: 6px; }
+.pe-empty { padding: 14px; color: var(--muted); line-height: 1.5; }
+.pe-pg { margin: 8px 4px 4px; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.pe-item { margin-bottom: 6px; padding: 7px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); cursor: pointer; }
+.pe-item.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pe-meta { display: flex; align-items: center; gap: 6px; }
+.pe-meta .pv-of { padding: 0; font-size: 11px; }
+.pe-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .2); flex: none; }
+.pe-words { margin-top: 5px; min-height: 1.4em; padding: 2px 4px; border-radius: 4px; line-height: 1.4; white-space: pre-wrap; outline: none; cursor: text; }
+.pe-words:empty::before { content: attr(data-ph); color: var(--faint); }
+.pe-words:focus { background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.pe-replyrow { margin: 4px 0 0 12px; padding-left: 8px; border-left: 2px solid var(--line-2); line-height: 1.4; display: flex; align-items: baseline; gap: 2px; }
+.pe-replyrow span { flex: 1; }
+.pe-reply { width: 100%; box-sizing: border-box; height: 24px; margin-top: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2); color: inherit; font: 12px var(--ui); }
+.pe-del { flex: none; width: 20px; height: 20px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer; }
+.pe-del:hover { background: var(--btn-hover); color: var(--ink); }
+
+/* the editor's feel: bars on what's selected, what's under the pointer, what's about to be placed */
+.pe-tool.lock { box-shadow: inset 0 -2px 0 var(--accent); }
+.pv-scroll.pe-drawing[data-tool="highlight"], .pv-scroll.pe-drawing[data-tool="underline"], .pv-scroll.pe-drawing[data-tool="strikeout"],
+.pv-scroll.pe-drawing[data-tool="squiggly"], .pv-scroll.pe-drawing[data-tool="redactText"], .pv-scroll.pe-drawing[data-tool="typewriter"],
+.pv-scroll.pe-drawing[data-tool="addText"] { cursor: text; }
+.pv-scroll.pe-hand, .pv-scroll.pe-hand * { cursor: grab !important; }
+.pv-scroll.pe-hand.panning, .pv-scroll.pe-hand.panning * { cursor: grabbing !important; }
+.pe-hover { position: absolute; outline: 1.5px solid rgba(42, 111, 240, .55); outline-offset: 2px; border-radius: 1px; }
+.pe-follow { position: absolute; opacity: .6; outline: 1px dashed #2a6ff0; display: flex; align-items: center; justify-content: center; color: #c22; font: 600 11px var(--ui); text-transform: uppercase; overflow: hidden; }
+.pe-follow img { width: 100%; height: 100%; object-fit: fill; }
+.pe-carry { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .75; pointer-events: none; }
+.pe-sel.moving { background: transparent; }
+.pe-sel.moving .pe-bar { display: none; }
+.pe-h.pt { border-radius: 50%; cursor: crosshair; }
+.pe-bar { z-index: 4; }
+.pe-bar.annot { position: absolute; left: 0; bottom: 100%; margin-bottom: 10px; }
+.pe-bar.annot.below { bottom: auto; top: 100%; margin-top: 10px; }
+.pe-bar.annot.right { left: auto; right: 0; }
+.pe-bar.text { position: absolute; width: 0 !important; height: 0 !important; }
+.pe-bar.text .pe-bar-in { position: absolute; left: 0; bottom: 8px; }
+.pe-bar-in { display: flex; align-items: center; gap: 1px; padding: 3px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line-2); box-shadow: 0 3px 12px rgba(0, 0, 0, .22); pointer-events: auto; white-space: nowrap; }
+.pe-bb { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: 0; border-radius: 5px; background: transparent; color: var(--ink); cursor: pointer; }
+.pe-bb:hover { background: var(--btn-hover); }
+.pe-bd { width: 16px; height: 16px; margin: 0 3px; border: 0; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); cursor: pointer; }
+.pe-bd:hover { transform: scale(1.2); }
+.pe-bd.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pe-bs { width: 1px; height: 16px; margin: 0 4px; background: var(--line-2); }
+.pe-sel.thin { outline: none; background: none; }
+.pv-sidetab { flex: none; width: 14px; padding: 0; border: 0; border-right: 1px solid var(--line); background: var(--panel-2); color: var(--muted); font: 14px/1 var(--ui); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.pv-sidetab:hover { background: var(--btn-hover); color: var(--ink); }
+.pv-sidetab span { display: flex; align-items: center; justify-content: center; width: 14px; height: 44px; border-radius: 4px; }
+.pv-sidetab:hover span { background: var(--btn-on); }
+.pv-sidetab.open { border-left: 0; }
+.pv-side { border-right: 0; }
+
+/* the open documents' tabs share the CommandManager's tab row */
+.cm-tabbar { display: flex; align-items: stretch; height: var(--cmtab-h); background: var(--cm-tabs); border-top: 1px solid var(--cm-line); }
+.cm-tabbar .cm-tabs { flex: none; height: auto; border-top: 0; background: transparent; }
+.cm-tabbar .cm-tab.on::before { top: 0; }
+.cm-tabbar .doc-tabs { flex: 1; min-width: 0; height: auto; align-items: flex-end; margin-left: 10px; padding: 0 6px 0 10px; background: transparent; border-bottom: 0; border-left: 1px solid var(--cm-line); }
+.cm-tabbar .doc-tabs:empty { display: none; }
+.cm-tabbar .doc-tab { height: calc(var(--cmtab-h) - 3px); }
+.pv-hint.gdt { border-color: #7c3aed; background: rgba(124, 58, 237, .12); }
+
+/* a geometric tolerance's hover card */
+.pv-tip.card { max-width: 380px; padding: 9px 11px 10px; font: 12px/1.45 var(--ui); white-space: normal; }
+.pv-ch { font-weight: 650; font-size: 13px; margin-bottom: 4px; }
+.pv-cl { color: var(--ink-2); }
+.pv-cn { margin-top: 3px; color: var(--muted); font-size: 11.5px; }
+.pv-cn:first-of-type { margin-top: 6px; }
+.pv-cg { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); display: grid; gap: 5px; }
+.pv-gauge { display: grid; grid-template-columns: 74px 1fr 34px; align-items: center; gap: 8px; }
+.pv-gl { font-weight: 600; }
+.pv-gb { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; height: 10px; }
+.pv-gb i { border-radius: 2px; background: var(--panel-3); box-shadow: inset 0 0 0 1px var(--line); }
+.pv-gb i.on { box-shadow: none; }
+.pv-gn { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+
+/* the part's overall difficulty, far right of the command bar */
+.cm-grow { flex: 1; }
+.cm-diff { align-self: center; display: grid; gap: 4px; min-width: 190px; margin-right: 6px; padding: 5px 10px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--ink); font: 12px var(--ui); cursor: pointer; text-align: left; }
+.cm-diff:hover { background: var(--btn-hover); border-color: var(--btn-hover-line); }
+.cd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cd-l { color: var(--muted); }
+.cd-top b { font-variant-numeric: tabular-nums; }
+.cd-bar { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; height: 8px; }
+.cd-bar i { border-radius: 2px; background: var(--panel-3); box-shadow: inset 0 0 0 1px var(--line); }
+.cd-bar i.on { box-shadow: none; }
+
+/* Prepare Form: the fields as boxes to arrange */
+.pe-fbox { position: absolute; box-sizing: border-box; border: 1px solid #2a6ff0; background: rgba(42, 111, 240, .14); pointer-events: auto; cursor: move; overflow: hidden; }
+.pe-fbox[data-kind="checkbox"], .pe-fbox[data-kind="radio"] { background: rgba(43, 178, 76, .2); border-color: #1d8f3c; }
+.pe-fbox:hover { background: rgba(42, 111, 240, .24); }
+.pe-fbox.on { border: 2px solid #f08a00; background: rgba(240, 138, 0, .18); overflow: visible; z-index: 2; }
+.pe-fname { position: absolute; left: 2px; top: 0; font: 9px/1.3 var(--ui); color: #123a8f; white-space: nowrap; pointer-events: none; }
+.pe-fbox[data-kind="checkbox"] .pe-fname, .pe-fbox[data-kind="radio"] .pe-fname { display: none; }
+.pe-fh { display: none; position: absolute; right: -6px; bottom: -6px; width: 9px; height: 9px; background: #fff; border: 1.5px solid #f08a00; border-radius: 2px; cursor: nwse-resize; }
+.pe-fbox.on .pe-fh { display: block; }
+.pe-fprops { display: grid; gap: 10px; padding: 4px 2px; }
+.pe-frow { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 10px; font: 13px var(--ui); color: var(--ink); }
+.pe-frow input, .pe-frow select, .pe-frow textarea { padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); font: 13px var(--ui); }
+.pe-fticks { display: flex; gap: 18px; padding-left: 140px; font: 13px var(--ui); color: var(--ink); }
+.pe-ftick { display: flex; align-items: center; gap: 6px; }
+/* marking for redaction goes over a form's fields, not into them */
+.pv-scroll[data-tool="redact"] .pe-field, .pv-scroll[data-tool="redactText"] .pe-field { pointer-events: none; }

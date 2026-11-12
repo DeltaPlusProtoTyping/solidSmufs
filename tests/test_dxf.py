@@ -1,4 +1,4 @@
-"""DXF drawings: the reader (geometry, blocks, colours, text, units) and the model the viewer gets.
+"""DXF drawings: the reader (geometry, blocks, colors, text, units) and the model the viewer gets.
 
 The drawings are written here, pair by pair, so each test knows exactly what's in its file.
 """
@@ -79,8 +79,8 @@ class Geometry(unittest.TestCase):
         self.assertEqual(len(polys(d)), 2)
         arcs = conics(d)
         self.assertEqual(len(arcs), 2)
-        for a, centre in zip(arcs, ([10, 2, 0], [0, 2, 0])):
-            np.testing.assert_allclose(a.center, centre, atol=1e-12)
+        for a, center in zip(arcs, ([10, 2, 0], [0, 2, 0])):
+            np.testing.assert_allclose(a.center, center, atol=1e-12)
             self.assertAlmostEqual(a.round()[0], 2)
             self.assertAlmostEqual(a.t1 - a.t0, math.pi)
         # the right end bulges out to the right, the left end to the left
@@ -125,8 +125,8 @@ class Geometry(unittest.TestCase):
         inner = pairs((0, "BLOCK"), (8, "0"), (2, "DOT"), (70, 0), (10, 0), (20, 0), (30, 0)) + pairs((0, "CIRCLE"), (8, "0"), (10, 0), (20, 0), (30, 0), (40, 1)) + pairs((0, "ENDBLK"))
         outer = pairs((0, "BLOCK"), (8, "0"), (2, "ROW"), (70, 0), (10, 0), (20, 0), (30, 0)) + pairs((0, "INSERT"), (8, "0"), (2, "DOT"), (10, 0), (20, 0), (30, 0), (70, 3), (44, 5)) + pairs((0, "ENDBLK"))
         d = read(pairs((0, "INSERT"), (8, "0"), (2, "ROW"), (10, 0), (20, 100), (30, 0), (71, 2), (45, 10)), blocks=inner + outer)
-        centres = sorted(tuple(np.round(c.center, 9)) for c in conics(d))
-        self.assertEqual(centres, sorted((x, y, 0.0) for x in (0.0, 5.0, 10.0) for y in (100.0, 110.0)))
+        centers = sorted(tuple(np.round(c.center, 9)) for c in conics(d))
+        self.assertEqual(centers, sorted((x, y, 0.0) for x in (0.0, 5.0, 10.0) for y in (100.0, 110.0)))
 
     def test_self_insert_stops(self):
         loop = pairs((0, "BLOCK"), (8, "0"), (2, "LOOP"), (70, 0), (10, 0), (20, 0), (30, 0)) + line(0, 0, 1, 0) + pairs((0, "INSERT"), (8, "0"), (2, "LOOP"), (10, 1), (20, 0), (30, 0)) + pairs((0, "ENDBLK"))
@@ -145,7 +145,7 @@ class Geometry(unittest.TestCase):
 
 
 class Properties(unittest.TestCase):
-    def test_colours_and_layers(self):
+    def test_colors_and_layers(self):
         block = pairs((0, "BLOCK"), (8, "0"), (2, "B"), (70, 0), (10, 0), (20, 0), (30, 0)) + line(0, 0, 1, 0, color=0) + pairs((0, "ENDBLK"))
         d = read(line(0, 0, 1, 0, "RED") + line(0, 0, 1, 0, "RED", color=5) + line(0, 0, 1, 0, "INK")
                  + pairs((0, "INSERT"), (8, "RED"), (62, 3), (2, "B"), (10, 0), (20, 0), (30, 0))
@@ -153,9 +153,9 @@ class Properties(unittest.TestCase):
                  layers=[("RED", 1, 0), ("INK", 7, 0), ("OFF", -2, 0), ("FROZEN", 4, 1)], blocks=block)
         got = [(layer, color) for layer, color, _c in d.curves]
         self.assertEqual(got[0], ("RED", (1.0, 0.0, 0.0)))  # BYLAYER
-        self.assertEqual(got[1], ("RED", (0.0, 0.0, 1.0)))  # its own colour
-        self.assertEqual(got[2], ("INK", None))  # colour 7: the drawing's ink
-        self.assertEqual(got[3], ("RED", (0.0, 1.0, 0.0)))  # BYBLOCK: the insert's colour
+        self.assertEqual(got[1], ("RED", (0.0, 0.0, 1.0)))  # its own color
+        self.assertEqual(got[2], ("INK", None))  # color 7: the drawing's ink
+        self.assertEqual(got[3], ("RED", (0.0, 1.0, 0.0)))  # BYBLOCK: the insert's color
         self.assertFalse(d.layers["OFF"].on)
         self.assertTrue(d.layers["FROZEN"].frozen)
 
@@ -169,7 +169,7 @@ class Properties(unittest.TestCase):
     def test_units(self):
         self.assertEqual(read(line(0, 0, 1, 0), header=INCHES).unit_mm, 25.4)
         self.assertEqual(read(line(0, 0, 1, 0), header=MM).unit_mm, 1.0)
-        self.assertEqual(read(line(0, 0, 1, 0), header=[("$MEASUREMENT", [(70, 1)])]).units, "millimetres")
+        self.assertEqual(read(line(0, 0, 1, 0), header=[("$MEASUREMENT", [(70, 1)])]).units, "millimeters")
         unknown = read(line(0, 0, 1, 0))
         self.assertIsNone(unknown.units)
         self.assertEqual(unknown.unit_mm, 25.4)
@@ -247,7 +247,7 @@ class Model(unittest.TestCase):
         self.assertEqual(meta["edges"]["type"], ["line", "circle"])
         self.assertEqual(meta["edges"]["body"], [0, 1])
         self.assertEqual(meta["edges"]["color"], [(1.0, 0.0, 0.0), None])
-        self.assertAlmostEqual(meta["edges"]["length"][0], 25.4)  # in millimetres
+        self.assertAlmostEqual(meta["edges"]["length"][0], 25.4)  # in millimeters
         self.assertAlmostEqual(meta["edges"]["params"][1]["radius"], 12.7)
         self.assertAlmostEqual(meta["edges"]["length"][1], math.pi * 25.4, delta=0.01)
         (t,) = meta["texts"]

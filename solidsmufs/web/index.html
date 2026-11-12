@@ -33,7 +33,11 @@
     <!-- CommandManager -->
     <section class="cmdmgr" id="cmdmgr">
       <div class="cm-row" id="cm-row"></div>
-      <div class="cm-tabs" id="cm-tabs"></div>
+      <!-- one row: the CommandManager's tabs, then the open documents' tabs (no row of their own over the graphics area) -->
+      <div class="cm-tabbar">
+        <div class="cm-tabs" id="cm-tabs"></div>
+        <div class="doc-tabs" id="doc-tabs"></div>
+      </div>
     </section>
 
     <main class="workspace" id="workspace">
@@ -46,7 +50,6 @@
 
       <!-- graphics area -->
       <section class="graphics" id="graphics">
-        <div class="doc-tabs" id="doc-tabs"></div>
         <div class="viewport" id="viewport">
           <div class="hud" id="hud"></div>
           <div class="cube-ui" id="cube-ui"></div>

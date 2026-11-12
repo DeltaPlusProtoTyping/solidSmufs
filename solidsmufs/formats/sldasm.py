@@ -8,7 +8,7 @@ An assembly holds no geometry of its own; it names its component files and place
 * ``Contents/Config-<n>`` (an MFC archive, one per assembly configuration): one record per top-level
   component: its name (``bracket-1``) as an MFC string, an 8-byte timestamp, ``02 00``, four bytes, ``01``
   (then ``00 00 00 01`` in files from newer versions), then a flag. Flag 1: a 3x3
-  rotation, a translation (metres) and a scale, as doubles; flag 0: only the translation and scale. The
+  rotation, a translation (meters) and a scale, as doubles; flag 0: only the translation and scale. The
   first string after the record is the component's configuration name.
 
 Sub-assemblies are read the same way from their own files. The layout was worked out from the SolidWorks
@@ -36,7 +36,7 @@ MFC_STRING = b"\xff\xfe\xff"
 MAX_NAME_GAP = 320  # a record starts 120-260 bytes after its component's name (sample files); lights etc. sit far away
 MAX_DEPTH = 16  # sub-assemblies inside sub-assemblies; deeper means a loop in the file references
 SEARCH_LIMIT = 20000  # files looked at when hunting for a moved part under the assembly's folder
-M_TO_MM = 1000.0  # placements are stored in metres; the parts' STEP files are in millimetres
+M_TO_MM = 1000.0  # placements are stored in meters; the parts' STEP files are in millimeters
 
 
 @dataclass
@@ -45,9 +45,9 @@ class Placement:
 
     file: Path
     config: int | None  # the part's configuration id (its Config-<n>-Partition), None for its default
-    matrix: np.ndarray  # 4x4, millimetres, part coordinates -> assembly coordinates
+    matrix: np.ndarray  # 4x4, millimeters, part coordinates -> assembly coordinates
     path: list  # instance names from the top: ["crank sub-1", "crank-arm-1"]
-    hidden: bool = False  # hidden in the assembly's saved display state (shown greyed in the tree)
+    hidden: bool = False  # hidden in the assembly's saved display state (shown grayed in the tree)
 
 
 @dataclass

@@ -590,7 +590,7 @@ def _compressed_face(face, tolerance, state, counts, cache):
 
 
 def _arc_data(curve):
-    """(centre, unit axis, radius) of a curve that's a circular arc, however it was come by, or None."""
+    """(center, unit axis, radius) of a curve that's a circular arc, however it was come by, or None."""
     if isinstance(curve, br.Deduced):
         return _arc_data(curve.source) if curve.source is not None else None
     if isinstance(curve, br.Reversed):

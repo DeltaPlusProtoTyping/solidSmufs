@@ -1,6 +1,6 @@
-"""A G-code program as a model the viewer can show: its moves as coloured lines, one body per tool and one for
+"""A G-code program as a model the viewer can show: its moves as colored lines, one body per tool and one for
 the rapid moves, so each can be shown and hidden from the tree. Arcs are their own edges, so the measure tool
-gives their radius and centre. Everything is in millimetres."""
+gives their radius and center. Everything is in millimeters."""
 
 import re
 from pathlib import Path
@@ -131,7 +131,7 @@ def load(path, name, progress=lambda *a: None):
         h, mins = divmod(minutes, 60)
         m.info["Cutting time (at the programmed feeds)"] = f"{int(h)} h {mins:.1f} min" if h else f"{mins:.1f} min"
     if p.units is None:
-        m.notices.append("This program doesn't say whether it's in inches or millimetres (no G20 / G21), so it's shown in inches.")
+        m.notices.append("This program doesn't say whether it's in inches or millimeters (no G20 / G21), so it's shown in inches.")
     if p.lathe:
         m.notices.append("This looks like a lathe program: X is shown as programmed, which on most lathes is a diameter.")
     if p.skipped:

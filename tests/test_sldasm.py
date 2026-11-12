@@ -4,7 +4,7 @@
 
 The format checks use small hand-made byte strings. The assembly checks use the U-Joint sample that
 SolidWorks installs (skipped on a PC without it); the end-to-end check proves each part is placed where
-the assembly says by comparing its volume and centre of mass with the part opened on its own.
+the assembly says by comparing its volume and center of mass with the part opened on its own.
 """
 
 import shutil
@@ -46,7 +46,7 @@ class RecordFormat(unittest.TestCase):
         data = b"junk" + mfc("bracket-1") + b"\x01\x02" + mfc("Default")
         self.assertEqual([s[2] for s in sldasm._mfc_strings(data)], ["bracket-1", "Default"])
 
-    def test_translation_only_record_places_part_in_millimetres(self):
+    def test_translation_only_record_places_part_in_millimeters(self):
         (name, config, matrix), = sldasm._records(record("bolt-1", "Default", None, (0.01, -0.02, 0.5)))
         self.assertEqual((name, config), ("bolt-1", "Default"))
         np.testing.assert_allclose(matrix[:3, :3], np.eye(3))
@@ -206,7 +206,7 @@ class SuppressedAndHiddenParts(unittest.TestCase):
 
 @unittest.skipUnless(BOWL.is_file(), "SolidWorks 2025 sample files are not installed")
 class RoundFacesInTheBowl(unittest.TestCase):
-    """The bowl's drafted centre boss comes out of the translator as a plain "surface"; it must still
+    """The bowl's drafted center boss comes out of the translator as a plain "surface"; it must still
     measure as round (a cone), against the bowl's rim (a flat ring), with close / center / far."""
 
     @classmethod

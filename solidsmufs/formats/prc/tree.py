@@ -1,4 +1,4 @@
-"""PRC's structure tree and global data: which part goes where, and in what colour.
+"""PRC's structure tree and global data: which part goes where, and in what color.
 
 A file structure's tree lists parts (representation items, each pointing at a tessellation) and product occurrences
 (a part or children, a location, perhaps a prototype to look through, perhaps in another file structure). Nothing can
@@ -601,7 +601,7 @@ def _fill(b):
 
 
 def style_color(global_data, style):
-    """The colour of a biased style index: (r, g, b) from 0 to 1, or None."""
+    """The color of a biased style index: (r, g, b) from 0 to 1, or None."""
     if not global_data or not style or style > len(global_data["styles"]):
         return None
     is_material, index = global_data["styles"][style - 1]
@@ -613,7 +613,7 @@ def style_color(global_data, style):
             break
     if not index:
         return None
-    # indices count the colours' separate components
+    # indices count the colors' separate components
     at = (index - 1) // 3
     colors = global_data["colors"]
     return tuple(colors[at]) if at < len(colors) else None
@@ -621,7 +621,7 @@ def style_color(global_data, style):
 
 # ---------------------------------------------------------------------------------------------- walking it
 def placements(files, by_id, roots=()):
-    """Where each tessellation goes: [(file number, tessellation number, 4 x 4 matrix, name, colour)]; an item with only exact
+    """Where each tessellation goes: [(file number, tessellation number, 4 x 4 matrix, name, color)]; an item with only exact
     geometry has ("exact", context, body), counting from 0, for its tessellation number. `files` holds, per
     file structure, {"parts", "products", "globals"}; `by_id` its number from its id. It starts at the model's active
     roots; a file naming none starts at the last product of the last file structure."""

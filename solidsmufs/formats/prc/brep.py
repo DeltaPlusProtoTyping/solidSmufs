@@ -183,7 +183,7 @@ class Segment(Curve):
 
 
 class Arc(Curve):
-    """start turned about centre and axis by up to `sweep`."""
+    """start turned about center and axis by up to `sweep`."""
 
     def __init__(self, start, center, axis, sweep):
         self.start, self.center, self.sweep = np.asarray(start, float), np.asarray(center, float), sweep

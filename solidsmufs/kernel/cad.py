@@ -152,7 +152,7 @@ def import_assembly(parts, top, failed=None):
 
 def turn(gmsh, rot):
     """Turn the whole model by the 3x3 rotation `rot` about the origin, exactly (see _move), keeping the
-    names and colours the file gave it (moving a shape drops them). Entity numbers don't change."""
+    names and colors the file gave it (moving a shape drops them). Entity numbers don't change."""
     occ = gmsh.model.occ
     vols = gmsh.model.getEntities(3)
     in_vol = {abs(t) for _d, t in gmsh.model.getBoundary(vols, combined=False, oriented=False)} if vols else set()
@@ -547,7 +547,7 @@ def _fitted_cone(pts, tri):
     z = pts @ a
     if np.ptp(z) < 1e-9:
         return None
-    for _ in range(6):  # refine: radius straight along the axis, centre where every point fits that radius
+    for _ in range(6):  # refine: radius straight along the axis, center where every point fits that radius
         r = np.linalg.norm(p2 - cxy, axis=1)
         k, b = np.polyfit(z, r, 1)
         lhs = np.c_[2 * p2, np.ones(len(p2))]
@@ -624,7 +624,7 @@ def _surface_params(gmsh, f, typ, pts):
 
 
 def _curve_params(gmsh, c, typ, length, segs):
-    """Line ends, circle centre / radius / normal, … The edge's polyline points lie exactly on the
+    """Line ends, circle center / radius / normal, … The edge's polyline points lie exactly on the
     curve (OpenCASCADE puts them there), so lines and circles are read straight off them."""
     try:
         pts = np.concatenate([segs[:, 0], segs[-1:, 1]])
@@ -646,18 +646,18 @@ def _curve_params(gmsh, c, typ, length, segs):
                 fit = circumcircle(*q)
             if fit is None:
                 return None
-            centre, r, n = fit
-            return {"center": centre, "radius": r, "normal": n, "closed": closed,
+            center, r, n = fit
+            return {"center": center, "radius": r, "normal": n, "closed": closed,
                     "angle": 360.0 if closed else math.degrees(length / r) if r > 0 else 0.0,
                     "start": a, "end": b}
         if typ == "ellipse":
             (t0,), _ = (np.asarray(x, np.float64) for x in gmsh.model.getParametrizationBounds(1, c))
             q = _vals(gmsh, 1, c, [(t,) for t in np.linspace(t0, t0 + 2 * math.pi, 73)[:-1]])
-            centre = q.mean(axis=0)
-            d = np.linalg.norm(q - centre, axis=1)
+            center = q.mean(axis=0)
+            d = np.linalg.norm(q - center, axis=1)
             i, j = int(d.argmax()), int(d.argmin())
-            return {"center": centre, "major_radius": float(d[i]), "minor_radius": float(d[j]),
-                    "normal": unit(np.cross(q[i] - centre, q[j] - centre)), "major_dir": unit(q[i] - centre),
+            return {"center": center, "major_radius": float(d[i]), "minor_radius": float(d[j]),
+                    "normal": unit(np.cross(q[i] - center, q[j] - center)), "major_dir": unit(q[i] - center),
                     "closed": closed, "start": a, "end": b}
         return {"start": a, "end": b, "closed": closed}
     except Exception:

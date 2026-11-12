@@ -1,8 +1,8 @@
-"""SVG drawings, read into a drawing of lines, arcs and text in millimetres (Y up, as in a CAD drawing).
+"""SVG drawings, read into a drawing of lines, arcs and text in millimeters (Y up, as in a CAD drawing).
 
 Understood: path (every command: M L H V C S Q T A Z), rect (rounded too), circle, ellipse, line, polyline, polygon,
 text / tspan, g, a, use / symbol, and transforms on all of them. Each top-level group (an Inkscape or Illustrator
-layer) is a layer. Strokes give the colour, else fills; shapes with neither are drawn in the drawing's ink.
+layer) is a layer. Strokes give the color, else fills; shapes with neither are drawn in the drawing's ink.
 Gradients, patterns, clipping, masks, filters and embedded pictures aren't drawn.
 
 Sizes: a width / height in real units (mm, cm, in, pt) with a viewBox sets the scale; otherwise a user unit is a
@@ -24,7 +24,7 @@ SKIP = {"defs", "clipPath", "mask", "marker", "pattern", "linearGradient", "radi
         "desc", "metadata", "symbol", "filter", "foreignObject", "namedview", "font", "font-face"}
 NAMED = {"black": (0, 0, 0), "white": (1, 1, 1), "red": (1, 0, 0), "green": (0, 0.5, 0), "lime": (0, 1, 0), "blue": (0, 0, 1),
          "yellow": (1, 1, 0), "cyan": (0, 1, 1), "aqua": (0, 1, 1), "magenta": (1, 0, 1), "fuchsia": (1, 0, 1),
-         "gray": (0.5, 0.5, 0.5), "grey": (0.5, 0.5, 0.5), "silver": (0.75, 0.75, 0.75), "maroon": (0.5, 0, 0),
+         "gray": (0.5, 0.5, 0.5), "gray": (0.5, 0.5, 0.5), "silver": (0.75, 0.75, 0.75), "maroon": (0.5, 0, 0),
          "olive": (0.5, 0.5, 0), "purple": (0.5, 0, 0.5), "teal": (0, 0.5, 0.5), "navy": (0, 0, 0.5), "orange": (1, 0.65, 0)}
 CURVE_STEPS = 24
 
@@ -49,7 +49,7 @@ def _num(text, default=0.0):
 
 
 def _color(text):
-    """(r, g, b) in 0..1 for a CSS colour; None for none / unreadable; 'ink' for black (the drawing's ink)."""
+    """(r, g, b) in 0..1 for a CSS color; None for none / unreadable; 'ink' for black (the drawing's ink)."""
     if not text:
         return None
     t = text.strip().lower()
@@ -116,7 +116,7 @@ def _transform(text):
 
 
 def _arc_center(p0, p1, rx, ry, phi, large, sweep):
-    """SVG's endpoint arc as (centre, rx, ry, start angle, sweep angle) in its own (unrotated) frame; None: a line."""
+    """SVG's endpoint arc as (center, rx, ry, start angle, sweep angle) in its own (unrotated) frame; None: a line."""
     rx, ry = abs(rx), abs(ry)
     if rx < 1e-12 or ry < 1e-12 or np.allclose(p0, p1):
         return None
@@ -186,7 +186,7 @@ class _Reader:
         m = m @ _transform(el.get("transform"))
         stroke, fill = _color(style.get("stroke")), _color(style.get("fill", "black"))
         paint = stroke if stroke is not None else fill
-        color = None if paint in (None, "ink") else paint  # None: the layer's colour (the drawing's ink)
+        color = None if paint in (None, "ink") else paint  # None: the layer's color (the drawing's ink)
         if tag in ("svg", "g", "a", "switch"):
             if tag == "svg" and self.depth:  # a nested svg: its own position
                 m = m @ _transform(f"translate({_num(el.get('x'))},{_num(el.get('y'))})")
@@ -428,7 +428,7 @@ def read_svg(data):
     if len(vb) == 4 and vb[2] > 0 and vb[3] > 0:
         if w and wu in UNIT_MM and wu not in ("", "px"):
             scale = w * UNIT_MM[wu] / vb[2]
-            units = {"mm": "millimetres", "cm": "centimetres", "in": "inches", "pt": "points", "pc": "picas"}[wu]
+            units = {"mm": "millimeters", "cm": "centimeters", "in": "inches", "pt": "points", "pc": "picas"}[wu]
         elif w:
             scale = w * UNIT_MM.get(wu, UNIT_MM["px"]) / vb[2]
         else:
@@ -438,7 +438,7 @@ def read_svg(data):
     else:
         scale = UNIT_MM.get(wu, UNIT_MM["px"])
         if wu in ("mm", "cm", "in", "pt", "pc"):
-            units = {"mm": "millimetres", "cm": "centimetres", "in": "inches", "pt": "points", "pc": "picas"}[wu]
+            units = {"mm": "millimeters", "cm": "centimeters", "in": "inches", "pt": "points", "pc": "picas"}[wu]
         m = np.array([[scale, 0, 0], [0, -scale, (h or 0) * UNIT_MM.get(hu, UNIT_MM["px"])], [0, 0, 1]])
 
     r = _Reader(root)

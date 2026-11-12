@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from solidsmufs.kernel import measure  # noqa: E402
 
 L, W, H = 40.0, 20.0, 10.0
-HOLES = [((10.0, 10.0), 8.0), ((30.0, 10.0), 6.0)]  # (centre x, y), diameter
+HOLES = [((10.0, 10.0), 8.0), ((30.0, 10.0), 6.0)]  # (center x, y), diameter
 TOL = 1e-6
 
 
@@ -197,11 +197,11 @@ class BlockWithHoles(unittest.TestCase):
         r = self.rows(self.plane((1, 0, 0), 0), self.plane((0, 0, 1), H))
         self.assertAlmostEqual(r["Angle"], 90.0, delta=1e-9)
 
-    def test_hole_centre_distance(self):
+    def test_hole_center_distance(self):
         r = self.rows(self.hole(8), self.hole(6))
         self.assertAlmostEqual(r["Center distance"], 20.0, delta=TOL)
 
-    def test_circle_edges_measure_centre_to_centre(self):
+    def test_circle_edges_measure_center_to_center(self):
         r = self.rows(self.circle(8), self.circle(6))
         self.assertAlmostEqual(r["Center distance"], 20.0, delta=TOL)
 
@@ -210,7 +210,7 @@ class BlockWithHoles(unittest.TestCase):
         return {r["label"]: r["value"] for r in res["rows"]}, res["arcs"]
 
     def test_hole_to_hole_close_center_and_far_tangents(self):
-        # centres 20 apart, radii 4 and 3
+        # centers 20 apart, radii 4 and 3
         for a, b in ((self.hole(8), self.hole(6)), (self.circle(8), self.circle(6))):
             for modes, expected in ((["min", "min"], 13.0), (["center", "center"], 20.0), (["max", "max"], 27.0),
                                     (["min", "max"], 19.0), (["center", "max"], 23.0), (["max", "min"], 21.0)):
@@ -220,7 +220,7 @@ class BlockWithHoles(unittest.TestCase):
                 self.assertAlmostEqual(r[label], expected, delta=TOL, msg=f"{a['kind']} {modes}")
 
     def test_hole_to_side_face_tangents(self):
-        side = self.plane((1, 0, 0), 0)  # x = 0, hole centre at x = 10, radius 4
+        side = self.plane((1, 0, 0), 0)  # x = 0, hole center at x = 10, radius 4
         for mode, expected in (("min", 6.0), ("center", 10.0), ("max", 14.0)):
             r, used = self.arcs(self.hole(8), side, [mode, None])
             self.assertEqual(used, [mode, None])
@@ -232,7 +232,7 @@ class BlockWithHoles(unittest.TestCase):
             r, _ = self.arcs(spot, self.circle(8), [None, mode])
             self.assertAlmostEqual(r["Distance" if mode != "center" else "Center distance"], expected, delta=TOL)
 
-    def test_hole_centred_between_two_faces(self):
+    def test_hole_centerd_between_two_faces(self):
         # the 8 mm hole sits at x = 10 on a 40 mm block: 10 from one end, 30 from the other
         left, right, front, back = (self.plane((1, 0, 0), 0), self.plane((1, 0, 0), L),
                                     self.plane((0, 1, 0), 0), self.plane((0, 1, 0), W))
@@ -244,7 +244,7 @@ class BlockWithHoles(unittest.TestCase):
             r = {x["label"]: x["value"] for x in res["rows"]}
             self.assertAlmostEqual(r["Off center"], 10.0, delta=TOL)
         r = {x["label"]: x["value"] for x in self.s.measure([front, self.circle(8), back], {"arcs": [None, "center", None]})["rows"]}
-        self.assertAlmostEqual(r["Off center"], 0.0, delta=TOL)  # centred across the 20 mm width
+        self.assertAlmostEqual(r["Off center"], 0.0, delta=TOL)  # centerd across the 20 mm width
 
     def test_three_flat_faces_still_total(self):
         r = self.rows(self.plane((1, 0, 0), 0), self.plane((1, 0, 0), L), self.plane((0, 0, 1), H))
@@ -256,7 +256,7 @@ class BlockWithHoles(unittest.TestCase):
         self.assertEqual((r["dX"], r["dY"], r["dZ"]), (L, W, H))
 
     # ---- mass properties and size
-    def test_volume_and_centre_of_mass(self):
+    def test_volume_and_center_of_mass(self):
         res = self.s.massprops(None, 1.0)
         vols = [math.pi * (d / 2) ** 2 * H for _c, d in HOLES]
         volume = L * W * H - sum(vols)

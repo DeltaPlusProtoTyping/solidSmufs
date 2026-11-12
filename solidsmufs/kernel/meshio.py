@@ -4,7 +4,7 @@ along sharp creases (so you can pick a flat face or a hole wall the way you woul
 creases become edges (holes come out as true circles when they fit one), and corners become
 vertices.
 
-Meshes carry no units; they're taken as millimetres (3MF and glTF say theirs and are converted).
+Meshes carry no units; they're taken as millimeters (3MF and glTF say theirs and are converted).
 """
 
 import json
@@ -30,7 +30,7 @@ class MeshModel(Model):
 
 # ---------------------------------------------------------------------------------------------- readers
 def read(path):
-    """[(name, points (n, 3), triangles (m, 3), colour or None)], units label."""
+    """[(name, points (n, 3), triangles (m, 3), color or None)], units label."""
     ext = Path(path).suffix.lower()
     data = Path(path).read_bytes()
     if ext == ".stl":
@@ -54,7 +54,7 @@ def _stl(data, name):
         rec = np.frombuffer(data, np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")]), count=n, offset=84)
         tri3 = rec["v"].astype(np.float64)
         color = None
-        if data[:80].find(b"COLOR=") >= 0:  # Materialise / VisCAM header colour
+        if data[:80].find(b"COLOR=") >= 0:  # Materialise / VisCAM header color
             i = data.find(b"COLOR=")
             color = [data[i + 6] / 255, data[i + 7] / 255, data[i + 8] / 255]
         return [(name, tri3.reshape(-1, 3), np.arange(len(tri3) * 3).reshape(-1, 3), color)]
@@ -366,7 +366,7 @@ def _gltf(data, path):
                 if prim.get("mode", 4) != 4 or "POSITION" not in prim["attributes"]:
                     continue
                 p = accessor(prim["attributes"]["POSITION"]).astype(np.float64)
-                p = (np.c_[p, np.ones(len(p))] @ mat.T)[:, :3] * 1000.0  # glTF is in metres
+                p = (np.c_[p, np.ones(len(p))] @ mat.T)[:, :3] * 1000.0  # glTF is in meters
                 t = accessor(prim["indices"]).astype(np.int64).reshape(-1, 3) if "indices" in prim else \
                     np.arange(len(p)).reshape(-1, 3)
                 col = None
@@ -392,7 +392,7 @@ def load(path, name, fmt, progress=lambda *a: None):
     objects, units = read(path)
     m = MeshModel(name, path, fmt)
     if units != "mm":
-        m.info["Units"] = "metres in the file, shown in mm" if units == "m→mm" else units
+        m.info["Units"] = "meters in the file, shown in mm" if units == "m→mm" else units
     else:
         m.info["Units"] = "none in the file (taken as mm)" if fmt in ("STL", "OBJ", "PLY", "OFF") else "mm"
     progress("Finding faces and edges", 0.4)
@@ -458,7 +458,7 @@ def load(path, name, fmt, progress=lambda *a: None):
 
 def from_faces(path, name, fmt, pieces, slack=0.0):
     """A model from meshes that come with their own faces (a 3D PDF): pieces are (name, points (n, 3) in mm,
-    triangles (m, 3), face per triangle, corner normals (m, 3, 3) or None, planar flag per face or None, colour or None,
+    triangles (m, 3), face per triangle, corner normals (m, 3, 3) or None, planar flag per face or None, color or None,
     source or None). `slack` is how far, in mm, the file's rounding may have moved a point: fits must allow for it.
     Instances of one part say so with the same source, (its id, its 4 x 4 matrix to mm), so it's only worked out once:
     an assembly may hold thousands of the same screw."""
@@ -768,8 +768,8 @@ def _fit_cylinder(p, size, slack=0.0):
             continue
         (cx, cy), r, err = fit
         if r > 0 and err < max(2e-3 * r, 1e-5 * size, slack) and r < size * 10:
-            centre = c + cx * x + cy * y
-            return {"center": centre, "axis": unit(axis), "radius": float(r)}
+            center = c + cx * x + cy * y
+            return {"center": center, "axis": unit(axis), "radius": float(r)}
     return None
 
 
@@ -810,9 +810,9 @@ def _edge_classify(pts, slack=0.0):
             if fit is not None:
                 (cx, cy), r, err = fit
                 if err < max(2e-3 * r, 1e-6 * size, slack):
-                    centre = c + cx * x + cy * y
+                    center = c + cx * x + cy * y
                     seg = np.linalg.norm(pts[1:] - pts[:-1], axis=1).sum()
                     ang = 360.0 if closed else math.degrees(seg / r)
-                    return "circle", {"center": centre, "radius": float(r), "normal": unit(n), "closed": closed,
+                    return "circle", {"center": center, "radius": float(r), "normal": unit(n), "closed": closed,
                                       "angle": ang, "start": a, "end": b}
     return "polyline", {"start": a, "end": b, "closed": closed}

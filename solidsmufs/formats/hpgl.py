@@ -2,7 +2,7 @@
 labels text. Plotter units are 0.025 mm (1016 to the inch).
 
 Understood: IN / DF, SP, PU / PD / PA / PR, PE (HP-GL/2's packed polylines), CI, AA / AR, EA / ER / RA / RR, BZ / BR,
-LB with SI / SR / DI / DT, PC (pen colours) and NP. PCL and PJL wrapping (as printer drivers write) is skipped.
+LB with SI / SR / DI / DT, PC (pen colors) and NP. PCL and PJL wrapping (as printer drivers write) is skipped.
 """
 
 import math
@@ -15,7 +15,7 @@ from .dxf import Conic, Drawing, Layer, Poly, Text
 
 PLU_MM = 0.025
 
-# HP-GL/2's default pen colours: 0 white, 1 black (the drawing's ink), 2 red, 3 green, 4 yellow, 5 blue, 6 magenta, 7 cyan
+# HP-GL/2's default pen colors: 0 white, 1 black (the drawing's ink), 2 red, 3 green, 4 yellow, 5 blue, 6 magenta, 7 cyan
 PEN_COLORS = {1: None, 2: (0.9, 0.1, 0.1), 3: (0.1, 0.65, 0.2), 4: (0.85, 0.7, 0.0), 5: (0.15, 0.35, 0.95),
               6: (0.8, 0.15, 0.8), 7: (0.0, 0.7, 0.75), 0: (0.75, 0.75, 0.75)}
 
@@ -132,7 +132,7 @@ class _Plotter:
         return key
 
     def _color(self):
-        """The pen's colour; None for black (the drawing's ink)."""
+        """The pen's color; None for black (the drawing's ink)."""
         c = self.colors.get(self.pen)
         return None if c is None or max(c) < 0.08 else c
 

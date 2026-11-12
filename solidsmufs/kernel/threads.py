@@ -250,7 +250,7 @@ def _axis_dirs(m, pts):
 
 
 def _fit_axis(m, pts):
-    """(roundness, centre point, axis, radii) of the axis the points wind round best."""
+    """(roundness, center point, axis, radii) of the axis the points wind round best."""
     best = None
     for n in _axis_dirs(m, pts):
         x, y = _frame(n)
@@ -263,11 +263,11 @@ def _fit_axis(m, pts):
     return best
 
 
-def _pitch(pts, centre, n, r, q):
+def _pitch(pts, center, n, r, q):
     """(misfit, pitch, hand) of the standard pitch the radius repeats at along the helix; misfit is the
     share of the radius's spread the helix doesn't explain (0 = a perfect thread)."""
     th = np.arctan2(q[:, 1], q[:, 0])
-    z = (pts - centre) @ n
+    z = (pts - center) @ n
     tot = float(r.var())
     if tot <= 0:
         return None
@@ -297,19 +297,19 @@ def _helix(m, f):
         return None
     if len(pts) > 6000:
         pts = pts[np.linspace(0, len(pts) - 1, 6000).astype(int)]
-    score, centre, n, r, _x, _y, q = _fit_axis(m, pts)
+    score, center, n, r, _x, _y, q = _fit_axis(m, pts)
     if score > 0.3:
         return None
-    res = _pitch(pts, centre, n, r, q)
+    res = _pitch(pts, center, n, r, q)
     if res is None:
         return None
     mis, p, hand = res
     depth = float(r.max() - r.min())
     if mis > 0.15 or not (0.25 * p <= depth <= 1.1 * p):
         return None
-    z = (pts - centre) @ n
-    centre = centre + n * float(z.min() + z.max()) / 2  # the middle of the thread along its axis
-    return {"face": f, "pitch": p, "hand": hand, "axis": n, "center": centre, "major": float(2 * r.max()),
+    z = (pts - center) @ n
+    center = center + n * float(z.min() + z.max()) / 2  # the middle of the thread along its axis
+    return {"face": f, "pitch": p, "hand": hand, "axis": n, "center": center, "major": float(2 * r.max()),
             "minor": float(2 * r.min()), "z": (float(z.min()), float(z.max())), "misfit": mis}
 
 
@@ -324,14 +324,14 @@ def _adjacency(m):
     return adj
 
 
-def _internal(m, f, centre, n):
+def _internal(m, f, center, n):
     """Does the face's material wrap round the axis (a hole) rather than sit inside it (a shaft)?"""
     pts, _ = m.face_triangles(f)
     v0 = m.face_vstart[f]
     nrm = np.asarray(m.normals[v0:v0 + m.face_vcount[f]], np.float64)
     if len(nrm) != len(pts) or not len(pts):
         return None
-    rel = np.asarray(pts, np.float64) - centre
+    rel = np.asarray(pts, np.float64) - center
     radial = rel - np.outer(rel @ n, n)
     return float(np.einsum("ij,ij->i", radial, nrm).mean()) < 0
 
@@ -378,10 +378,10 @@ def modelled(m, f):
         return None
     # the whole run of thread: every face joined to it round the same axis (the other flank, crest and root
     # strips, the run-out), measured along the axis
-    axis, centre = found["axis"], found["center"]
+    axis, center = found["axis"], found["center"]
 
     def coaxial(c, a):
-        d = np.asarray(c, np.float64) - centre
+        d = np.asarray(c, np.float64) - center
         return abs(abs(float(unit(np.asarray(a, np.float64)) @ axis)) - 1) < 1e-3 and             np.linalg.norm(d - (d @ axis) * axis) < 0.05 * found["major"]
 
     faces, todo = {found["face"]}, [found["face"]]
@@ -405,13 +405,13 @@ def modelled(m, f):
             todo.append(g)
             pts, _ = m.face_triangles(g)
             if len(pts):
-                z = (np.asarray(pts, np.float64) - centre) @ axis
+                z = (np.asarray(pts, np.float64) - center) @ axis
                 z0, z1 = min(z0, float(z.min())), max(z1, float(z.max()))
     internal = _internal(m, found["face"], found["center"], found["axis"])
     std = _standard(major, minor, found["pitch"], internal is not False)
     res = {"modelled": True, "internal": internal, "callout": std["callout"] if std else None, "thread": std,
            "pitch": found["pitch"], "hand": "right" if found["hand"] > 0 else "left", "major": major, "minor": minor,
-           "length": z1 - z0, "center": centre + axis * (z0 + z1) / 2, "axis": axis, "faces": sorted(faces)}
+           "length": z1 - z0, "center": center + axis * (z0 + z1) / 2, "axis": axis, "faces": sorted(faces)}
     for g in faces | {f}:
         cache[g] = res
     return res

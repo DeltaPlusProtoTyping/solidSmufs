@@ -202,7 +202,7 @@ class Scene(unittest.TestCase):
         self.assertEqual(without.unit_mm, 1.0)
         self.assertEqual(len(without.notices), 1)
 
-    def test_colours_come_through_shader_and_material(self):
+    def test_colors_come_through_shader_and_material(self):
         out = u3d.U3d()
         out.shaders, out.materials = {"s": "mat"}, {"mat": (1.0, 0.5, 0.0)}
         self.assertEqual(u3d._color(out, [["s"]], 0), (1.0, 0.5, 0.0))
@@ -210,7 +210,7 @@ class Scene(unittest.TestCase):
         self.assertIsNone(u3d._color(out, [["other"]], 0))
         self.assertIsNone(u3d._color(out, None, 0))
 
-    def test_a_piece_is_split_when_its_shadings_differ_in_colour(self):
+    def test_a_piece_is_split_when_its_shadings_differ_in_color(self):
         shader = block(u3d.SHADER, string("s0") + struct.pack("<If4I", 1, 0, 0, 0, 1, 0) + struct.pack("<I", 0) + string("m0"))
         out = plain_file(declaration("m", 2, 4, ((0, 0), (0, 0))), base_plain("m", SQUARE, ((0, 0, 1, 2), (1, 0, 2, 3))),
                          self.shading("n", [["s0"], ["s1"]]), node("n", "m"), shader,

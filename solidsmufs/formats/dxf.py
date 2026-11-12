@@ -6,7 +6,7 @@ text). Positions of flat entities (circles, arcs, polylines, text) are in their 
 "object coordinate system" set by their extrusion direction; inserted blocks add a move, turn and scale.
 
 The reader follows every insert down to plain geometry and gives back, for each entity, the layer and
-colour it shows in:
+color it shows in:
     curves: Conic (circle, arc, ellipse), Poly (straight runs), and splines sampled as Poly
     texts:  Text, placed and lined up, for the viewer to set in a font
 Units stay the drawing's own; `unit_mm` says how big one is.
@@ -26,20 +26,20 @@ class DxfError(ValueError):
     pass
 
 
-# $INSUNITS: drawing unit -> millimetres
+# $INSUNITS: drawing unit -> millimeters
 UNITS_MM = {1: 25.4, 2: 304.8, 3: 1609344.0, 4: 1.0, 5: 10.0, 6: 1000.0, 7: 1e6, 8: 25.4e-6, 9: 0.0254, 10: 914.4,
             11: 1e-7, 12: 1e-6, 13: 1e-3, 14: 100.0, 15: 1e4, 16: 1e5, 17: 1e12, 21: 304.8006096}
-UNIT_NAMES = {1: "inches", 2: "feet", 3: "miles", 4: "millimetres", 5: "centimetres", 6: "metres", 7: "kilometres",
+UNIT_NAMES = {1: "inches", 2: "feet", 3: "miles", 4: "millimeters", 5: "centimeters", 6: "meters", 7: "kilometers",
               8: "microinches", 9: "mils", 10: "yards", 11: "ångströms", 12: "nanometres", 13: "microns", 14: "decimetres",
               15: "decametres", 16: "hectometres", 17: "gigametres", 21: "US survey feet"}
 
 MAX_DEPTH = 24  # blocks inside blocks: deeper than this is a loop or a broken file
 
 
-# ---------------------------------------------------------------------------------------------- colours
+# ---------------------------------------------------------------------------------------------- colors
 def _aci_table():
-    """AutoCAD's 256 indexed colours as (r, g, b) in 0..1. 10-249 run through 24 hues, each in five
-    shades, full and half strength; 250-255 are greys."""
+    """AutoCAD's 256 indexed colors as (r, g, b) in 0..1. 10-249 run through 24 hues, each in five
+    shades, full and half strength; 250-255 are grays."""
     t = [(0.0, 0.0, 0.0)] * 256
     base = {1: (1, 0, 0), 2: (1, 1, 0), 3: (0, 1, 0), 4: (0, 1, 1), 5: (0, 0, 1), 6: (1, 0, 1), 7: (1, 1, 1),
             8: (65 / 255, 65 / 255, 65 / 255), 9: (128 / 255, 128 / 255, 128 / 255)}
@@ -63,7 +63,7 @@ ACI = _aci_table()
 
 
 def aci(index):
-    """An indexed colour as (r, g, b), or None for 7 (white on black, black on white: the drawing's ink)."""
+    """An indexed color as (r, g, b), or None for 7 (white on black, black on white: the drawing's ink)."""
     index = abs(int(index))
     if index == 7 or not 1 <= index <= 255:
         return None
@@ -226,7 +226,7 @@ def _apply(m, pts):
 
 
 class Conic:
-    """A circle, arc or ellipse: centre + u·cos t + v·sin t for t from t0 to t1 (radians). Any
+    """A circle, arc or ellipse: center + u·cos t + v·sin t for t from t0 to t1 (radians). Any
     move, turn or scale keeps it one, which is why inserts can't spoil it."""
 
     def __init__(self, center, u, v, t0, t1):
@@ -391,7 +391,7 @@ def plain_text(s):
 
 
 def mtext_lines(s):
-    """An MTEXT string's lines, with its formatting codes (fonts, colours, heights, …) taken out."""
+    """An MTEXT string's lines, with its formatting codes (fonts, colors, heights, …) taken out."""
     s = re.sub(r"\\U\+([0-9A-Fa-f]{4})", lambda m: chr(int(m.group(1), 16)), s)
     s = re.sub(r"\\M\+[0-9A-Fa-f]{5}", "", s)
     out, i, n = [], 0, len(s)
@@ -442,8 +442,8 @@ class Layer:
 class Drawing:
     def __init__(self):
         self.layers = {}  # upper-case name -> Layer, in the file's order
-        self.curves = []  # (layer key, colour or None, Conic | Poly)
-        self.texts = []  # (layer key, colour or None, Text)
+        self.curves = []  # (layer key, color or None, Conic | Poly)
+        self.texts = []  # (layer key, color or None, Text)
         self.unit_mm = 1.0
         self.units = None  # "inches", ... or None when the drawing doesn't say
         self.version = None
@@ -463,7 +463,7 @@ class _Reader:
         self.d, self.blocks = drawing, blocks
         self.inserting = []
 
-    # what an entity draws with: its layer (layer 0 in a block takes the insert's) and colour
+    # what an entity draws with: its layer (layer 0 in a block takes the insert's) and color
     def _layer(self, e, outer_layer):
         name = e.text(8, "0").strip() or "0"
         if name == "0" and outer_layer is not None:
@@ -602,18 +602,18 @@ class _Reader:
             if abs(bulge) < 1e-12:
                 self._curve(layer, color, Poly(_apply(m, [p0, p1])))
                 continue
-            # bulge = tan(sweep / 4), + anticlockwise; the centre sits off the chord's middle, to its left
+            # bulge = tan(sweep / 4), + anticlockwise; the center sits off the chord's middle, to its left
             # for an anticlockwise arc under half a circle (the formula's sign covers the other cases)
             sweep = 4 * math.atan(bulge)
             r = chord / (2 * math.sin(abs(sweep) / 2))
             d = (p1 - p0) / chord
             left = np.array([-d[1], d[0], 0.0])
-            centre = (p0 + p1) / 2 + left * chord * (1 - bulge * bulge) / (4 * bulge)
+            center = (p0 + p1) / 2 + left * chord * (1 - bulge * bulge) / (4 * bulge)
             if bulge > 0:
-                a0 = math.atan2(p0[1] - centre[1], p0[0] - centre[0])
+                a0 = math.atan2(p0[1] - center[1], p0[0] - center[0])
             else:  # clockwise: the same arc, run anticlockwise from the far end
-                a0 = math.atan2(p1[1] - centre[1], p1[0] - centre[0])
-            conic = Conic([centre[0], centre[1], z0], [r, 0, 0], [0, r, 0], a0, a0 + abs(sweep))
+                a0 = math.atan2(p1[1] - center[1], p1[0] - center[0])
+            conic = Conic([center[0], center[1], z0], [r, 0, 0], [0, r, 0], a0, a0 + abs(sweep))
             self._curve(layer, color, conic.moved(m))
 
     def _lwpolyline(self, e, m, layer, color):
@@ -748,7 +748,7 @@ class _Reader:
                     self._block(block, base @ _move([c * dx, r * dy, 0.0]) @ scale, layer, color, depth)
         elif name:
             self.d.skipped["missing blocks"] += 1
-        # its attributes are placed already, in the insert's own surroundings; BYBLOCK ones take its colour
+        # its attributes are placed already, in the insert's own surroundings; BYBLOCK ones take its color
         self.walk([a for a in e.children if a.type == "ATTRIB"], m, None, color, depth)
 
     def _block(self, block, m, layer, color, depth):
@@ -807,7 +807,7 @@ def read_dxf(data):
     if insunits in UNITS_MM:
         d.unit_mm, d.units = UNITS_MM[insunits], UNIT_NAMES[insunits]
     elif measurement in (0, 1):
-        d.unit_mm, d.units = (25.4, "inches") if measurement == 0 else (1.0, "millimetres")
+        d.unit_mm, d.units = (25.4, "inches") if measurement == 0 else (1.0, "millimeters")
     else:
         d.unit_mm, d.units = 25.4, None
 

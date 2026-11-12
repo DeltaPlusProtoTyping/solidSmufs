@@ -1,6 +1,6 @@
 """Mass properties and bounding boxes.
 
-B-rep documents: OpenCASCADE's exact integrals (volume, centre of mass, inertia about the centre of
+B-rep documents: OpenCASCADE's exact integrals (volume, center of mass, inertia about the center of
 mass) per solid, combined with the parallel-axis theorem. Exact bounding boxes come from measuring
 the distance between the part and a plane parked just outside it. Mesh documents: the same numbers
 from the closed triangle mesh (divergence theorem).
@@ -14,7 +14,7 @@ from .geom import unit
 
 
 def combine(parts):
-    """parts: [(volume mm³, centre (3,), inertia about centre (3, 3) per unit density)] → totals."""
+    """parts: [(volume mm³, center (3,), inertia about center (3, 3) per unit density)] → totals."""
     vol = sum(p[0] for p in parts)
     if vol <= 0:
         return 0.0, np.zeros(3), np.zeros((3, 3))
@@ -92,7 +92,7 @@ def cad_mass(model, bodies, density):
 def _weighted(parts, rhos):
     """(parts scaled to one reference density, that density) for bodies of different densities: each
     body's volume weight and inertia scale by its density over the reference (the mass-weighted mean), so
-    combine() gives the true centre of mass and inertia and report() the true total mass."""
+    combine() gives the true center of mass and inertia and report() the true total mass."""
     total = sum(v for v, _c, _i in parts)
     if total <= 0:
         return parts, 1.0

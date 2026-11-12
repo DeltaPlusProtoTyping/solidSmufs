@@ -30,7 +30,7 @@ class Program:
     def __init__(self):
         self.moves = []
         self.unit_mm = 25.4
-        self.units = None  # "inches" / "millimetres", or None when the program doesn't say
+        self.units = None  # "inches" / "millimeters", or None when the program doesn't say
         self.tools = {}  # tool number -> its description from the comments ("" when there's none)
         self.name = ""  # the program's number or first comment
         self.skipped = Counter()  # what wasn't followed, and how often
@@ -138,7 +138,7 @@ def read_gcode(data, tol=None):
             elif code_g == 20:
                 p.unit_mm, p.units = 25.4, "inches"
             elif code_g == 21:
-                p.unit_mm, p.units = 1.0, "millimetres"
+                p.unit_mm, p.units = 1.0, "millimeters"
             elif code_g == 90:
                 absolute = True
             elif code_g == 91:

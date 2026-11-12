@@ -194,10 +194,10 @@ class Placing(unittest.TestCase):
         with self.assertRaises(PrcError):
             self.at(files)
 
-    def test_colours_come_from_styles_through_materials_and_textures(self):
+    def test_colors_come_from_styles_through_materials_and_textures(self):
         data = {"colors": [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0)], "styles": [(False, 1), (True, 1), (True, 2)],
                 "materials": [(False, 4), (True, 1)], "coords": []}
-        self.assertEqual(tree.style_color(data, 1), (1.0, 0.0, 0.0))  # a plain colour; indices count components
+        self.assertEqual(tree.style_color(data, 1), (1.0, 0.0, 0.0))  # a plain color; indices count components
         self.assertEqual(tree.style_color(data, 2), (0.0, 1.0, 0.0))  # a material's diffuse
         self.assertEqual(tree.style_color(data, 3), (0.0, 1.0, 0.0))  # a texture over that material
         self.assertIsNone(tree.style_color(data, 0))
@@ -243,7 +243,7 @@ class Uncompressed(unittest.TestCase):
         self.assertEqual(prc._triangles_of(prc.STRIPS, 4), [(0, 1, 2), (2, 1, 3)])
         self.assertEqual(prc._triangles_of(prc.TRIANGLES, 3), ((0, 1, 2),))
 
-    def test_a_face_counts_its_corners_for_its_colours(self):
+    def test_a_face_counts_its_corners_for_its_colors(self):
         # 2 triangles, then 2 fans of 3 and 4 (one carrying the flag that isn't part of its size)
         self.assertEqual(prc._corners_in(0x2 | 0x4, [2, 2, 3, 4 | prc._NORMAL_SINGLE]), 13)
 

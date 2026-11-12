@@ -1,8 +1,8 @@
 """save_step(): write the open model as a STEP file (File > Save As STEP).
 
-A SolidWorks or Parasolid part already has a STEP translation in the cache, with its colours and body names,
-so that is copied. Anything else (assemblies, IGES, BREP) is written by OpenCASCADE, which drops colours and
-names; the colours are added back from the model (one per solid, in the order OpenCASCADE writes them).
+A SolidWorks or Parasolid part already has a STEP translation in the cache, with its colors and body names,
+so that is copied. Anything else (assemblies, IGES, BREP) is written by OpenCASCADE, which drops colors and
+names; the colors are added back from the model (one per solid, in the order OpenCASCADE writes them).
 """
 
 import re
@@ -45,7 +45,7 @@ def save_step(session, out):
 
 def _dress(text, model, name):
     """OpenCASCADE's STEP with the products named after the file and its bodies, and each solid in its
-    model colour."""
+    model color."""
     looks = [b for b in model.bodies if b.get("kind") == "solid"]
     # OpenCASCADE writes one product for the whole model, then (with several solids) one per solid, in order
     names = iter([name] + [b.get("name") or name for b in looks])
@@ -53,7 +53,7 @@ def _dress(text, model, name):
                   lambda _m: "PRODUCT('{0}','{0}'".format(_ascii(next(names, name))), text)
     solids = re.findall(r"^#(\d+)\s*=\s*(?:MANIFOLD_SOLID_BREP|BREP_WITH_VOIDS)\b", text, re.M)
     ctx = re.search(r"^#(\d+)\s*=\s*\(\s*GEOMETRIC_REPRESENTATION_CONTEXT", text, re.M)
-    if not ctx or len(solids) != len(looks):  # can't pair solids with bodies safely: leave it uncoloured
+    if not ctx or len(solids) != len(looks):  # can't pair solids with bodies safely: leave it uncolored
         return text
     styles = []
     for ref, b in zip(solids, looks):
