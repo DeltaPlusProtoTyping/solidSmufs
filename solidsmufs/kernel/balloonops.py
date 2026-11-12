@@ -5,12 +5,13 @@ What there is to inspect is read by kernel/balloons.py. Here it's kept in the PD
   catalog names (/SolidSmurfsInspection): no other program shows it, and it comes back when the file is opened again;
 - each balloon as a real circle comment with its number drawn in it, so the saved print shows its balloons in any
   PDF reader, and prints with them.
+Several characteristics of one callout share a number and are told apart by a sub-number: 2.1, 2.2, 2.3 ("n" and
+"sub" in the list; a balloon alone under its number has no sub).
 The comments are made again from the list after every change. A balloon whose comment is gone (its page was deleted,
 or it was removed in another program) leaves the list; one whose page moved follows it.
 Places in the list are in the page's own points (not turned); the window gets and gives them as the page is shown.
 """
 
-import datetime
 import json
 import math
 import re
@@ -21,7 +22,7 @@ from . import balloons
 
 KEY, FONT_KEY, SUBJECT = "SolidSmurfsInspection", "SolidSmurfsBalloonFont", "Balloon"
 RED = (0.82, 0.07, 0.07)
-FIELDS = ("kind", "text", "count", "nominal", "plus", "minus", "lo", "hi", "places", "tol")
+FIELDS = ("kind", "text", "count", "nominal", "plus", "minus", "lo", "hi", "places", "tol", "desc", "gage")
 
 
 class BalloonOps:
@@ -44,8 +45,29 @@ class BalloonOps:
                 if a.info.get("subject") == SUBJECT and name.startswith("ssb-"):
                     where[name[4:]] = i
         data["chars"] = [{**c, "page": where[str(c["id"])]} for c in data["chars"] if str(c["id"]) in where]
-        data["chars"].sort(key=lambda c: c["n"])
+        data["chars"].sort(key=lambda c: (c["n"], c.get("sub") or 0))
         return data
+
+    @staticmethod
+    def _groups(chars):
+        """The balloons in order, those sharing a number together."""
+        out = []
+        for c in sorted(chars, key=lambda c: (c["n"], c.get("sub") or 0)):
+            if out and out[-1][0]["n"] == c["n"]:
+                out[-1].append(c)
+            else:
+                out.append([c])
+        return out
+
+    @staticmethod
+    def _numbered(groups):
+        """Number the groups 1, 2, 3 and those within one .1, .2, .3: the list in that order."""
+        chars = []
+        for i, g in enumerate(groups, 1):
+            for j, c in enumerate(g, 1):
+                c["n"], c["sub"] = i, j if len(g) > 1 else None
+                chars.append(c)
+        return chars
 
     def _insp_write(self, data):
         doc = self.fz
@@ -86,7 +108,7 @@ class BalloonOps:
                 a = pg.add_circle_annot(pymupdf.Rect(x - r, y - r, x + r, y + r))
                 a.set_colors(stroke=RED, fill=(1, 1, 1))
                 a.set_border(width=round(max(r * 0.13, 0.7), 2))
-                a.set_info(title=who, subject=SUBJECT, content=f"{c['n']}: {c['text']}")
+                a.set_info(title=who, subject=SUBJECT, content=f"{balloons.label(c)}: {c['text']}")
                 a.update()
                 doc.xref_set_key(a.xref, "NM", f"(ssb-{c['id']})")
                 kind, val = doc.xref_get_key(a.xref, "AP/N")
@@ -97,8 +119,8 @@ class BalloonOps:
                 if len(box) != 4:
                     continue
                 # its number, in the circle's middle, upright on the page as it's shown
-                text = str(c["n"])
-                fs = r * (1.25 if len(text) < 2 else 1.08 if len(text) == 2 else 0.8)
+                text = balloons.label(c)
+                fs = r * (1.25 if len(text) < 2 else 1.08 if len(text) == 2 else 0.8 if len(text) == 3 else 0.64)
                 tw = pymupdf.get_text_length(text, "hebo", fs)
                 t = math.radians(pg.rotation)
                 cos, sin = math.cos(t), math.sin(t)
@@ -114,9 +136,11 @@ class BalloonOps:
         chars = []
         for c in data["chars"]:
             pg = self.fz[c["page"]]
-            chars.append({"id": c["id"], "n": c["n"], "page": c["page"], "r": c["r"], "box": self._out(pg, c["box"]),
+            chars.append({"id": c["id"], "n": c["n"], "sub": c.get("sub"), "label": balloons.label(c), "page": c["page"], "r": c["r"], "box": self._out(pg, c["box"]),
                           "at": self._pt_out(pg, c["at"]), **{k: c.get(k) for k in FIELDS}})
-        return {"chars": chars, "tols": data.get("tols") or {}, "unit": data.get("unit"), "labels": balloons.KIND_LABEL}
+        from . import report
+        return {"chars": chars, "tols": data.get("tols") or {}, "unit": data.get("unit"), "labels": balloons.KIND_LABEL,
+                "info": data.get("info") or {}, "fields": [[k, label] for k, label, _ in report.INFO], "layouts": report.LAYOUTS}
 
     def _balloon_item(self, pg, it, at, r):
         import pymupdf
@@ -127,11 +151,24 @@ class BalloonOps:
         return {**{k: it.get(k) for k in FIELDS}, "r": r, "box": [round(v, 2) for v in box], "at": [round(p.x, 2), round(p.y, 2)]}
 
     # ================================================================== reading a page
+    @staticmethod
+    def _balloon_rects(pg):
+        """Where the page's balloons are now, as it's shown: they're read back as text and linework like the rest of
+        the page, and are no part of the print."""
+        import pymupdf
+        out = []
+        for a in pg.annots(types=[pymupdf.PDF_ANNOT_CIRCLE]):
+            if a.info.get("subject") == SUBJECT:
+                b = a.rect * pg.rotation_matrix
+                b.normalize()
+                out.append((b.x0 - 1.5, b.y0 - 1.5, b.x1 + 1.5, b.y1 + 1.5))
+        return out
+
     def _balloon_lines(self, pg, extra=None):
         """A page's lines of text for kernel/balloons.py, in points as the page is shown: its own text, then what OCR
         read where it has none."""
         import pymupdf
-        rot, lines = pg.rotation_matrix, []
+        rot, lines, own = pg.rotation_matrix, [], self._balloon_rects(pg)
         for block in pg.get_text("dict").get("blocks", []):
             for line in block.get("lines", []):
                 dx, dy = line.get("dir", (1, 0))
@@ -144,6 +181,9 @@ class BalloonOps:
                     b.normalize()
                     if not s["text"].strip():
                         continue
+                    if own and re.fullmatch(r"\d+(?:\.\d+)?", s["text"].strip()) and any(
+                            o[0] <= (b.x0 + b.x1) / 2 <= o[2] and o[1] <= (b.y0 + b.y1) / 2 <= o[3] for o in own):
+                        continue  # a balloon's own number
                     h = min(b.width, b.height) or 1.0
                     last = pieces[-1] if pieces else None
                     gap = None if last is None else (b.y0 - last["box"][3] if down else last["box"][1] - b.y1 if vert else b.x0 - last["box"][2])
@@ -161,13 +201,57 @@ class BalloonOps:
         return lines
 
     @staticmethod
+    def _balloon_marks(pg):
+        """What a balloon shouldn't sit on besides text, in points as the page is shown: the page's linework as
+        segments [(x0, y0, x1, y1)] (curves as chords) and its pictures as boxes (not one that is the whole page: a
+        scan)."""
+        import pymupdf
+        rot, segs, pics, own = pg.rotation_matrix, [], [], BalloonOps._balloon_rects(pg)
+        try:
+            paths = pg.get_drawings()
+        except Exception:
+            paths = []
+        for path in paths:
+            if len(segs) > 40000:
+                break
+            for it in path.get("items", []):
+                if it[0] == "l":
+                    pts = [it[1], it[2]]
+                elif it[0] == "re":
+                    q = it[1].quad
+                    pts = [q.ul, q.ur, q.lr, q.ll, q.ul]
+                elif it[0] == "qu":
+                    q = it[1]
+                    pts = [q.ul, q.ur, q.lr, q.ll, q.ul]
+                elif it[0] == "c":
+                    a, b, c, d = it[1:5]
+                    pts = [pymupdf.Point(*[(1 - t) ** 3 * a[k] + 3 * (1 - t) ** 2 * t * b[k] + 3 * (1 - t) * t * t * c[k] + t ** 3 * d[k] for k in (0, 1)])
+                           for t in (0, .2, .4, .6, .8, 1)]
+                else:
+                    continue
+                pts = [pymupdf.Point(p) * rot for p in pts]
+                segs += [(a.x, a.y, b.x, b.y) for a, b in zip(pts, pts[1:])
+                         if not any(o[0] <= a.x <= o[2] and o[1] <= a.y <= o[3] and o[0] <= b.x <= o[2] and o[1] <= b.y <= o[3] for o in own)]
+        area = abs(pg.rect.width * pg.rect.height) or 1.0
+        try:
+            for im in pg.get_image_info():
+                b = pymupdf.Rect(im["bbox"]) * rot
+                b.normalize()
+                if 0 < b.width * b.height < 0.5 * area:
+                    pics.append((b.x0, b.y0, b.x1, b.y1))
+        except Exception:
+            pass
+        return segs, pics
+
+    @staticmethod
     def _extra_page(extra, i):
         return ((extra or {}).get("pages") or {}).get(str(i)) or {}
 
     # ================================================================== the edits
     def op_balloons(self):
-        """The inspection list: {"chars": [{"id", "n", "page", "r", "at": [x, y], "box": [x, y, w, h], "kind",
-        "text", "count", "nominal", "plus", "minus", "lo", "hi", "places", "tol"}], "tols", "unit", "labels"}."""
+        """The inspection list: {"chars": [{"id", "n", "sub", "label" (what the balloon says: 2, or 2.1), "page", "r", "at": [x, y], "box": [x, y, w, h], "kind",
+        "text", "count", "nominal", "plus", "minus", "lo", "hi", "places", "tol"}], "tols", "unit", "labels",
+        "info": what the report says about the job, "fields": [[key, label]] it can say}."""
         return self._balloon_out(self._insp())
 
     def op_balloon_auto(self, extra=None, notes=True):
@@ -182,7 +266,7 @@ class BalloonOps:
             texts += [ln["text"] for ln in lines]
         unit = (extra or {}).get("unit")
         tols = balloons.defaults(texts)
-        data = {"v": 1, "chars": [], "tols": tols, "unit": unit, "next": 1}
+        data = {"v": 1, "chars": [], "tols": tols, "unit": unit, "next": 1, "info": old.get("info") or {}}
         for i, (pg, lines, frames) in enumerate(read):
             size = (pg.rect.width, pg.rect.height)
             items = balloons.read(lines, frames, unit, tols, size, notes=notes)
@@ -190,7 +274,7 @@ class BalloonOps:
                 continue
             r = balloons.radius(items)
             obstacles = [tuple(ln["box"]) for ln in lines] + [(f["box"][0], f["box"][1], f["box"][0] + f["box"][2], f["box"][1] + f["box"][3]) for f in frames]
-            for it, at in zip(items, balloons.place(items, obstacles, size, r)):
+            for it, at in zip(items, balloons.place(items, obstacles, size, r, *self._balloon_marks(pg))):
                 data["chars"].append({"id": data["next"], "n": data["next"], "page": i, **self._balloon_item(pg, it, at, r)})
                 data["next"] += 1
         if not data["chars"] and not old["chars"]:
@@ -225,7 +309,7 @@ class BalloonOps:
         obstacles = [tuple(ln["box"]) for ln in lines]
         for c in mine:
             p = self._pt_out(pg, c["at"])
-            obstacles.append((p[0] - c["r"], p[1] - c["r"], p[0] + c["r"], p[1] + c["r"]))
+            obstacles.append((p[0] - 1.3 * c["r"], p[1] - 1.3 * c["r"], p[0] + 1.3 * c["r"], p[1] + 1.3 * c["r"]))
         if w < 3 or h < 3:
             r = r or 8.0
             items, ats = [{"kind": "other", "text": "", "count": 1, "places": 0, "box": [x + r + 2, y - r, 2 * r, 2 * r]}], [[x, y]]
@@ -240,7 +324,7 @@ class BalloonOps:
                 text = balloons.clean(" ".join(ln["text"] for ln in sorted(inside, key=lambda ln: (ln["box"][1], ln["box"][0]))))
                 items = [{"kind": "note" if text else "other", "text": text, "count": 1, "places": 0, "box": [x, y, w, h]}]
             r = r or balloons.radius(items)
-            ats = balloons.place(items, obstacles, size, r)
+            ats = balloons.place(items, obstacles, size, r, *self._balloon_marks(pg))
         self._snapshot()
         n, ids = max([c["n"] for c in data["chars"]], default=0), []
         for it, at in zip(items, ats):
@@ -259,15 +343,16 @@ class BalloonOps:
         return self._balloon_done(data, [c["page"]])
 
     def op_balloon_edit(self, id, **o):
-        """Change a characteristic: kind, text, count, nominal, plus, minus, lo, hi (numbers or None), or n, its
-        balloon number (the others move along)."""
+        """Change a characteristic: kind, text, count, desc (what it is, in words), gage (what it's checked with),
+        nominal, plus, minus, lo, hi (numbers or None), or n, its balloon number: 4 moves it to be the fourth (the
+        others move along), "4.2" puts it second under number 4 with what's there."""
         data = self._insp()
         c = self._balloon_find(data, id)
         self._snapshot()
         pages = [c["page"]]
-        for k in ("kind", "text", "count"):
+        for k in ("kind", "text", "count", "desc", "gage"):
             if k in o and o[k] is not None:
-                c[k] = int(o[k]) if k == "count" else str(o[k])
+                c[k] = int(o[k]) if k == "count" else str(o[k]).strip()[:200]
         given = [k for k in ("nominal", "plus", "minus", "lo", "hi") if k in o]
         if given:
             for k in given:
@@ -284,12 +369,42 @@ class BalloonOps:
                 c["kind"] = "dim"
             balloons.limits(c, data.get("tols") or {})
         if o.get("n") is not None:
-            rest = [x for x in data["chars"] if x is not c]
-            rest.insert(min(max(int(o["n"]) - 1, 0), len(rest)), c)
-            for i, x in enumerate(rest, 1):
-                x["n"] = i
-            data["chars"], pages = rest, [x["page"] for x in rest]
+            m = re.fullmatch(r"\s*(\d+)(?:\s*\.\s*(\d+))?\s*", str(o["n"]))
+            if not m:
+                raise ValueError("A balloon's number is like 4, or 4.2 for the second one under 4.")
+            n, sub = int(m[1]), int(m[2]) if m[2] else None
+            groups = self._groups(data["chars"])
+            under = next((g for g in groups if g[0]["n"] == n), None) if sub else None
+            for g in groups:
+                g[:] = [x for x in g if x is not c]
+            groups = [g for g in groups if g]
+            if under:
+                under.insert(min(max(sub - 1, 0), len(under)), c)
+            else:
+                groups.insert(min(max(n - 1, 0), len(groups)), [c])
+            data["chars"] = self._numbered(groups)
+            pages = [x["page"] for x in data["chars"]]
         return self._balloon_done(data, pages)
+
+    def op_balloon_sub(self, id):
+        """Another characteristic of the same callout: an empty balloon under this one's number (2 becomes 2.1, the
+        new one 2.2), beside the last of them."""
+        data = self._insp()
+        c = self._balloon_find(data, id)
+        self._snapshot()
+        group = [x for x in data["chars"] if x["n"] == c["n"]]
+        for i, x in enumerate(group, 1):
+            x["sub"] = x.get("sub") or i
+        last = max(group, key=lambda x: x["sub"])
+        pg = self.fz[c["page"]]
+        p = self._pt_out(pg, last["at"])
+        p = self._pt(pg, [p[0] + 2.15 * c["r"], p[1]])
+        new = {**{k: None for k in FIELDS}, "id": data["next"], "n": c["n"], "sub": last["sub"] + 1, "page": c["page"], "kind": "other", "text": "",
+               "count": 1, "places": 0, "r": c["r"], "box": list(c["box"]), "at": [round(p.x, 2), round(p.y, 2)]}
+        data["chars"].append(new)
+        data["next"] += 1
+        data["chars"].sort(key=lambda x: (x["n"], x.get("sub") or 0))
+        return self._balloon_done(data, [c["page"]], {"ids": [new["id"]]})
 
     def op_balloon_delete(self, ids):
         data = self._insp()
@@ -302,11 +417,11 @@ class BalloonOps:
         return self._balloon_done(data, pages)
 
     def op_balloon_renumber(self):
-        """Number the balloons 1, 2, 3 in the order they're in, closing the gaps deleted ones left."""
+        """Number the balloons 1, 2, 3 in the order they're in, closing the gaps deleted ones left; those sharing a
+        number stay together as .1, .2, .3 (one left alone under its number loses its sub-number)."""
         data = self._insp()
         self._snapshot()
-        for i, c in enumerate(data["chars"], 1):
-            c["n"] = i
+        data["chars"] = self._numbered(self._groups(data["chars"]))
         return self._balloon_done(data, [c["page"] for c in data["chars"]])
 
     def op_balloon_clear(self):
@@ -329,46 +444,38 @@ class BalloonOps:
         return self._balloon_done(data, [])
 
     # ================================================================== the inspection report
-    def op_balloon_report(self, path):
-        """Write the inspection report as an Excel workbook: the list with its limits and room for results, and the
-        same characteristics laid out as AS9102 Form 3."""
-        from . import xlsx
+    def op_balloon_info(self, info):
+        """What the report says about the job ({"part", "name", "rev", "customer", "job", "lot", "fai", "inspector",
+        "parts": how many parts' results it has room for}), kept with the list."""
+        from . import report
+        data = self._insp()
+        self._snapshot()
+        data["info"] = report.clean_info(info)
+        return self._balloon_done(data, [])
+
+    def op_balloon_report(self, path, parts=None, layout=None, footer=""):
+        """Write the inspection report as an Excel workbook (kernel/report.py). layout: "sheet", the page to print
+        and fill in (five parts to a table), or "list", the list with its limits, a column for each part's results
+        with Pass / Fail worked out from them, and AS9102 Form 3. parts: how many parts' results to make room for
+        (else what the list's details say). footer: the shop's own lines for the bottom of the sheet.
+        The inspection sheet is written as a PDF too (kernel/reportpdf.py), beside the workbook under its name."""
+        from . import report, xlsx
         data = self._insp()
         if not data["chars"]:
             raise ValueError("There are no balloons to report yet.")
-        unit = data.get("unit")
-        num = "num3" if unit == "mm" else "num4"
-        tols = data.get("tols") or {}
-        said = ", ".join(f"{'angles' if k == 'angle' else '.' + 'X' * int(k) if int(k) else 'X'} ±{balloons._show(v)}{'°' if k == 'angle' else ''}"
-                         for k, v in sorted(tols.items(), key=lambda kv: (kv[0] == "angle", kv[0]))) or "none found on the print"
-        name = Path(self.path).name
-        head = [[("Inspection report", "title")], [("Print", "label"), name],
-                [("Date", "label"), datetime.date.today().isoformat()],
-                [("Units", "label"), {"in": "inches", "mm": "millimeters"}.get(unit, "not stated on the print")],
-                [("Title block tolerances", "label"), said], []]
-        cols = ["Balloon", "Sheet", "Type", "Requirement", "Qty", "Nominal", "+ Tol", "- Tol", "Lower limit", "Upper limit",
-                "Tolerance from", "Result", "Pass / Fail", "Gauge", "Comments"]
-        rows = head + [[(c, "head") for c in cols]]
-        for c in data["chars"]:
-            n = lambda k: (c.get(k), num if c.get(k) is not None else "box")  # noqa: E731
-            rows.append([(c["n"], "box"), (c["page"] + 1, "box"), (balloons.KIND_LABEL.get(c["kind"], c["kind"]), "box"),
-                         (c["text"], "box"), (c.get("count") or 1, "box"), n("nominal"), n("plus"), n("minus"), n("lo"), n("hi"),
-                         ({"print": "Print", "default": "Title block"}.get(c.get("tol"), ""), "box"),
-                         ("", "box"), ("", "box"), ("", "box"), ("", "box")])
-        form = [[("AS9102 Form 3: Characteristic Accountability, Verification and Compatibility Evaluation", "title")],
-                [("1. Part Number", "label"), "", ("2. Part Name", "label"), "", ("3. Serial Number", "label"), "", ("4. FAI Report Number", "label")],
-                [("Print", "label"), name], [],
-                [(c, "head") for c in ["5. Char. No.", "6. Reference Location", "7. Characteristic Designator", "8. Requirement",
-                                       "9. Results", "10. Designed / Qualified Tooling", "11. Nonconformance Number", "Additional Data / Comments"]]]
-        for c in data["chars"]:
-            req = c["text"]
-            if c.get("lo") is not None and c.get("hi") is not None:
-                p = max(c.get("places") or 0, 3 if unit != "mm" else 2)
-                req += f"  ({balloons.fmt(c['lo'], p)} to {balloons.fmt(c['hi'], p)})"
-            form.append([(c["n"], "box"), (f"Sheet {c['page'] + 1}", "box"), ("", "box"), (req, "box"), ("", "box"), ("", "box"), ("", "box"), ("", "box")])
+        parts = parts or (data.get("info") or {}).get("parts") or 1
         try:
-            xlsx.write(path, [{"name": "Inspection", "rows": rows, "widths": [9, 7, 20, 36, 6, 11, 9, 9, 12, 12, 14, 14, 11, 16, 28], "freeze": len(head) + 1},
-                              {"name": "AS9102 Form 3", "rows": form, "widths": [14, 20, 22, 44, 18, 24, 22, 30], "freeze": 5}])
+            xlsx.write(path, report.build(data, Path(self.path).name, parts, layout if layout in ("sheet", "list") else None, footer))
         except PermissionError:
             raise ValueError(f"{Path(path).name} can't be written: it's open in Excel, or the folder is read-only.") from None
-        return {"path": str(path), "count": len(data["chars"])}
+        from . import reportpdf
+        pdf = Path(path).with_suffix(".pdf")
+        if pdf.resolve() == Path(self.path).resolve():
+            raise ValueError(f"The report's PDF would take the print's own name, {pdf.name}. Save the report under another name.")
+        try:
+            pages = reportpdf.write(str(pdf), data, Path(self.path).name, parts, footer)
+        except (PermissionError, OSError) as e:
+            if not isinstance(e, PermissionError) and "ermission" not in str(e) and "open" not in str(e):
+                raise
+            raise ValueError(f"The workbook was written, but {pdf.name} can't be: it's open in another program.") from None
+        return {"path": str(path), "pdf": str(pdf), "pages": pages, "count": len(data["chars"]), "parts": int(parts)}

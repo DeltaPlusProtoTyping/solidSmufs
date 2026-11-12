@@ -14,6 +14,7 @@ text and comes out as a plain one, to delete.
 This is rules, not a model: what it gives is a first pass to check against the print.
 """
 
+import math
 import re
 import statistics
 
@@ -64,6 +65,7 @@ def clean(text):
     """A line's text with the marks this reads spelled one way."""
     t = re.sub(r"[⌀∅øΦφ]", "Ø", text)
     t = t.replace("×", "X").replace("+/-", "±").replace("+-", "±")
+    t = re.sub(r"(?<=\d)\s?(?:\"|”|″|'')(?![A-Za-z\d])", "", t)  # an inch mark after a size: .470" ±.010
     t = re.sub(r"(?<=\d)\s*x\s*(?=[\dØ.MR⌴⌵↧#])", " X ", t)  # 4x Ø.250, .030 x 45°
     t = re.sub(r"(?<![A-Za-z\d])[.,][\doO]{2,}(?![A-Za-z])", lambda m: m.group().replace("o", "0").replace("O", "0"), t)  # OCR's .OOO
     return re.sub(r"\s+", " ", t).strip()
@@ -81,13 +83,19 @@ def defaults(texts):
     m = re.search(rf"\bANG(?:LES?|ULAR)\s*[=:]?\s*±\s*({NUM})", text)
     if m:
         out["angle"] = _f(m.group(1))
+    # one tolerance for every size: "TOLERANCES: ±.5mm UNLESS NOTED" (what a table says for some decimals stands)
+    m = re.search(rf"\b(?:GENERAL\s+)?TOL(?:ERANCES?|\.)?\s*[=:]?\s*±\s*({NUM})\s*(?:MM|IN(?:CH(?:ES)?)?)?\s*(?:\(?UNLESS|$|[^\dX.,°])", text)
+    if m and _f(m.group(1)) > 0:
+        for k in "01234":
+            out.setdefault(k, _f(m.group(1)))
     return out
 
 
 def is_prose(t):
     """Is this line a sentence (a note, the title block's small print), not a callout?"""
     words = [w for w in re.findall(r"[A-Za-z][A-Za-z.]{2,}", t) if w.upper().rstrip(".") not in CALLOUT_WORDS]
-    return len(words) >= 3
+    # (a size told in a sentence, "Hole is .470 ±.010", is the drawing's callout said again)
+    return len(words) >= 3 or re.search(r"\b(?:is|are|be|was|the|should|must|will)\b", t, re.I) is not None
 
 
 def parse(text, unit=None):
@@ -207,6 +215,31 @@ def _union(a, b):
     return [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
 
 
+def zones(lines, size):
+    """The lines that are the border's zone labels (1 2 3 … along the top and bottom, A B C … down the sides), by
+    their place in `lines`: a number or a letter alone, in the page's margin, three or more in a row along an edge."""
+    W, H = size
+    margin = 0.08 * min(W, H)
+    out = set()
+    for edge in range(4):  # top, bottom, left, right
+        found = []
+        for i, ln in enumerate(lines):
+            if not re.fullmatch(r"\d{1,2}|[A-Za-z]", ln["text"].strip()):
+                continue
+            x0, y0, x1, y1 = ln["box"]
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            depth = (cy, H - cy, cx, W - cx)[edge]  # how far in from this edge
+            if depth < margin:
+                found.append((i, depth, min(x1 - x0, y1 - y0) or 1.0, ln["text"].strip().upper()))
+        if len(found) < 3:
+            continue
+        mid = statistics.median(d for _, d, _, _ in found)
+        row = [f for f in found if abs(f[1] - mid) <= 1.5 * f[2]]
+        if len(row) >= 3 and len({t for _, _, _, t in row}) >= 3:
+            out |= {i for i, _, _, _ in row}
+    return out
+
+
 def title_block(lines, size):
     """(x0, y0, x1, y1) around the title block, from the words every one has; None when it isn't clear."""
     W, H = size
@@ -236,10 +269,13 @@ def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True
     if tols is None:
         tols = defaults([ln["text"] for ln in lines])
     block = title_block(lines, size)
+    border = zones(lines, size)
     fboxes = [(f["box"][0], f["box"][1], f["box"][0] + f["box"][2], f["box"][1] + f["box"][3]) for f in frames]
     items, signed = [], []
-    for ln in lines:
+    for i, ln in enumerate(lines):
         t, box = ln["text"], ln["box"]
+        if i in border:
+            continue
         if any(_inside(box, fb, 1.0) for fb in fboxes):
             continue  # a frame's own tolerance and datums
         m2, m1 = SIGNED2.match(t), SIGNED.match(t)
@@ -347,40 +383,95 @@ def _notes(lines):
 
 
 # ------------------------------------------------------------------------------------------------ where balloons go
+def label(c):
+    """What a balloon says: its number, or number.sub (2.1, 2.2) for one of several under the same number."""
+    return f"{c['n']}.{c['sub']}" if c.get("sub") else str(c["n"])
+
+
 def radius(items):
     """A balloon's radius for a page, from the height of its sizes' text."""
     hs = [min(it["box"][2], it["box"][3]) for it in items if it["kind"] in ("dim", "angle", "thread", "chamfer") and min(it["box"][2], it["box"][3]) > 0]
     return round(min(max(0.8 * statistics.median(hs), 5.5), 10.0), 1) if hs else 8.0
 
 
-def place(items, obstacles, size, r):
-    """A center [x, y] for each item's balloon: beside its callout, clear of the page's text and of the balloons
-    already placed. obstacles: boxes (x0, y0, x1, y1)."""
+def _seg_dist(px, py, x0, y0, x1, y1):
+    dx, dy = x1 - x0, y1 - y0
+    n = dx * dx + dy * dy
+    t = 0.0 if n == 0 else max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / n))
+    return math.hypot(px - x0 - t * dx, py - y0 - t * dy)
+
+
+def _box_dist(px, py, o):
+    return math.hypot(max(o[0] - px, 0.0, px - o[2]), max(o[1] - py, 0.0, py - o[3]))
+
+
+def place(items, obstacles, size, r, segs=(), pics=()):
+    """A center [x, y] for each item's balloon: the best of the spots around its callout. A spot is better the nearer
+    it is, and worse for what it sits on or crowds: text (obstacles: boxes (x0, y0, x1, y1)), a balloon already
+    placed, the drawing's linework (segs: (x0, y0, x1, y1), the part's edges and the dimension and leader lines) and
+    its pictures (pics: boxes). Nothing is ruled out but the page's edge, so a crowded callout still gets the least
+    bad spot."""
     W, H = size
     taken, out = [], []
+    rings = (0.0, 0.75, 1.5, 2.5, 4.0, 6.0)
+    reach = (rings[-1] + 3.5) * r
     for it in items:
         x, y, w, h = it["box"]
-        cx, cy, d = x + w / 2, y + h / 2, r + 2.0
-        near = [o for o in obstacles if o[0] < x + w + 8 * r and o[2] > x - 8 * r and o[1] < y + h + 8 * r and o[3] > y - 8 * r]
-        near += [o for o in taken if abs(o[0] - cx) < w + 10 * r and abs(o[1] - cy) < h + 10 * r]
-        spots = []
-        for k in (1.0, 3.0, 5.0):
-            e = d + (k - 1) * r
-            sides = [(x - e, cy), (x + w + e, cy), (cx, y - e), (cx, y + h + e)]
-            if it.get("vert") or it["kind"] == "note":
-                sides = [sides[2], sides[3], sides[0], sides[1]] if it.get("vert") else sides
-            spots += sides + [(x - e, y - e * 0.6), (x + w + e, y - e * 0.6), (x - e, y + h + e * 0.6), (x + w + e, y + h + e * 0.6)]
-        best = None
-        for sx, sy in spots:
+        cx, cy, d = x + w / 2, y + h / 2, r + 0.3 * r + 1.0
+        zone = (x - reach, y - reach, x + w + reach, y + h + reach)
+        text = [o for o in obstacles if o[0] < zone[2] and o[2] > zone[0] and o[1] < zone[3] and o[3] > zone[1]] + [(x, y, x + w, y + h)]
+        lines = [s for s in segs if min(s[0], s[2]) < zone[2] and max(s[0], s[2]) > zone[0] and min(s[1], s[3]) < zone[3] and max(s[1], s[3]) > zone[1]]
+        others = [t for t in taken if zone[0] - r < t[0] < zone[2] + r and zone[1] - r < t[1] < zone[3] + r]
+        spots = []  # (x, y, how far out in r, how much the side is second choice)
+        for k in rings:
+            e = d + k * r
+            # the side a callout is read from first: its left, or for one running up or down the page, above and below
+            first, second = [(x - e, cy), (x + w + e, cy)], [(cx, y - e), (cx, y + h + e)]
+            if w > 4 * r:  # a long callout: along it too, toward its ends
+                second += [(x + r, y - e), (x + w - r, y - e), (x + r, y + h + e), (x + w - r, y + h + e)]
+            if h > 4 * r:
+                first += [(x - e, y + r), (x - e, y + h - r), (x + w + e, y + r), (x + w + e, y + h - r)]
+            if it.get("vert"):
+                first, second = second, first
+            c = e * 0.72
+            corners = [(x - c, y - c), (x + w + c, y - c), (x - c, y + h + c), (x + w + c, y + h + c)]
+            spots += [(sx, sy, k, 0.12 * n) for n, (sx, sy) in enumerate(first[:2])] + [(sx, sy, k, 0.3) for sx, sy in first[2:]]
+            spots += [(sx, sy, k, 0.35) for sx, sy in second] + [(sx, sy, k, 0.55) for sx, sy in corners]
+        best, least = None, None
+        for sx, sy, k, side in spots:
             if not (r + 1 <= sx <= W - r - 1 and r + 1 <= sy <= H - r - 1):
                 continue
-            if best is None:
-                best = (sx, sy)
-            if not any(sx - r < o[2] and o[0] < sx + r and sy - r < o[3] and o[1] < sy + r for o in near):
-                best = (sx, sy)
-                break
+            cost = k + side
+            for o in text:
+                g = _box_dist(sx, sy, o) - r
+                if g < 0:
+                    cost += 40 + 10 * min(-g / r, 1.0)
+                elif g < 0.35 * r:
+                    cost += 2 * (1 - g / (0.35 * r))
+            for bx, by in others:
+                g = math.hypot(sx - bx, sy - by) - 2 * r
+                if g < 0:
+                    cost += 60
+                elif g < 0.6 * r:
+                    cost += 3 * (1 - g / (0.6 * r))
+            if least is not None and cost >= least:
+                continue
+            on = 0.0
+            for s in lines:
+                g = _seg_dist(sx, sy, *s)
+                if g < r:
+                    on += 2 - g / r  # (through its middle is worse than across its rim)
+                elif g < 1.25 * r:
+                    on += 0.3
+                if on >= 8:
+                    break
+            cost += min(on * 3, 24)
+            if any(o[0] < sx < o[2] and o[1] < sy < o[3] for o in pics):
+                cost += 5
+            if least is None or cost < least:
+                best, least = (sx, sy), cost
         sx, sy = best or (min(max(x - d, r + 1), W - r - 1), min(max(cy, r + 1), H - r - 1))
-        taken.append((sx - r, sy - r, sx + r, sy + r))
+        taken.append((sx, sy))
         out.append([round(sx, 2), round(sy, 2)])
     return out
 

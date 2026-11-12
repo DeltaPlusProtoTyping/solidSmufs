@@ -240,18 +240,39 @@ dimensions with their tolerances, angles, chamfers, threads, surface finishes, f
 notes. Each gets a red balloon beside it on the page and a row in the **Inspection list** on the right, with its
 limits worked out.
 
+- **Where a balloon goes:** the nearest spot beside its callout that is clear of text, of other balloons, of the
+  drawing's lines (part edges, dimension and leader lines) and of its pictures. On a crowded callout it takes the
+  least bad spot, to drag where you want it.
 - **Where the limits come from:** the tolerance on the callout (`±.005`, `+.005/-.000`, limits like `.2500-.2505`, a
   tolerance or limits stacked over two lines, `MAX` and `MIN`), or, for a size with none, the title block's table by
-  the number of decimals (`.XXX ±.005`). The table read from the print shows at the top of the list: correct it there
+  the number of decimals (`.XXX ±.005`), or its one tolerance for every size (`Tolerances: ±.5mm unless noted`). The table read from the print shows at the top of the list: correct it there
   and every size that uses it follows. Limits from the title block show in italics.
-- **What's left out:** reference sizes (in brackets, or marked REF), sizes marked BSC, and what's in the title block.
+- **What's left out:** reference sizes (in brackets, or marked REF), sizes marked BSC, a size only told in a sentence,
+  the zone numbers and letters around the border, and what's in the title block.
   A count (`4X`, `3 PLACES`) is one balloon with that quantity.
 - **Checking it:** click a row to find its balloon (the callout it's for is outlined), drag a balloon to move it,
   double-click it for its number, type, requirement, quantity, nominal, tolerance and limits. Delete removes it;
   **Renumber** closes the gaps. **Add** balloons something by hand: drag a box around a callout and its text is read
   (a reference size too, when it's asked for), or click a spot for an empty balloon. Everything is undone with Ctrl+Z.
-- **Report…** writes an Excel workbook: the list with nominal, tolerances, limits and room for results, and the same
-  characteristics as AS9102 Form 3.
+- **Sub-numbers:** one callout with several things to check gets one number and sub-numbers: 2.1, 2.2, 2.3. In a
+  balloon's dialog, **Add sub-balloon** puts a new one under its number, and typing `2.2` as another balloon's number
+  moves it to be the second under 2. A plain number takes it out again. Renumber keeps them together.
+- **Report…** writes an Excel workbook. It asks for the job first (part number and name, revision, customer, job
+  number, inspection frequency, how many parts), which is kept with the balloons in the PDF. Two layouts:
+  - **Inspection sheet**, to print and fill in: the job across the top, then a table of every balloon (number,
+    description, gage, nominal, lower and upper limit) with five blank part columns, and the table again for each
+    further five parts. A characteristic with no limits shows what the print says across the three number columns. The
+    footer lines (a form number, a policy note) are yours, remembered on the computer.
+  - **List with Pass / Fail**: a row for each balloon with its requirement and limits, a results column for each part
+    and a Pass / Fail the workbook works out as results are typed in (type Pass or Fail for what isn't measured), with
+    totals at the top; and the same characteristics as AS9102 Form 3, its results following the first part's.
+
+  The inspection sheet is also saved as a **PDF**, ready to print, beside the workbook under the same name: the
+  numbers in red, the headings in blue, in Calibri and Cambria, a table kept whole on its page, on as many pages as the
+  list takes.
+
+  In both, a result typed in outside its limits turns red. A balloon's **Description** ("Overall Length") and **Gage**
+  ("Calipers") are typed in its dialog; without a description the sheet says Dimension, Diameter, Radius and so on.
 - **Saved in the PDF:** the balloons are real marks in the file, so the saved print shows and prints them in any PDF
   reader, and the list comes back with them when the file is opened here again.
 

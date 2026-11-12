@@ -7,7 +7,7 @@
 import { api } from './api.js';
 import { h, toast, modal } from './ui.js';
 
-const TOLS = [['1', '.X'], ['2', '.XX'], ['3', '.XXX'], ['4', '.XXXX'], ['angle', 'Angles']];
+const TOLS = [['0', 'X'], ['1', '.X'], ['2', '.XX'], ['3', '.XXX'], ['4', '.XXXX'], ['angle', 'Angles']];
 const MEASURED = new Set(['dim', 'angle', 'chamfer']);
 const typing = (el) => el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable);
 const rectOf = (a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])];
@@ -18,7 +18,7 @@ export class Balloons {
     this.v = view;
     this.doc = null;
     this.on = false;
-    this.data = { chars: [], tols: {}, unit: null, labels: {} };
+    this.data = { chars: [], tols: {}, unit: null, labels: {}, info: {}, fields: [], layouts: [] };
     this.sel = null;
     this.els = new Map();
     this.adding = false;
@@ -39,7 +39,7 @@ export class Balloons {
   open(doc) {
     this.doc = doc;
     this.sel = null;
-    this.data = { chars: [], tols: {}, unit: null, labels: {} };
+    this.data = { chars: [], tols: {}, unit: null, labels: {}, info: {}, fields: [] };
     this.btn.hidden = !this.ed.editable; // balloons are kept in a PDF (a picture is printed to one first)
     this._show(!!doc.balloonsOn && this.ed.editable);
     if (this.on) this.load();
@@ -132,15 +132,46 @@ export class Balloons {
     this.run('balloon_clear');
   }
 
-  async report() {
+  // Report…: what the report says about the job (kept with the list in the PDF), then where to save the workbook
+  report() {
     if (!this.data.chars.length) { toast('There are no balloons to report yet.', 'info'); return; }
-    const name = `${this.doc.name.replace(/\.pdf$/i, '')} inspection report.xlsx`;
-    const r = await api.saveXlsxDialog(name, 'Save Inspection Report As').catch((e) => { toast(e.message, 'error'); return null; });
-    if (!r?.path) return;
-    try {
-      const done = await api.pdfEdit(this.doc.id, 'balloon_report', { path: r.path });
-      this.ed._saved(`Inspection report saved: ${done.count} characteristic${done.count === 1 ? '' : 's'}.`, done.path);
-    } catch (e) { toast(e.message, 'error'); }
+    const was = this.data.info || {}, doc = this.doc;
+    const row = (label, el) => h('label', { class: 'pe-frow' }, h('span', { text: label }), el);
+    const inputs = (this.data.fields || []).map(([k, label]) => [k, label, h('input', { type: 'text', spellcheck: 'false', value: was[k] ?? '' })]);
+    const parts = h('input', { type: 'number', min: 1, max: 50, step: 1, value: was.parts || 5,
+      title: 'How many parts will be inspected: the report gets a results column for each one\n(the inspection sheet has them in fives)' });
+    const kept = (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
+    const layout = h('select', {}, ...(this.data.layouts || []).map(([k, label]) => h('option', { value: k, text: label, selected: k === kept('bl:layout') })));
+    const footer = h('textarea', { rows: 2, spellcheck: 'false', placeholder: 'Your form number, a policy note…',
+      title: 'Lines for the bottom of the inspection sheet. Remembered on this computer for every report.' });
+    footer.value = kept('bl:footer');
+    let dlg = null;
+    const ok = async () => {
+      dlg.close();
+      const info = { parts: Math.min(Math.max(parseInt(parts.value, 10) || 1, 1), 50) };
+      for (const [k, , el] of inputs) if (el.value.trim()) info[k] = el.value.trim();
+      try { localStorage.setItem('bl:layout', layout.value); localStorage.setItem('bl:footer', footer.value); } catch { /* storage off */ }
+      const same = info.parts === was.parts && inputs.every(([k]) => (info[k] || '') === (was[k] || ''));
+      if (!same && !await this.run('balloon_info', { info })) return;
+      const name = `${info.part || doc.name.replace(/\.pdf$/i, '')} inspection report.xlsx`;
+      const r = await api.saveXlsxDialog(name, 'Save Inspection Report As').catch((e) => { toast(e.message, 'error'); return null; });
+      if (!r?.path || this.doc !== doc) return;
+      try {
+        const done = await api.pdfEdit(doc.id, 'balloon_report', { path: r.path, parts: info.parts, layout: layout.value, footer: footer.value });
+        this.ed._saved(`Inspection report saved: ${done.count} characteristic${done.count === 1 ? '' : 's'}, room for ${done.parts} part${done.parts === 1 ? '' : 's'}. The sheet is beside it as a PDF.`, done.path);
+      } catch (e) { toast(e.message, 'error'); }
+    };
+    dlg = modal('Inspection report', h('div', { class: 'pe-fprops bl-props' },
+      ...inputs.map(([, label, el]) => row(label, el)),
+      row('Parts to inspect', parts), row('Layout', layout), row('Footer', footer),
+      h('p', { class: 'bl-hint', text: 'An Excel workbook: each balloon with its description, gage, nominal and limits, and a column for each part. A result typed in outside its limits turns red. The inspection sheet is saved as a PDF too, beside the workbook under the same name. The job details are kept with the balloons in the print.' }),
+      h('div', { class: 'pe-pop-foot' },
+        h('span', { class: 'pv-grow' }),
+        h('button', { class: 'btn', text: 'Cancel', onclick: () => dlg.close() }),
+        h('button', { class: 'btn primary', text: 'Save report…', onclick: ok }))), { width: 440 });
+    footer.addEventListener('keydown', (e) => e.stopPropagation());
+    for (const el of [parts, ...inputs.map((i) => i[2])]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); e.stopPropagation(); });
+    setTimeout(() => inputs[0]?.[2].focus(), 30);
   }
 
   remove(id) {
@@ -193,8 +224,8 @@ export class Balloons {
 
   _put(el, p, c, at) {
     el.style.cssText = this.v._rectStyle(p, [at[0] - c.r, at[1] - c.r, 2 * c.r, 2 * c.r]);
-    const k = p.cssW / this.v._size(p)[0], n = String(c.n).length;
-    el.style.fontSize = `${c.r * k * (n < 2 ? 1.25 : n === 2 ? 1.08 : 0.8)}px`;
+    const k = p.cssW / this.v._size(p)[0], n = String(c.label).length;
+    el.style.fontSize = `${c.r * k * (n < 2 ? 1.25 : n === 2 ? 1.08 : n === 3 ? 0.8 : 0.64)}px`;
     el.style.borderWidth = `${Math.max(c.r * 0.13 * k, 1)}px`;
   }
 
@@ -213,8 +244,8 @@ export class Balloons {
         this.els.set(c.id, el);
       }
       el.char = c;
-      el.textContent = c.n;
-      el.title = `${c.n}: ${c.text || '(no requirement yet)'}${this._limits(c) ? `\n${this._limits(c)}` : ''}\nDrag to move, double-click to change, Delete to remove`;
+      el.textContent = c.label;
+      el.title = `${c.label}: ${c.text || '(no requirement yet)'}${this._limits(c) ? `\n${this._limits(c)}` : ''}\nDrag to move, double-click to change, Delete to remove`;
       el.classList.toggle('on', this.sel === c.id);
       if (el.parentNode !== p.edit) p.edit.append(el);
       this._put(el, p, c, c.at);
@@ -288,7 +319,7 @@ export class Balloons {
       }));
     const rows = d.chars.map((c) => {
       const tr = h('tr', { 'data-id': c.id, class: this.sel === c.id ? 'on' : '' },
-        h('td', { class: 'bl-n' }, h('span', { text: c.n })),
+        h('td', { class: 'bl-n' }, h('span', { text: c.label })),
         h('td', { class: 'bl-req' }, h('div', { class: 'bl-text', text: c.text || '(no requirement yet)' }),
           h('div', { class: 'bl-kind', text: `${d.labels[c.kind] || c.kind}${d.chars.some((x) => x.page !== d.chars[0].page) ? ` · sheet ${c.page + 1}` : ''}` })),
         h('td', { class: `bl-lim${c.tol === 'default' ? ' def' : ''}`, text: this._limits(c), title: c.tol === 'default' ? 'From the title block\'s tolerances' : c.tol === 'print' ? 'From the tolerance on the callout' : MEASURED.has(c.kind) ? 'No tolerance was found for this size' : '' }),
@@ -305,7 +336,7 @@ export class Balloons {
         btn(n ? 'Detect again' : 'Detect', 'Read the print and balloon what\'s found', () => this.detect()),
         this.addBtn,
         btn('Renumber', 'Number the balloons 1, 2, 3… in their order, closing the gaps deleted ones left', () => this.run('balloon_renumber')),
-        btn('Report…', 'Write the inspection report as an Excel workbook: the list with its limits and room for results,\nand the same characteristics as AS9102 Form 3', () => this.report(), 'primary')),
+        btn('Report…', 'Write the inspection report as an Excel workbook: the sheet to print and fill in, five parts to a table,\nor the list with Pass / Fail worked out from the results, with AS9102 Form 3', () => this.report(), 'primary')),
       h('label', { class: 'bl-opt', title: 'Whether Detect balloons the numbered notes too' }, notesBox, 'Balloon the numbered notes'),
       tols,
       n ? h('div', { class: 'bl-list' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', { text: '#' }), h('th', { text: 'Requirement' }), h('th', { text: 'Limits' }), h('th', {}))), h('tbody', {}, ...rows)))
@@ -324,7 +355,9 @@ export class Balloons {
     const row = (label, el) => h('label', { class: 'pe-frow' }, h('span', { text: label }), el);
     const text = (v, ph = '') => h('input', { type: 'text', spellcheck: 'false', value: v ?? '', placeholder: ph });
     const num = (v) => text(v === null || v === undefined ? '' : this._fmt(v, c.places, c.kind).replace(/\.$/, ''));
-    const n = text(c.n), req = text(c.text, 'As written on the print'), qty = text(c.count || 1);
+    const n = text(c.label), req = text(c.text, 'As written on the print'), qty = text(c.count || 1);
+    n.title = 'Its place in the list: 4 makes it the fourth. 4.2 puts it second under number 4, for one callout with several things to check.';
+    const desc = text(c.desc, 'What it is: Overall Length, Cross Hole Diameter…'), gage = text(c.gage, 'Calipers, Height Gage, Gage Pin…');
     const kind = h('select', {}, ...Object.entries(d.labels).map(([k, label]) => h('option', { value: k, text: label, selected: k === c.kind })));
     const f = { nominal: num(c.nominal), plus: num(c.plus), minus: num(c.minus), lo: num(c.lo), hi: num(c.hi) };
     const was = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]));
@@ -335,26 +368,35 @@ export class Balloons {
       if (kind.value !== c.kind) o.kind = kind.value;
       if (req.value.trim() !== (c.text || '')) o.text = req.value.trim();
       if ((parseInt(qty.value, 10) || 1) !== (c.count || 1)) o.count = parseInt(qty.value, 10) || 1;
+      if (desc.value.trim() !== (c.desc || '')) o.desc = desc.value.trim();
+      if (gage.value.trim() !== (c.gage || '')) o.gage = gage.value.trim();
       for (const [k, el] of Object.entries(f)) {
         if (el.value.trim() === was[k]) continue;
         const v = parseFloat(el.value.replace(',', '.'));
         o[k] = Number.isFinite(v) ? v : null;
         if (k === 'nominal' && Number.isFinite(v)) o.places = decimals(el.value.trim());
       }
-      const to = parseInt(n.value, 10);
-      if (to && to !== c.n) o.n = to;
+      const to = n.value.trim().replace(',', '.');
+      if (/^\d+(\.\d+)?$/.test(to) && to !== String(c.label)) o.n = to;
       if (Object.keys(o).length > 1) this.run('balloon_edit', o);
     };
-    dlg = modal(`Balloon ${c.n}`, h('div', { class: 'pe-fprops bl-props' },
-      row('Number', n), row('Type', kind), row('Requirement', req), row('Quantity', qty),
+    const sub = async () => {
+      dlg.close();
+      const r = await this.run('balloon_sub', { id: c.id });
+      const made = this.char(r?.result?.ids?.[0]);
+      if (made) { this.select(made.id, { toRow: true }); this.edit(made); }
+    };
+    dlg = modal(`Balloon ${c.label}`, h('div', { class: 'pe-fprops bl-props' },
+      row('Number', n), row('Type', kind), row('Requirement', req), row('Description', desc), row('Gage', gage), row('Quantity', qty),
       h('div', { class: 'bl-nums' }, row('Nominal', f.nominal), row('+ Tolerance', f.plus), row('− Tolerance', f.minus), row('Lower limit', f.lo), row('Upper limit', f.hi)),
       h('p', { class: 'bl-hint', text: 'Limits follow the nominal and its tolerance. With no tolerance here, they come from the title block\'s. Type the limits themselves for a size given as limits.' }),
       h('div', { class: 'pe-pop-foot' },
         h('button', { class: 'btn', text: 'Delete balloon', onclick: () => { dlg.close(); this.remove(c.id); } }),
+        h('button', { class: 'btn', text: 'Add sub-balloon', title: `Another thing to check on the same callout: a new balloon under this number (${c.n}.1, ${c.n}.2…).\nChanges typed here are not kept.`, onclick: sub }),
         h('span', { class: 'pv-grow' }),
         h('button', { class: 'btn', text: 'Cancel', onclick: () => dlg.close() }),
         h('button', { class: 'btn primary', text: 'OK', onclick: ok }))), { width: 440 });
-    for (const el of [n, req, qty, ...Object.values(f)]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); e.stopPropagation(); });
+    for (const el of [n, req, desc, gage, qty, ...Object.values(f)]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); e.stopPropagation(); });
     setTimeout(() => { req.focus(); req.select(); }, 30);
   }
 }
