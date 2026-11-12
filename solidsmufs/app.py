@@ -28,6 +28,9 @@ def _setup_logging():
 def run(argv):
     _setup_logging()
     log.info("[timing] python started")
+    if "--difficulty" in argv:  # a print's part difficulty as JSON, with no window: for a quoting system
+        from . import difficulty
+        return difficulty.main(argv)
     browser_mode = "--browser" in argv or "--no-open" in argv
     port = 0
     if "--port" in argv:

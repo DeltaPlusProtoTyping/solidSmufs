@@ -221,6 +221,18 @@ from 1 to 10, with a gauge; click it for what it's made of. Each geometric toler
 is a 5/10 part, 40 is 7.5. A part is never easier than its hardest callout less one. The multipliers are with the
 other tables at the top of `solidsmufs/kernel/gdt.py`. Only geometric tolerances count so far.
 
+**For a quoting system.** The same answer with no window, as JSON (the score, the points, the print's units, and each
+callout with its two scores, multiplier and points):
+
+```
+python -m solidsmufs --difficulty print.pdf
+SolidSmurfs.exe --difficulty print.pdf --out result.json     (the built app has no console to print to)
+```
+
+`--password word` opens a protected PDF and `--no-ocr` reads only the PDF's own text. The exit code is 0, or 2 with
+`{"error": "..."}`. From Python: `solidsmufs.difficulty.read("print.pdf")`. The fields are listed at the top of
+`solidsmufs/difficulty.py`.
+
 ## Printing
 
 **Print** (Ctrl+P, File menu or the quick access toolbar) prints what's on show. A PDF or a picture prints its pages,
