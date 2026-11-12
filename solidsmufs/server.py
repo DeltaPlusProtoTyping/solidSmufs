@@ -271,6 +271,10 @@ class _Handler(BaseHTTPRequestHandler):
                 b = self._jbody()
                 return self._json({"path": self.ctx.native.save_file(b.get("title", "Save PDF As"), b.get("name", "Untitled.pdf"),
                                                                      "PDF (*.pdf)")})
+            if parts == ["dialog", "save-xlsx"] and method == "POST":  # where to save an inspection report
+                b = self._jbody()
+                return self._json({"path": self.ctx.native.save_file(b.get("title", "Save Report As"), b.get("name", "Inspection report.xlsx"),
+                                                                     "Excel workbook (*.xlsx)")})
             if parts == ["dialog", "open-files"] and method == "POST":  # files to insert into a PDF, or pictures to place
                 b = self._jbody()
                 filters = {"pdf": "PDFs and pictures (*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif);;All files (*)",

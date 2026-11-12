@@ -416,6 +416,24 @@ def ocr_available():
     return sys.platform == "win32" and OCR_SCRIPT.is_file()
 
 
+def _unturn(lines, angle, W, H):
+    """Windows OCR straightens a picture it takes for crooked (by `angle` degrees about its middle) and gives its
+    boxes on the straightened one: put each back where it is on the picture as it was given."""
+    import math
+    a = math.radians(angle)
+    cos, sin = math.cos(a), math.sin(a)
+
+    def back(b):
+        x, y = b["x"] + b["w"] / 2 - W / 2, b["y"] + b["h"] / 2 - H / 2
+        b["x"], b["y"] = round(W / 2 + x * cos - y * sin - b["w"] / 2), round(H / 2 + x * sin + y * cos - b["h"] / 2)
+
+    for ln in lines:
+        words = ln.get("words") or []
+        for w in [words] if isinstance(words, dict) else words:
+            back(w)
+        back(ln)
+
+
 def ocr_images(imgs):
     """Windows OCR on QImages: a list (one per image) of lines {"text", "x", "y", "w", "h", "words": [...]}, in pixels."""
     from PySide6.QtGui import QImage
@@ -437,7 +455,10 @@ def ocr_images(imgs):
                 res = json.loads(line)
                 if "lines" in res:
                     lines = res.get("lines") or []
-                    results[res["i"]] = [lines] if isinstance(lines, dict) else lines
+                    lines = [lines] if isinstance(lines, dict) else lines
+                    if abs(res.get("angle") or 0) > 0.05:
+                        _unturn(lines, res["angle"], imgs[res["i"]].width(), imgs[res["i"]].height())
+                    results[res["i"]] = lines
         if run.returncode != 0 or any(r is None for r in results):
             err = run.stderr.decode("utf-8", "replace").strip().splitlines()
             raise ValueError("Windows OCR couldn't read it: " + (next((e for e in err if e.strip()), "") or "no answer")[:200])
@@ -454,8 +475,9 @@ def ocr_images(imgs):
             pass
 
 
-def ocr_marks(img, k=1.0):
-    """(marks, lines' texts) from a QImage by Windows OCR, level and turned a quarter turn. k: points per image pixel."""
+def ocr_marks(img, k=1.0, lines_out=None):
+    """(marks, lines' texts) from a QImage by Windows OCR, level and turned a quarter turn. k: points per image pixel.
+    lines_out: a list that's given every line read, as [text, x0, y0, x1, y1] in points (for ballooning)."""
     from PySide6.QtCore import QRect, Qt
     from PySide6.QtGui import QPainter, QTransform
 
@@ -487,6 +509,9 @@ def ocr_marks(img, k=1.0):
                 lines.append(boxes)
                 if n == 0:
                     level_words += boxes
+    if lines_out is not None:
+        lines_out.extend([" ".join(w[0] for w in ln), min(w[1] for w in ln), min(w[2] for w in ln),
+                          max(w[3] for w in ln), max(w[4] for w in ln)] for ln in lines)
     marks, texts = lines_marks(lines, True, keep=True)
     try:  # what OCR can't read in a feature control frame, from the picture: its symbol and its circled letters
         from . import gdtsee

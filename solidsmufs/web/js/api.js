@@ -44,6 +44,7 @@ export const api = {
   pdfMarks: (id, page) => call('POST', `/api/docs/${id}/pdf-marks`, { page }),
   pdfEdit: (id, op, args = {}) => call('POST', `/api/docs/${id}/pdf-edit`, { ...args, op }),
   savePdfDialog: (name, title) => call('POST', '/api/dialog/save-pdf', { name, title }),
+  saveXlsxDialog: (name, title) => call('POST', '/api/dialog/save-xlsx', { name, title }),
   openFiles: (kind, title) => call('POST', '/api/dialog/open-files', { kind, title }),
   settings: (ui) => call('POST', '/api/settings', ui),
   removeRecent: (path) => call('POST', '/api/recent/remove', { path }),

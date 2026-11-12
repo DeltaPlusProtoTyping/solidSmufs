@@ -251,8 +251,10 @@ class Session:
                     have = printmarks.confirm_frames(entry["marks"], img, k)
                 except Exception:
                     have = entry["marks"]
-                marks, texts = printmarks.ocr_marks(img, k)
+                read = []
+                marks, texts = printmarks.ocr_marks(img, k, read)
                 with self._marks_lock:
+                    entry["ocr_lines"] = read
                     entry["marks"] = printmarks.merge(have, marks, entry["words"])
                     entry["texts"] = entry["texts"] + texts
                     entry["ocr"] = "done"
@@ -271,12 +273,42 @@ class Session:
             raise ValueError("Only a PDF can be edited. (A picture can be printed to a PDF, then edited.)")
         if getattr(self, "editor", None) is None or self.editor.pdf is not self.pdf:
             self.editor = PdfEditor(self.pdf, self.path)
+        if op in ("balloon_auto", "balloon_add"):  # ballooning reads the print the way hovering does
+            args = {**(args or {}), "extra": self._balloon_extra(wait=op == "balloon_auto")}
         out = self.editor.run(op, args or {})
         if isinstance(out, dict) and (out.get("structure") or out.get("changed") is None) and "state" in out:
             self._marks = {}  # hover marks belong to the pages they were read from
         if op == "save":
             self.path = self.editor.path
         return out
+
+    def _balloon_extra(self, wait):
+        """What hovering has read off the print, for ballooning it (kernel/balloonops.py): its units, and each page's
+        feature control frames and OCR'd lines. wait: read every page through first (a long manual isn't)."""
+        from . import gdt, printmarks
+        pages = len(self.pdf.pages())
+        if wait and pages <= 40:
+            end = time.monotonic() + 240
+            for page in range(pages):
+                while time.monotonic() < end:
+                    r = self.pdf_marks(page)
+                    if not r["reading"] and r["ocr"] != "pending":
+                        break
+                    if not r["reading"]:
+                        time.sleep(0.05)  # Windows OCR is reading the page on its own thread
+        elif not hasattr(self, "_marks_lock"):
+            self.pdf_marks(0)
+        with self._marks_lock:
+            entries = dict(self._marks)
+            texts = [t for e in entries.values() for t in e["texts"]]
+            unit = printmarks.units(texts, [m for e in entries.values() for m in e["marks"]])
+            metric = None if unit is None else unit == "mm"
+            out = {}
+            for i, e in entries.items():
+                frames = [{"box": [m["x"], m["y"], m["w"], m["h"]], "text": gdt.card(m["g"], metric)["head"]}
+                          for m in e["marks"] if m.get("kind") == "gdt" and m.get("g")]
+                out[str(i)] = {"frames": frames, "ocr": list(e.get("ocr_lines") or [])}
+        return {"unit": unit, "pages": out}
 
     def pdf_find(self, query):
         return self.pdf.find(query)

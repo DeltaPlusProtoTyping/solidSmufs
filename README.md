@@ -233,6 +233,33 @@ SolidSmurfs.exe --difficulty print.pdf --out result.json     (the built app has 
 `{"error": "..."}`. From Python: `solidsmufs.difficulty.read("print.pdf")`. The fields are listed at the top of
 `solidsmufs/difficulty.py`.
 
+## Ballooning a print and its inspection report
+
+**Balloon** (the PDF toolbar, beside TP on hover) reads a print and numbers everything on it there is to inspect:
+dimensions with their tolerances, angles, chamfers, threads, surface finishes, feature control frames and the numbered
+notes. Each gets a red balloon beside it on the page and a row in the **Inspection list** on the right, with its
+limits worked out.
+
+- **Where the limits come from:** the tolerance on the callout (`±.005`, `+.005/-.000`, limits like `.2500-.2505`, a
+  tolerance or limits stacked over two lines, `MAX` and `MIN`), or, for a size with none, the title block's table by
+  the number of decimals (`.XXX ±.005`). The table read from the print shows at the top of the list: correct it there
+  and every size that uses it follows. Limits from the title block show in italics.
+- **What's left out:** reference sizes (in brackets, or marked REF), sizes marked BSC, and what's in the title block.
+  A count (`4X`, `3 PLACES`) is one balloon with that quantity.
+- **Checking it:** click a row to find its balloon (the callout it's for is outlined), drag a balloon to move it,
+  double-click it for its number, type, requirement, quantity, nominal, tolerance and limits. Delete removes it;
+  **Renumber** closes the gaps. **Add** balloons something by hand: drag a box around a callout and its text is read
+  (a reference size too, when it's asked for), or click a spot for an empty balloon. Everything is undone with Ctrl+Z.
+- **Report…** writes an Excel workbook: the list with nominal, tolerances, limits and room for results, and the same
+  characteristics as AS9102 Form 3.
+- **Saved in the PDF:** the balloons are real marks in the file, so the saved print shows and prints them in any PDF
+  reader, and the list comes back with them when the file is opened here again.
+
+It's a first pass by rules, to check against the print, not a finished inspection plan. What it doesn't do yet: tell a
+basic size by its box (it comes out as a plain size, to delete), read an ISO fit class into limits, put a balloon on
+each of a `4X`'s instances, take measured results or CMM output, or balloon a picture (print it to a PDF first). A
+scanned print is read by OCR, which misreads more: a degree sign as a 0, for one.
+
 ## Printing
 
 **Print** (Ctrl+P, File menu or the quick access toolbar) prints what's on show. A PDF or a picture prints its pages,

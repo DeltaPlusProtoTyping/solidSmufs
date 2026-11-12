@@ -16,6 +16,8 @@ import re
 import tempfile
 from pathlib import Path
 
+from .balloonops import SUBJECT as BALLOON, BalloonOps
+
 UNDO_BYTES = 400_000_000  # the most the snapshots for undo hold before the oldest go
 HIGHLIGHT = (1.0, 0.85, 0.1)
 RED = (0.86, 0.1, 0.1)
@@ -61,7 +63,7 @@ def _hex(c):
     return "#" + "".join(f"{max(0, min(255, round(x * 255))):02x}" for x in c[:3])
 
 
-class PdfEditor:
+class PdfEditor(BalloonOps):
     def __init__(self, pdf, path):
         self.pdf = pdf
         self.path = str(path)
@@ -221,8 +223,8 @@ class PdfEditor:
             pg = self.fz[i]
             for a in pg.annots():
                 kind = KINDS.get(a.type[1], "")
-                if kind in ("popup", "link", "field", ""):
-                    continue
+                if kind in ("popup", "link", "field", "") or a.info.get("subject") == BALLOON:
+                    continue  # (a balloon is the inspection list's: kernel/balloonops.py)
                 out.append({"page": i, **self._annot_info(pg, a)})
         return out
 

@@ -5,6 +5,7 @@ import { api } from './api.js';
 import { h, toast } from './ui.js';
 import { PrintHints } from './printhints.js';
 import { PdfEditor } from './pdfedit.js';
+import { Balloons } from './balloons.js';
 
 const TILE = 1536; // device pixels: large, as a word cut by a seam can differ by a pixel across it
 const PREVIEW = 900; // long side of the whole-page picture that shows until the tiles land
@@ -39,6 +40,7 @@ export class PdfView {
     this._buildBar();
     this.editor = new PdfEditor(this); // comments, pages, forms, signing, the pages' own text: Acrobat's tools
     this.hints = new PrintHints(this); // fits, inches and French on hover
+    this.balloons = new Balloons(this); // the print's inspection list, and a balloon on each thing in it
     this.scroller.addEventListener('scroll', () => { this._schedule(); this._pageNumber(); });
     this.scroller.addEventListener('wheel', (e) => this._wheel(e), { passive: false });
     this.scroller.addEventListener('pointerdown', (e) => this._down(e));
@@ -117,6 +119,7 @@ export class PdfView {
     this._buildPages();
     this.hints.open(doc);
     this.editor.open(doc);
+    this.balloons.open(doc);
     this.setMode(doc.pdfMode);
   }
 
@@ -139,6 +142,7 @@ export class PdfView {
     this.doc = null;
     this.hints?.close();
     this.editor?.close();
+    this.balloons?.close();
     this.run++;
     this.el.hidden = true;
     this.modeSwitch.hidden = true;
@@ -208,6 +212,7 @@ export class PdfView {
     this.zoomLabel.textContent = `${Math.round(z * 100)}%`;
     this._pageNumber();
     this.editor?.layout();
+    this.balloons?.layout();
   }
 
   // ================================================================== moving around

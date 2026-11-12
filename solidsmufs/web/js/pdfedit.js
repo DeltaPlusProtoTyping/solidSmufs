@@ -262,6 +262,7 @@ export class PdfEditor {
     if (r.text && !r.structure) { this.v.hints.close(); this.v.hints.open(this.doc); this.v._clearFind(); }
     await this.refresh();
     this._bar();
+    this.v.balloons?.changed(r); // the inspection list is in the PDF too: an edit or an undo may have changed it
     this.v.app?.shell?.renderDocTabs();
   }
 

@@ -787,3 +787,49 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .pe-ftick { display: flex; align-items: center; gap: 6px; }
 /* marking for redaction goes over a form's fields, not into them */
 .pv-scroll[data-tool="redact"] .pe-field, .pv-scroll[data-tool="redactText"] .pe-field { pointer-events: none; }
+
+/* ballooning a print: the balloons over the pages, and the inspection list beside them */
+.bl { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 1px solid #d11212; border-radius: 50%;
+  background: #fff; color: #d11212; font: 700 10px/1 Arial, Helvetica, sans-serif; pointer-events: auto; cursor: move; user-select: none; }
+.bl:hover { background: #fff1f1; }
+.bl.on { box-shadow: 0 0 0 2px #f08a00, 0 1px 5px rgba(0, 0, 0, .35); z-index: 3; }
+.bl-target { position: absolute; border: 1.5px dashed #f08a00; background: rgba(240, 138, 0, .12); border-radius: 2px; pointer-events: none; }
+.bl-ghost { position: absolute; border: 1.5px dashed #d11212; background: rgba(209, 18, 18, .08); }
+.pv-scroll.bl-adding, .pv-scroll.bl-adding .bl { cursor: crosshair; }
+.bl-panel { flex: none; width: 340px; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--line); color: var(--ink); font: 12.5px var(--ui); }
+.bl-panel[hidden] { display: none; }
+.bl-panel.busy { cursor: progress; }
+.bl-head { display: flex; align-items: baseline; gap: 8px; padding: 9px 10px 6px 12px; }
+.bl-head b { font-size: 13.5px; }
+.bl-count { color: var(--muted); }
+.bl-close { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; padding: 0 4px; border-radius: 4px; }
+.bl-close:hover { background: var(--btn-hover); color: var(--ink); }
+.bl-tools { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 12px 8px; }
+.bl-btn { height: 26px; padding: 0 10px; }
+.bl-btn.on { background: var(--btn-on); border-color: var(--btn-on-line); }
+.bl-opt { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px; color: var(--ink-2); }
+.bl-tols { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 7px 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel-2); }
+.bl-tl { flex-basis: 100%; color: var(--muted); font-size: 11.5px; }
+.bl-tols label { display: flex; align-items: center; gap: 4px; font: 11.5px var(--mono); color: var(--ink-2); }
+.bl-tols input { width: 46px; padding: 2px 4px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--panel); color: var(--ink); font: 11.5px var(--mono); }
+.bl-list { flex: 1; min-height: 0; overflow-y: auto; }
+.bl-list table { width: 100%; border-collapse: collapse; }
+.bl-list th { position: sticky; top: 0; z-index: 1; padding: 5px 6px; text-align: left; background: var(--panel-2); border-bottom: 1px solid var(--line); color: var(--muted); font-weight: 600; font-size: 11.5px; }
+.bl-list td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.bl-list tbody tr:hover { background: var(--btn-hover); }
+.bl-list tbody tr.on { background: var(--btn-on); }
+.bl-n { width: 30px; }
+.bl-n span { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 3px; box-sizing: border-box; border: 1.5px solid #d11212; border-radius: 10px; background: #fff; color: #d11212; font: 700 11px Arial, sans-serif; }
+.bl-text { font: 12px var(--mono); word-break: break-word; }
+.bl-kind { margin-top: 1px; color: var(--muted); font-size: 11px; }
+.bl-lim { white-space: nowrap; font: 11.5px var(--mono); color: var(--ink-2); }
+.bl-lim.def { font-style: italic; color: var(--muted); }
+.bl-x { width: 20px; }
+.bl-del { border: 0; background: transparent; color: var(--faint); font-size: 15px; line-height: 1; padding: 0 3px; border-radius: 4px; visibility: hidden; }
+.bl-list tr:hover .bl-del, .bl-list tr.on .bl-del { visibility: visible; }
+.bl-del:hover { background: #fde3e3; color: #c01818; }
+.bl-empty { padding: 22px 16px; color: var(--muted); text-align: center; line-height: 1.5; }
+.bl-foot { padding: 7px 12px 9px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.bl-link { margin-left: 6px; border: 0; background: transparent; color: var(--accent); font: inherit; padding: 0; text-decoration: underline; }
+.bl-nums { display: grid; gap: 8px; padding-top: 4px; border-top: 1px solid var(--line); }
+.bl-hint { margin: 0; color: var(--muted); font: 12px/1.45 var(--ui); }

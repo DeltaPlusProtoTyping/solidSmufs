@@ -1,6 +1,7 @@
 # Reads the text in images with the OCR engine built into Windows 10/11 (Windows.Media.Ocr).
 # Runs locally, nothing is sent anywhere. Usage: powershell -File ocr.ps1 <image> [<image> ...]
-# Prints one JSON line per image as soon as it's read: {"i": 0, "lines": [{"text", "x", "y", "w", "h"}, ...]}
+# Prints one JSON line per image as soon as it's read: {"i": 0, "angle": 0, "lines": [{"text", "x", "y", "w", "h"}, ...]}
+# ("angle": the turn in degrees Windows gave the picture before reading it; the boxes are on the turned picture)
 # (so the caller can show progress), then {"done": true, "lang": "en-US"}.
 param([Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)][string[]]$Images)
 $ErrorActionPreference = "Stop"
@@ -38,7 +39,7 @@ foreach ($image in $Images) {
         [pscustomobject]@{ text = $line.Text; x = [int]$x0; y = [int]$y0; w = [int]($x1 - $x0); h = [int]($y1 - $y0); words = $words }
     }
     $stream.Dispose()
-    [Console]::Out.WriteLine((@{ i = $i; lines = @($lines) } | ConvertTo-Json -Depth 6 -Compress))
+    [Console]::Out.WriteLine((@{ i = $i; angle = [double]$(if ($null -eq $result.TextAngle) { 0 } else { $result.TextAngle }); lines = @($lines) } | ConvertTo-Json -Depth 6 -Compress))
     [Console]::Out.Flush()
     $i++
 }
