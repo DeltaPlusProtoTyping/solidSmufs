@@ -83,7 +83,7 @@ powershell -ExecutionPolicy Bypass -File tools\register-context-menu.ps1 -Remove
 | Parasolid | `.x_t` `.x_b` `.xmt_txt` `.xmt_bin` | own reader, then OpenCASCADE |
 | Meshes | `.stl` `.obj` `.ply` `.off` `.3mf` `.glb` `.gltf` | own readers; faces split at sharp creases so flat faces and holes can be picked |
 | PDF prints | `.pdf` | PDFium (through Qt): pages, find, select, thumbnails, password-protected files; hover tips for fits, inches and French, with Windows OCR |
-| 3D PDFs and their models | `.pdf` `.prc` `.u3d` | own PRC and U3D readers (Adobe's private U3D mesh through a third-party decoder) |
+| 3D PDFs and their models | `.pdf` `.prc` `.u3d` | own PRC and U3D readers (Adobe's private U3D mesh included) |
 | DXF and DWG drawings | `.dxf` `.dwg` | own DXF reader: layers, blocks, dimensions, text; DWG through the free ODA File Converter, set up from inside the app |
 | Plotter files and SVG | `.plt` `.hpgl` `.hgl` `.svg` | own readers, as drawings with layers |
 | G-code | `.nc` `.tap` `.gcode` `.gc` `.ngc` `.cnc` `.eia` `.mpf` `.min` `.ptp` | own reader: the toolpath in 3D, a body per tool, arcs, drilling cycles, cutting time |
@@ -258,5 +258,4 @@ py -3.15 -m venv .venv
 
 The repository's Releases page has builds for Windows, macOS (Apple Silicon and Intel, 14 or newer) and Linux (x64,
 glibc 2.35 or newer) that need no Python. Pushing a `v*` tag makes them (`.github/workflows/prebuilds.yml`, using
-`tools/solidsmurfs.spec`), after `tools/check_prebuild.py` has opened a part in each. They aren't signed. They include the
-unlicensed U3D decoder (`solidsmufs/formats/u3d/vendor/README.md`).
+`tools/solidsmurfs.spec`), after `tools/check_prebuild.py` has opened a part in each. They aren't signed.

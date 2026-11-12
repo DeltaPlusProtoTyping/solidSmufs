@@ -6,8 +6,6 @@ from pathlib import Path
 ROOT = Path(SPECPATH).parent
 PKG = ROOT / "solidsmufs"
 ICONS = PKG / "web" / "img"
-# Everything in the package goes in, the U3D decoder in formats/u3d/vendor too (it has no license: see its README.md).
-
 hidden, datas = [], []
 for f in sorted(PKG.rglob("*")):
     if not f.is_file() or "__pycache__" in f.parts:

@@ -1,5 +1,5 @@
-"""Checks a build from tools/solidsmurfs.spec before it's handed out: the files the app loads at run time are in it (the U3D
-decoder, the OCR script), and the frozen app starts, shows its page and opens a real STEP part and a picture in worker processes, then prints both to a
+"""Checks a build from tools/solidsmurfs.spec before it's handed out: the files the app loads at run time are in it (the OCR
+script), and the frozen app starts, shows its page and opens a real STEP part and a picture in worker processes, then prints both to a
 PDF with no window. Run from the repository root, with gmsh
 installed: python tools/check_prebuild.py picture.png"""
 
@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 DELAY = 90  # seconds the app runs before it takes its picture and quits
-NEEDED = ("u3d-rhadobe-mesh.js", "ocr.ps1")  # read from disk when they're used, so a missing one only shows later
+NEEDED = ("ocr.ps1",)  # read from disk when they're used, so a missing one only shows later
 
 
 def fail(message):

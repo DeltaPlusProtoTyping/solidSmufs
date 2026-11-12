@@ -399,7 +399,22 @@ def adobe_mesh(name, points, triangles, encoding=3):
     return block(ADOBE, body)
 
 
-@unittest.skipUnless(rhadobe.available(), "the third-party decoder isn't installed")
+def adobe_body(counts, *parts, materials=bytes(4), name="P"):
+    """An Adobe mesh without the block around it. materials: the flags and the materials after them; one plain one if not given."""
+    return string(name) + materials + bytes(counts) + b"".join(bytes(part) for part in parts)
+
+
+def columns(*rows):
+    """Numbers as Adobe writes them when it writes them plainly: every row's first, then every row's second..."""
+    return bytes([0]) + b"".join(struct.pack(f"<{len(rows)}f", *column) for column in zip(*rows))
+
+
+# the worked example on pages 38 and 39 of Adobe's "U3D Supported Elements": the eight corners of a cube
+ADOBE_CUBE = bytes.fromhex("02 00 00 00 bf 00 00 00 3f 84 eb 0f 00 0a 07 00 4c b8 fe 5d 5d 5d"
+                           "00 00 00 bf 00 00 00 3f 84 eb 0f 00 0a 07 0d 4c b8 fe 0e 40 00"
+                           "00 00 00 bf 00 00 00 3f 84 eb 0f 00 0a 06 4c b8 fe 0e 40 0e")
+
+
 class AdobeMeshes(unittest.TestCase):
     def test_an_adobe_mesh_comes_through_like_any_other(self):
         r = u3d.read_u3d(plain_file(adobe_type(), adobe_mesh("PartResource", SQUARE, [t[1:] for t in SQUARE_FACES]),
@@ -424,6 +439,138 @@ class AdobeMeshes(unittest.TestCase):
     def test_a_triangle_off_the_end_of_the_points_is_refused(self):
         with self.assertRaises(u3d.U3dError):
             rhadobe.decode(adobe_mesh("A", SQUARE, [(0, 1, 9)])[12:])
+
+    def test_the_cube_in_adobes_own_document(self):
+        self.assertEqual(len(ADOBE_CUBE), 63)
+        body = adobe_body([0b10, 8], ADOBE_CUBE, [0], name="Cube")  # eight points and no triangles
+        mesh = rhadobe.read(body)
+        self.assertEqual(mesh.points.tolist(), [[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5],
+                                                [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5]])
+        self.assertEqual((mesh.name, mesh.used), ("Cube", len(body)))
+
+    def test_the_byte_coded_integers_in_adobes_own_document(self):
+        most = 1043332
+        for run, values in (("00 4c b8 fe 5d 5d 5d", [0, most] * 4), ("0d 4c b8 fe 0e 40 00", [0, 0, most, most, most, most, 0, 0]),
+                            ("4c b8 fe 0e 40 0e", [most] * 4 + [0] * 4)):
+            run = bytes.fromhex(run)
+            # read as the material of each of eight triangles: every list of integers in a mesh is written the same way
+            body = adobe_body([0b01, 8], [0], [10, len(run)], run, [0], materials=bytes([0x40, 2]) + bytes(6))
+            self.assertEqual(rhadobe.read(body).ids.tolist(), values)
+
+    def test_every_way_of_writing_integers_reads_the_same(self):
+        flat = [0, 1, 2, 2, 1, 3]
+        ways = {"half a byte each": bytes([2, 3, 0x10, 0x22, 0x31]),
+                "a byte each": bytes([3, 6, *flat]),
+                "two bytes each": bytes([4, 12]) + struct.pack("<6H", *flat),
+                "three bytes each": bytes([5, 18]) + b"".join(v.to_bytes(3, "little") for v in flat),
+                "four bytes each": bytes([6, 24]) + struct.pack("<6I", *flat),
+                "a size in two bytes": bytes([0x43, 6, 0, *flat]),
+                "a size in four bytes": bytes([0xC3, 6, 0, 0, 0, *flat]),
+                "RH39, a run of bytes": bytes([7, 7, 0x65, *flat]),
+                "RH39, runs of each kind": bytes([7, 10, 0x61, 0, 1, 0x70, 2, 0x51, 0x70, 1, 0x11, 0x20]),
+                "RH39, a run with two bytes of length": bytes([7, 11, 0x70, 5, 0xD0, 1, 0x65, *flat]),
+                "UIC1": bytes([10, 6, 0x0F, 0x1F, 0x2F, 0x00, 0x20, 0x3F]),
+                "UIC1, steps and the corner of the triangle before": bytes([10, 6, 0x0F, 0x11, 0x06, 0x13, 0x01, 0x03])}
+        for way, data in ways.items():
+            with self.subTest(way):
+                count = 8 if "length" in way else 2  # the long run is 18 fives: six triangles of them before the two
+                mesh = rhadobe.read(adobe_body([0b11, count, 6], columns(*SQUARE, *SQUARE[:2]), data))
+                self.assertEqual(mesh.triangles[-2:].tolist(), [[0, 1, 2], [2, 1, 3]])
+                self.assertTrue((mesh.triangles[:-2] == 5).all())
+
+    def test_integers_all_alike_take_next_to_no_room(self):
+        mesh = rhadobe.read(adobe_body([0b11, 2, 4], columns(*SQUARE), [0]))
+        self.assertEqual(mesh.triangles.tolist(), [[0, 0, 0], [0, 0, 0]])
+        mesh = rhadobe.read(adobe_body([0b11, 2, 4], columns(*SQUARE), [1], struct.pack("<I", 3)))
+        self.assertEqual(mesh.triangles.tolist(), [[3, 3, 3], [3, 3, 3]])
+
+    def test_counts_can_be_wider_than_a_byte(self):
+        counts = bytes([0b11 | 0x80]) + (1).to_bytes(3, "little") + (4).to_bytes(3, "little")
+        mesh = rhadobe.read(adobe_body(counts, columns(*SQUARE), [3, 3, 0, 1, 2]))
+        self.assertEqual((len(mesh.points), mesh.triangles.tolist()), (4, [[0, 1, 2]]))
+
+    def test_points_as_steps_between_two_ends(self):
+        x = struct.pack("<ffI", 0, 10, 4) + bytes([3, 4, 0, 1, 2, 4])
+        y = struct.pack("<ff", 7, 7)  # both ends the same: nothing more is written
+        z = struct.pack("<ffI", -1, 1, 2) + bytes([3, 4, 0, 1, 2, 1])
+        mesh = rhadobe.read(adobe_body([0b10, 4], [2], x, y, z, [0]))
+        self.assertEqual(mesh.points.tolist(), [[0, 7, -1], [2.5, 7, 0], [5, 7, 1], [10, 7, 0]])
+
+    def test_normals_as_two_angles(self):
+        # in quarter turns: how far round each is, then how far down from the pole each is
+        angles = bytes([3]) + struct.pack("<I", 4) + bytes([3, 8, 0, 0, 1, 0, 0, 1, 1, 2])
+        mesh = rhadobe.read(adobe_body([0b111, 1, 3, 4], columns(*SQUARE[:3]), angles, [3, 3, 0, 1, 2], [3, 3, 3, 1, 0]))
+        np.testing.assert_allclose(mesh.normals, [[0, 0, 1], [1, 0, 0], [0, 1, 0], [0, 0, -1]], atol=1e-6)
+        self.assertEqual(mesh.normal_faces.tolist(), [[3, 1, 0]])
+
+    def coloured(self):
+        """Three triangles, each of its own material: a plain one, one with diffuse colours, one with specular."""
+        materials = bytes([0x40, 3]) + bytes([0, 0, 0]) + bytes([0x40, 1, 5]) + bytes([0x81, 2, 9, 0b10])
+        return adobe_body([0b001011, 3, 4, 2], columns(*SQUARE), columns((1, 0, 0, 1), (0, 0, 1, 0.5)), [3, 3, 2, 0, 1],
+                          [3, 9, 0, 1, 2, 0, 2, 3, 1, 2, 3], [3, 3, 0, 1, 0], [3, 3, 2, 2, 2], materials=materials)
+
+    def test_several_materials_each_with_its_own_triangles(self):
+        _name, _points, triangles, ids, materials = rhadobe.decode(self.coloured())
+        self.assertEqual(triangles.tolist(), [[0, 1, 2], [0, 2, 3], [1, 2, 3]])
+        self.assertEqual(ids.tolist(), [2, 0, 1])
+        self.assertEqual(materials, [(False, False, 0), (True, False, 1), (False, True, 2)])
+        mesh = rhadobe.read(self.coloured())
+        self.assertEqual(mesh.diffuse.tolist(), [[1, 0, 0, 1], [0, 0, 1, 0.5]])
+        self.assertEqual(mesh.diffuse_faces.tolist(), [[0, 1, 0]])  # only the triangle whose material has such colours
+        self.assertEqual(mesh.specular_faces.tolist(), [[2, 2, 2]])
+        self.assertEqual((mesh.materials[2].shading, mesh.materials[2].dims), (9, bytes([1, 2])))
+
+    def test_texture_coordinates_have_corners_for_every_layer(self):
+        uv = columns((0, 0, 0, 0), (1, 0, 0, 0), (1, 1, 0, 0))
+        body = adobe_body([0b100011, 1, 3, 3], columns(*SQUARE[:3]), uv, [3, 3, 0, 1, 2], [3, 3, 0, 1, 2], [3, 3, 2, 1, 0],
+                          materials=bytes([0, 0x01, 2, 0, 0b01]))  # one material with two layers
+        mesh = rhadobe.read(body)
+        self.assertEqual(mesh.texcoords.tolist(), [[0, 0, 0, 0], [1, 0, 0, 0], [1, 1, 0, 0]])
+        self.assertEqual([layer.tolist() for layer in mesh.texcoord_faces], [[[0, 1, 2]], [[2, 1, 0]]])
+
+    def test_a_skeleton_after_the_mesh_is_left_unread(self):
+        body = adobe_body([0b11, 1, 4], columns(*SQUARE), [3, 3, 0, 1, 2], materials=bytes([0x20, 0, 0, 0]))
+        mesh = rhadobe.read(body + b"bones")
+        self.assertTrue(mesh.skeleton)
+        self.assertEqual(mesh.used, len(body))
+
+    def test_a_mesh_cut_short_anywhere_is_refused(self):
+        body = self.coloured()
+        for size in range(len(body)):
+            with self.assertRaises(u3d.U3dError):
+                rhadobe.read(body[:size])
+
+    def test_what_makes_no_sense_is_refused(self):
+        square, corners = columns(*SQUARE), [3, 3, 0, 1, 2]
+        cases = {"a later version": adobe_body([0b11, 1, 4], square, corners, materials=bytes([1, 0, 0, 0])),
+                 "a mesh in sub-chunks": adobe_body([0b11, 1, 4], square, corners, materials=bytes([0x10, 0, 0, 0])),
+                 "a way of writing numbers there isn't": adobe_body([0b11, 1, 4], [1], bytes(48), corners),
+                 "a way of writing integers there isn't": adobe_body([0b11, 1, 4], square, [11, 3, 0, 1, 2]),
+                 "a UIC1 command there isn't": adobe_body([0b11, 1, 4], square, [10, 3, 0x02, 0x02, 0x02]),
+                 "an RH39 run longer than what's left": adobe_body([0b11, 1, 4], square, [7, 5, 0x63, 0, 1, 2, 3]),
+                 "a size that runs past the end": adobe_body([0b11, 1, 4], square, [3, 200, 0, 1, 2]),
+                 "more points than there can be": adobe_body([0xC2], struct.pack("<I", (1 << 24) + 1), [0], bytes(64))}
+        for what, body in cases.items():
+            with self.subTest(what), self.assertRaises(u3d.U3dError):
+                rhadobe.read(body)
+
+    def test_arithmetic_coded_integers_are_refused_by_name(self):
+        for encoding in (8, 9):
+            with self.assertRaises(u3d.U3dError) as caught:
+                rhadobe.decode(adobe_mesh("A", SQUARE, [(0, 1, 2)], encoding=encoding)[12:])
+            self.assertIn("Adobe", str(caught.exception))
+            self.assertIn(str(encoding), str(caught.exception))
+
+    def test_a_few_bytes_cant_ask_for_more_than_theres_room_for(self):
+        body = adobe_body([0b11, 2, 4], columns(*SQUARE), [0])  # 12 numbers in the points, 6 in the triangles
+        room, rhadobe.ROOM = rhadobe.ROOM, 17
+        try:
+            with self.assertRaises(u3d.U3dError):
+                rhadobe.read(body)
+            rhadobe.ROOM = 18
+            self.assertEqual(len(rhadobe.read(body).triangles), 2)
+        finally:
+            rhadobe.ROOM = room
 
 
 class InAPdf(unittest.TestCase):

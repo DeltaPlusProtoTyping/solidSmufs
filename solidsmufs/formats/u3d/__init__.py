@@ -80,7 +80,7 @@ class U3d:
         self.materials = {}  # name: (r, g, b) diffuse
         self.skipped = {}  # what's in the file that isn't triangles, by kind: how many
         self.damaged = 0  # meshes that could only be read part of the way
-        self.adobe = 0  # meshes in Adobe's own format, read by the third-party decoder
+        self.adobe = 0  # meshes in Adobe's own format (rhadobe.py)
 
 
 # ---------------------------------------------------------------------------------------------- in the PDF
