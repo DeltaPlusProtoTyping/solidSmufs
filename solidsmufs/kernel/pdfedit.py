@@ -63,6 +63,13 @@ def _hex(c):
     return "#" + "".join(f"{max(0, min(255, round(x * 255))):02x}" for x in c[:3])
 
 
+STRIKE = "Strike through"  # the subject of a strike-through mark from the Redact tools
+
+
+def _is_strike(a):
+    return a.type[1] == "StrikeOut" and a.info.get("subject") == STRIKE
+
+
 class PdfEditor(BalloonOps):
     def __init__(self, pdf, path):
         self.pdf = pdf
@@ -252,6 +259,10 @@ class PdfEditor(BalloonOps):
         fill = _color(o.get("fill"))
         width = float(o.get("width", 1.5))
         rot = pg.rotation
+        if kind == "strike":  # a single line through the words, which stay readable: Apply makes it part of the page
+            kind = "strikeout"
+            color = color or (0, 0, 0)
+            o["subject"] = STRIKE
         if kind in ("highlight", "underline", "strikeout", "squiggly"):
             quads = [self._in(pg, r).quad for r in o["rects"]]
             if not quads:
@@ -1040,12 +1051,28 @@ class PdfEditor(BalloonOps):
     def op_redact_apply(self, fill="black"):
         """Take everything under the redaction marks out of the pages for good: words, the parts of pictures,
         and drawing they cover, and form fields the marks touch (with what's filled into them). The marks become
-        black boxes, or white ones (fill "white": blank paper, for a print that shouldn't show what was hidden)."""
+        black boxes, or white ones (fill "white": blank paper, for a print that shouldn't show what was hidden).
+        Strike-through marks become lines drawn into the page, the words under them left as they are."""
         import pymupdf
+        strikes = [i for i in range(self.fz.page_count) if any(_is_strike(a) for a in self.fz[i].annots())]
         pages = [i for i in range(self.fz.page_count) if any(a.type[1] == "Redact" for a in self.fz[i].annots())]
-        if not pages:
-            raise ValueError("Mark something to redact first.")
+        if not pages and not strikes:
+            raise ValueError("Mark something to redact or strike through first.")
         self._snapshot()
+        for i in strikes:
+            pg = self.fz[i]
+            marks = [a for a in pg.annots() if _is_strike(a)]
+            lines = []
+            for a in marks:
+                v = [pymupdf.Point(p) for p in (a.vertices or [])]
+                stroke = (a.colors or {}).get("stroke") or (0, 0, 0)
+                for k in range(0, len(v) - 3, 4):  # each quad: upper left, upper right, lower left, lower right
+                    ul, ur, ll, lr = v[k:k + 4]
+                    lines.append(((ul + ll) / 2, (ur + lr) / 2, max(0.5, abs(ll - ul) * 0.07), stroke))
+            for a in marks:
+                pg.delete_annot(a)
+            for a, b, width, stroke in lines:
+                pg.draw_line(a, b, color=stroke, width=width, lineCap=0)
         color = (1, 1, 1) if fill == "white" else (0, 0, 0)
         for i in pages:
             pg = self.fz[i]
@@ -1060,7 +1087,7 @@ class PdfEditor(BalloonOps):
             self.fz[i].apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_PIXELS,
                                         graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED,
                                         text=pymupdf.PDF_REDACT_TEXT_REMOVE)
-        return self._answer(None, text=True, result={"pages": len(pages)})
+        return self._answer(None, text=True, result={"pages": len(set(pages) | set(strikes)), "struck": len(strikes)})
 
     def op_scrub(self):
         """Remove hidden information: the document's details, attached files, scripts, hidden text and comments."""

@@ -274,6 +274,32 @@ class Editing(unittest.TestCase):
         self.assertIn("SECRET", d[0].get_text())
         self.assertGreater(self.ink_at(0, hits[0]["rects"][0][0] + 5, hits[0]["rects"][0][1] + 3), 200)  # a black box
 
+    def test_strike_through_leaves_the_words(self):
+        e = self.ed
+        word = self.pdf.find("SECRET")[0]["rects"]
+        gone = self.pdf.find("555-1234")[0]["rects"]
+        e.run("annot_add", {"page": 0, "kind": "strike", "rects": word})
+        marks = e.run("annots", {})
+        self.assertEqual([(a["kind"], a["subject"]) for a in marks], [("strikeout", "Strike through")])
+        e.run("annot_add", {"page": 0, "kind": "redact", "rects": gone})
+        e.run("redact_apply", {})
+        d = self.reopen()
+        self.assertIn("SECRET", d[0].get_text())  # struck, still there and readable
+        self.assertNotIn("555-1234", d[0].get_text())
+        self.assertEqual(list(d[0].annots()), [])
+        x, y, w, h = word[0]
+        lines = [p for p in d[0].get_drawings() if any(it[0] == "l" for it in p["items"])]
+        self.assertTrue(any(abs(p["rect"].y0 - (y + h / 2)) < 2 and p["rect"].x0 <= x + 1 and p["rect"].x1 >= x + w - 1 for p in lines))
+        self.assertEqual(e.run("annots", {}), [])
+
+    def test_strike_through_on_its_own(self):
+        e = self.ed
+        e.run("annot_add", {"page": 0, "kind": "strike", "rects": self.pdf.find("SECRET")[0]["rects"]})
+        self.assertEqual(e.run("redact_apply", {})["result"]["struck"], 1)
+        self.assertIn("SECRET", self.reopen()[0].get_text())
+        with self.assertRaises(ValueError):
+            e.run("redact_apply", {})
+
     # ------------------------------------------------------------------ undo and saving
     def test_undo_redo_and_save_as(self):
         e = self.ed

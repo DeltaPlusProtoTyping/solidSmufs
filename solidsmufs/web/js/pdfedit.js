@@ -65,7 +65,7 @@ const SETS = [
   { id: 'form', label: 'Prepare Form', tools: ['select', 'formAuto', '|', 'fText', 'fMulti', 'fCheck', 'fCombo', '|', 'fProps', 'fDelete', 'formClear'] },
   { id: 'edit', label: 'Edit', tools: ['select', 'editText', 'addText', 'editImage', 'addImage'] },
   { id: 'pages', label: 'Pages', tools: [] },
-  { id: 'redact', label: 'Redact', tools: ['select', 'redactText', 'redact', 'redactFind', '|', 'redactApply', 'scrub'] },
+  { id: 'redact', label: 'Redact', tools: ['select', 'redactText', 'redact', 'redactFind', 'strikeText', '|', 'redactApply', 'scrub'] },
 ];
 const TOOLS = {
   select: { label: 'Select', tip: 'Drag across text to select it (Ctrl+C copies). Click a comment to select it: drag it to move it, its handles to size it, double-click to edit it. Drag bare paper to pan.' },
@@ -106,7 +106,8 @@ const TOOLS = {
   redactText: { label: 'Mark text', tip: 'Drag across text to mark it for redaction' },
   redact: { label: 'Mark area', tip: 'Drag a box to mark it for redaction' },
   redactFind: { label: 'Mark found', tip: 'Mark every place the Find box finds', action: true, icon: 'redactText' },
-  redactApply: { label: 'Apply', tip: 'Take everything marked out of the pages for good', action: true, text: true },
+  strikeText: { label: 'Strike through', tip: 'Drag across text to put a single line through it (the words stay readable)', icon: 'strikeout' },
+  redactApply: { label: 'Apply', tip: 'Take everything marked out of the pages for good, and make strike-throughs part of the page', action: true, text: true },
   scrub: { label: 'Remove hidden info', tip: "Take out the document's details, attachments, scripts, hidden text and comments", action: true, text: true },
 };
 // tools that place one thing, then hand back to Select (the rest stay on, for marking up a run of things)
@@ -553,10 +554,11 @@ export class PdfEditor {
       if (f) { this.run('annot_add', { page: p.i, kind: 'redact', rects: [f.rect] }); return true; }
     }
     if (FIELD_TOOLS[tool]) { this._fieldDrag(e, p, pt); return true; }
-    if (t.markup || tool === 'redactText') {
+    if (t.markup || tool === 'redactText' || tool === 'strikeText') {
       this.v._selectDrag(p, e, async (s) => {
         if (!s?.rects?.length || s.page !== p.i) return;
         if (tool === 'redactText') await this.run('annot_add', { page: p.i, kind: 'redact', rects: s.rects });
+        else if (tool === 'strikeText') await this.run('annot_add', { page: p.i, kind: 'strike', rects: s.rects, text: s.text });
         else await this.run('annot_add', { page: p.i, kind: tool, rects: s.rects, text: s.text, color: this.style.colors[tool], opacity: this.style.opacity });
         this.v.selection = null;
         this.v._showSelection();
@@ -1467,10 +1469,15 @@ export class PdfEditor {
 
   async _redactApply() {
     const n = this.annots.filter((a) => a.kind === 'redact').length;
-    if (!n) { toast('Mark something to redact first: Mark text, Mark area or Mark found.', 'info'); return; }
-    if (!await this._confirm('Apply redactions', `Take everything under the ${n} mark${n === 1 ? '' : 's'} out of the pages for good: words, the parts of pictures and drawing they cover, and form fields with what's filled into them. It can't be got back from the saved file.`, 'Apply')) return;
-    const r = await this.run('redact_apply', { fill: load('pe:redact', 'black') }, 'Redacting…');
-    if (r) toast('Redacted. Save to keep it (Save As keeps the original as it was).');
+    const k = this.annots.filter((a) => a.kind === 'strikeout' && a.subject === 'Strike through').length;
+    if (!n && !k) { toast('Mark something first: Mark text, Mark area, Mark found or Strike through.', 'info'); return; }
+    const s = (x) => (x === 1 ? '' : 's');
+    const says = [n ? `Take everything under the ${n} redaction mark${s(n)} out of the pages for good: words, the parts of pictures and drawing they cover, and form fields with what's filled into them.` : '',
+      k ? `Make the ${k} strike-through${s(k)} part of the page${n ? ` (the words under ${k === 1 ? 'it' : 'them'} stay)` : `, the words under ${k === 1 ? 'it' : 'them'} left readable`}.` : '',
+      "It can't be undone in the saved file."].filter(Boolean).join(' ');
+    if (!await this._confirm(n ? 'Apply redactions' : 'Apply strike-throughs', says, 'Apply')) return;
+    const r = await this.run('redact_apply', { fill: load('pe:redact', 'black') }, n ? 'Redacting…' : 'Applying…');
+    if (r) toast(`${n ? 'Redacted' : 'Struck through'}. Save to keep it (Save As keeps the original as it was).`);
   }
 
   async _scrub() {

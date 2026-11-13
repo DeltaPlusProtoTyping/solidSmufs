@@ -403,7 +403,8 @@ readers show it, and comments stay comments they can change.
 - **Redact:** mark words, areas, or everything the Find box finds, then **Apply**: what's under the marks is taken out
   of the file for good (words, the covered parts of pictures and drawing, and form fields with what's filled into
   them: click a field with Mark text to mark all of it). **Fill** chooses what's left behind: black, or white for
-  blank paper. **Remove hidden info** takes out the
+  blank paper. **Strike through** puts a single line through words that should stay readable (a superseded
+  note, an old revision); **Apply** draws it into the page too. **Remove hidden info** takes out the
   document's details, attachments, scripts and hidden text.
 
 It works as Acrobat does, with some of the rough edges taken off:
