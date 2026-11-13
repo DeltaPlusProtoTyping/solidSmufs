@@ -16,7 +16,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from .balloonops import SUBJECT as BALLOON, BalloonOps
+from .balloonops import SUBJECT as BALLOON, VIEW as BALLOON_VIEW, BalloonOps
 
 UNDO_BYTES = 400_000_000  # the most the snapshots for undo hold before the oldest go
 HIGHLIGHT = (1.0, 0.85, 0.1)
@@ -223,8 +223,8 @@ class PdfEditor(BalloonOps):
             pg = self.fz[i]
             for a in pg.annots():
                 kind = KINDS.get(a.type[1], "")
-                if kind in ("popup", "link", "field", "") or a.info.get("subject") == BALLOON:
-                    continue  # (a balloon is the inspection list's: kernel/balloonops.py)
+                if kind in ("popup", "link", "field", "") or a.info.get("subject") in (BALLOON, BALLOON_VIEW):
+                    continue  # (a balloon, or a view's mark, is the inspection list's: kernel/balloonops.py)
                 out.append({"page": i, **self._annot_info(pg, a)})
         return out
 
@@ -576,7 +576,7 @@ class PdfEditor(BalloonOps):
         if order == list(range(self.fz.page_count)):
             return self._answer([])
         self._snapshot()
-        self.fz.select(order)
+        self._select(order)
         return self._answer(None, structure=True)
 
     def op_pages_move(self, pages, to):
@@ -587,14 +587,13 @@ class PdfEditor(BalloonOps):
         return self.op_pages_order(rest[:at] + pages + rest[at:])
 
     def op_pages_duplicate(self, pages):
+        """A copy of each page right after it: a page of its own, its comments its own (a page put in twice by
+        select() would be one page shown twice, and a comment changed on either changed on both)."""
         pages = self._pages_list(pages)
-        order = []
-        for i in range(self.fz.page_count):
-            order.append(i)
-            if i in pages:
-                order.append(i)
         self._snapshot()
-        self.fz.select(order)
+        for i in sorted(set(pages), reverse=True):
+            self.fz.fullcopy_page(i, i + 1 if i + 1 < self.fz.page_count else -1)  # (-1: after the last)
+        self._balloon_tidy()  # (the copies' balloons aren't in the list: they go)
         return self._answer(None, structure=True)
 
     def op_pages_blank(self, at, w=None, h=None):
@@ -631,6 +630,7 @@ class PdfEditor(BalloonOps):
             self.fz.insert_pdf(src, start_at=at + added)
             added += src.page_count
             src.close()
+        self._balloon_tidy(range(at, at + added))  # (another print's balloons aren't this one's)
         return self._answer(None, structure=True, result={"added": added})
 
     def op_pages_replace(self, pages, path):
@@ -644,6 +644,7 @@ class PdfEditor(BalloonOps):
             self.fz.insert_pdf(src, from_page=k, to_page=k, start_at=i)
             self.fz.delete_page(i + 1)
         src.close()
+        self._balloon_tidy(pages[:n])
         return self._answer(None, structure=True, result={"replaced": n})
 
     def _write_pages(self, pages, path):
@@ -871,9 +872,15 @@ class PdfEditor(BalloonOps):
         return self._answer(sorted(changed))
 
     def op_flatten(self, annots=True, fields=True):
-        """Make comments and filled-in fields part of the pages, so nobody can change them."""
+        """Make comments and filled-in fields part of the pages, so nobody can change them. Balloons stay balloons:
+        made part of the pages they'd be read as the print's own text, and drawn again over themselves."""
         self._snapshot()
+        keep = self._insp() if annots else None
+        if keep and (keep["chars"] or keep["views"]):
+            self._balloon_strip()
         self.fz.bake(annots=bool(annots), widgets=bool(fields))
+        if keep and (keep["chars"] or keep["views"]):
+            self._balloon_sync(keep, range(self.fz.page_count))
         return self._answer(None, text=True)
 
     # ================================================================== the pages' own text and pictures

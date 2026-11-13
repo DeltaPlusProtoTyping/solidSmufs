@@ -273,8 +273,8 @@ class Session:
             raise ValueError("Only a PDF can be edited. (A picture can be printed to a PDF, then edited.)")
         if getattr(self, "editor", None) is None or self.editor.pdf is not self.pdf:
             self.editor = PdfEditor(self.pdf, self.path)
-        if op in ("balloon_auto", "balloon_add"):  # ballooning reads the print the way hovering does
-            args = {**(args or {}), "extra": self._balloon_extra(wait=op == "balloon_auto")}
+        if op in ("balloon_auto", "balloon_add", "balloon_carry"):  # ballooning reads the print the way hovering does
+            args = {**(args or {}), "extra": self._balloon_extra(wait=op != "balloon_add")}
         out = self.editor.run(op, args or {})
         if isinstance(out, dict) and (out.get("structure") or out.get("changed") is None) and "state" in out:
             self._marks = {}  # hover marks belong to the pages they were read from

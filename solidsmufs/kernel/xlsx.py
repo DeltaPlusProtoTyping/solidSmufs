@@ -3,7 +3,8 @@ merged cells, cells colored by a rule, and how the sheet prints.
 
 write(path, [{"name": "Sheet", "rows": [[cell, ...], ...], "widths": [12, 30, ...], "freeze": 4}, ...])
 A cell is None, a number, a string, {"f": "SUM(A1:A3)"} (a formula, worked out when Excel opens the workbook), or
-(value, look) with look one of "title", "head", "box", "num3", "num4", "label", "center", "status".
+(value, look) with look one of "title", "head", "box", "num3", "num4", "label", "center", "status", "c3", "c4" (a
+number centered, to three or four places).
 A sheet may also have:
   "freeze": rows kept in view at the top
   "merge": ["A1:D1", ...]
@@ -16,7 +17,7 @@ A sheet may also have:
 import zipfile
 from xml.sax.saxutils import escape
 
-LOOKS = {None: 0, "title": 1, "head": 2, "box": 3, "label": 4, "num3": 5, "num4": 6, "center": 7, "status": 8}
+LOOKS = {None: 0, "title": 1, "head": 2, "box": 3, "label": 4, "num3": 5, "num4": 6, "center": 7, "status": 8, "c3": 9, "c4": 10}
 COLORS = {"bad": 0, "good": 1}
 
 _STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -26,7 +27,7 @@ _STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDCE6F1"/><bgColor indexed="64"/></patternFill></fill></fills>
 <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="9">
+<cellXfs count="11">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
 <xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
@@ -36,6 +37,8 @@ _STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="top"/></xf>
 <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top"/></xf>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top"/></xf>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top"/></xf>
 </cellXfs>
 <dxfs count="2">
 <dxf><font><color rgb="FF9C0006"/></font><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>

@@ -278,7 +278,9 @@ class _Handler(BaseHTTPRequestHandler):
             if parts == ["dialog", "open-files"] and method == "POST":  # files to insert into a PDF, or pictures to place
                 b = self._jbody()
                 filters = {"pdf": "PDFs and pictures (*.pdf *.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif);;All files (*)",
-                           "image": "Pictures (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff);;All files (*)"}
+                           "image": "Pictures (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff);;All files (*)",
+                           "results": "Results (*.csv *.txt *.tsv *.xlsx *.dat);;All files (*)",
+                           "pdfonly": "PDFs (*.pdf);;All files (*)"}
                 paths = self.ctx.native.open_files(b.get("title", "Choose files"), filters.get(b.get("kind"), filters["pdf"]))
                 out = []
                 for path in paths or []:

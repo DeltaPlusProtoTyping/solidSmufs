@@ -466,7 +466,7 @@ export class PdfEditor {
     }
     if (ctrl && lk === 'v' && this.clip?.doc === this.doc.id) { this._clone(this.clip.page, this.clip.id, this.v.current || 0); return done(); }
     if (ctrl && lk === 'd' && comment) { this._clone(comment.page, comment.id, comment.page); return done(); }
-    if (!ctrl && !e.altKey && e.key.length === 1 && KEYS[lk]) {
+    if (!ctrl && !e.altKey && e.key.length === 1 && KEYS[lk] && !this.v.balloons?.on) { // (in Ballooning mode this toolbar is put away)
       if (this.set !== 'comment') { this.set = 'comment'; keep('pe:set', 'comment'); }
       if (KEYS[lk] === 'select') this.setTool('select'); else this._pick(KEYS[lk]);
       return done();
@@ -1451,7 +1451,7 @@ export class PdfEditor {
   }
 
   async _flatten() {
-    if (!await this._confirm('Flatten', 'Make every comment, signature and filled-in field part of the pages? Nobody will be able to change or remove them after this (until you undo).', 'Flatten')) return;
+    if (!await this._confirm('Flatten', 'Make every comment, signature and filled-in field part of the pages? Nobody will be able to change or remove them after this (until you undo). Balloons on a print stay balloons.', 'Flatten')) return;
     await this.run('flatten', {}, 'Flattening…');
   }
 

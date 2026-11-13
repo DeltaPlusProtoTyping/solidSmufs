@@ -235,50 +235,119 @@ SolidSmurfs.exe --difficulty print.pdf --out result.json     (the built app has 
 
 ## Ballooning a print and its inspection report
 
-**Balloon** (the PDF toolbar, beside TP on hover) reads a print and numbers everything on it there is to inspect:
-dimensions with their tolerances, angles, chamfers, threads, surface finishes, feature control frames and the numbered
-notes. Each gets a red balloon beside it on the page and a row in the **Inspection list** on the right, with its
-limits worked out.
+**Balloon** (the PDF toolbar, beside TP on hover) turns the PDF view into **Ballooning mode**, and back. Nothing else
+of the app changes. In the mode, the PDF editor's toolbar gives way to the mode's own (Auto Balloon, Add, Sub-balloon,
+Edit, Delete, Renumber, Multiply, Report, with Undo, Redo and Save), and the **Bill of Characteristics** is docked under the
+pages. **Exit Ballooning** puts the view back as it was; the balloons stay on the print.
+
+**Auto Balloon** reads the print and numbers everything on it there is to inspect: dimensions with their tolerances,
+angles, chamfers, threads, surface finishes, feature control frames and the numbered notes. Each gets a red balloon
+beside it, its callout is marked on the print (orange, then green once reviewed), and it gets a row in the list.
+It asks first what to read, and remembers the answers:
+
+- **Pages:** the current page, all of them, or the ones you name (`1, 3-5`). The balloons on the pages it doesn't read
+  stay as they are, and the numbers then run through the sheets in order.
+- **Do not balloon Basic / Reference / General Tolerance dimensions:** each left unticked is ballooned. A Reference size
+  (in brackets, or with REF or STOCK beside or beneath it) and a Basic one (BSC, or drawn in a box of its own) have no
+  limits and say so under Tol Type. A General Tolerance size is one with no tolerance of its own.
+- **Surface finish detection**, **Numbered notes**, **Ignore title block.**
+- **Flag note detection:** a note's number drawn in a triangle or flag by a feature is ballooned there as "Flag note
+  2", with the note's words when the sheet has that numbered note. A number in a box is a basic size, not a flag.
+- **Split sub-characteristics:** one callout's several characteristics share a number as 2.1, 2.2: what's written on
+  one line (a counterbore's diameter and depth), or stacked right under one another (a size over its feature control
+  frame).
+
+- **The Bill of Characteristics:** a row for each balloon: Reviewed, Dim #, Dwg. Zone (the sheet and the border's zone,
+  `S1-B4`), Type (Linear, Diameter, Radius, Angular, Thread…), Requirement, Mult, Nominal, Upper and Lower Tol, Lower
+  and Upper Limit, Tol Type (General when it comes from the title block, Reference, Basic), Description, Gage and Note.
+  - Click a row to find its balloon. The arrow keys move through the list, and Space ticks Reviewed.
+  - Double-click a cell (or press Enter) to type into it in place. Enter goes on to the cell below, Tab to the next one
+    along, Esc leaves it as it was.
+  - The box in the Reviewed heading ticks every row shown. **Show** narrows the list to what's not reviewed, reviewed,
+    or still without limits.
+  - Right-click a row for Edit, Add sub-balloon, Mark as reviewed and Delete. Drag the list's top edge to resize it.
 
 - **Where a balloon goes:** the nearest spot beside its callout that is clear of text, of other balloons, of the
   drawing's lines (part edges, dimension and leader lines) and of its pictures. On a crowded callout it takes the
   least bad spot, to drag where you want it.
 - **Where the limits come from:** the tolerance on the callout (`±.005`, `+.005/-.000`, limits like `.2500-.2505`, a
   tolerance or limits stacked over two lines, `MAX` and `MIN`), or, for a size with none, the title block's table by
-  the number of decimals (`.XXX ±.005`), or its one tolerance for every size (`Tolerances: ±.5mm unless noted`). The table read from the print shows at the top of the list: correct it there
-  and every size that uses it follows. Limits from the title block show in italics.
-- **What's left out:** reference sizes (in brackets, or marked REF), sizes marked BSC, a size only told in a sentence,
-  the zone numbers and letters around the border, and what's in the title block.
-  A count (`4X`, `3 PLACES`) is one balloon with that quantity.
-- **Checking it:** click a row to find its balloon (the callout it's for is outlined), drag a balloon to move it,
-  double-click it for its number, type, requirement, quantity, nominal, tolerance and limits. Delete removes it;
-  **Renumber** closes the gaps. **Add** balloons something by hand: drag a box around a callout and its text is read
-  (a reference size too, when it's asked for), or click a spot for an empty balloon. Everything is undone with Ctrl+Z.
-- **Sub-numbers:** one callout with several things to check gets one number and sub-numbers: 2.1, 2.2, 2.3. In a
-  balloon's dialog, **Add sub-balloon** puts a new one under its number, and typing `2.2` as another balloon's number
+  the number of decimals (`.XXX ±.005`), or its one tolerance for every size (`Tolerances: ±.5mm unless noted`). The table read from the print shows above the list as **General tolerance**:
+  correct it there and every size that uses it follows. Limits from the title block show in italics.
+- **What's left out:** a size only told in a sentence, the zone numbers and letters around the border, a second
+  value in square brackets, and what's in the title block.
+  A count (`4X`, `3 PLACES`) is one balloon with that quantity (see Multiply).
+- **On the print:** drag a balloon to move it; double-click it (or **Edit…**) for all of its details in one dialog.
+  A changed nominal, tolerance, limits or count is written into the requirement too (`5.000 ±.005` becomes
+  `5.000 ±.010`), in the print's own style, unless the requirement itself is typed.
+- **Pages:** the balloons and views go with their pages when pages are moved, and go when their page is deleted. A
+  copied page gets no balloons of its own, and nor do pages brought in from another file (another print's balloons
+  aren't this one's).
+  Delete removes it; **Renumber** closes the gaps. **Add** balloons something by hand: drag a box around a callout and its text is read
+  or click a spot for an empty balloon. Everything is undone with Ctrl+Z.
+- **Sub-numbers:** one callout with several things to check gets one number and sub-numbers: 2.1, 2.2, 2.3.
+  **Sub-balloon** puts a new one under the selected balloon's number, and typing `2.2` as another balloon's Dim #
   moves it to be the second under 2. A plain number takes it out again. Renumber keeps them together.
+- **Views:** **Views ▾ → Add view** and drag a box round one of the drawing's views. Its balloons are drawn in its
+  color (on the print and in the saved PDF); click its name tag to rename it, change its color, give it a start
+  number or delete it. **Renumber ▾** numbers the balloons in list order, by rows (across the sheet), by columns (down
+  it) or clockwise round from twelve o'clock; with views, view by view in their order, each from its start number.
+- **A new revision:** open the new revision's PDF, then **Auto Balloon ▾ → Carry over from the last revision…** and
+  choose the last revision's ballooned PDF. This print is read again, and each characteristic found that the last
+  revision had keeps its balloon number, description, gage and note: the same, or changed (its note says what it was,
+  and it's left unreviewed). New ones are numbered after the last revision's highest; the numbers of those that are
+  gone are left out (Renumber closes the gaps). A summary lists what changed, what's new and what's gone.
+- **Results:** the dock's second tab. **+ Add part** adds a column for a part to inspect; double-click its heading
+  to give it its serial number, right-click it to delete it. Type each measurement in, or P or F (Pass, Fail) for
+  what isn't measured: Enter goes on down the part's column and on to the next part at its foot, Tab along the row,
+  and the balloon being measured comes into view on the print. A result inside its limits is green, outside them
+  red, and each row says Pass, Fail, or how many parts are still to measure. The parts and their results are kept
+  with the balloons in the PDF; **New lot…** takes them out to inspect another lot. Reading the print again with Auto
+  Balloon drops the results measured against the balloons it replaces.
+  - **Sampling…** says which parts of a lot to inspect: every part, the first and last, the first, middle and last,
+    1 in N (and the last), or a percentage spread through the lot. A part is added for each, named by its place in
+    the lot (#1, #6, #11...), and the inspection sheet's Inspection Frequency says how they were chosen.
+  - **Import…** reads results from a CMM's or a gage's export, or a spreadsheet: CSV, tab or semicolon separated text,
+    or an Excel workbook (.xlsx). It guesses which column has the balloon numbers (5, #5, DIM 5, Char 2.1 all name
+    balloon 5 or 2.1) and which have the measurements, and shows the file to check that before importing. A column
+    for each part, or a row for each measurement with the part's serial number in a column, are both understood; a
+    single measured column can go into a part already in the list. Rows naming no balloon here are listed. A gage
+    that types into the computer (a USB or foot-switch gage) goes straight into the cell being typed into.
+  - From two parts on, each row shows its **Mean**, **Range** and **Cpk** (green from 1.33), with the count, min,
+    max, standard deviation and Cp on hover. The first article workbook gets a **Statistics** sheet that works them
+    out from the measurements on its Inspection sheet, so it follows what's typed there.
+- **Multiply:** a characteristic that applies in several places (`4X`, a count under Mult) is one balloon and one
+  row. **Multiply** makes it a row for each place, 3.1 to 3.4, in the list and in the report, so each one is
+  inspected; it stays one balloon, and the rows all say the same. **Detach** makes each place a balloon of its own,
+  put around the callout to drag to its own feature, with its own description, gage and note. **Reset** puts a
+  multiplied one back to one row. Each is for the selected balloon or for all of them.
 - **Report…** writes an Excel workbook. It asks for the job first (part number and name, revision, customer, job
-  number, inspection frequency, how many parts), which is kept with the balloons in the PDF. Two layouts:
+  number, inspection frequency, drawing number and revision, P.O. number, organization and supplier code, how many
+  parts), which is kept with the balloons in the PDF; the organization and supplier code are remembered on the
+  computer for the next job. What the parts measured is written in under each part, named by its serial number, and
+  the rest of the part columns are left to fill in. Two layouts:
   - **Inspection sheet**, to print and fill in: the job across the top, then a table of every balloon (number,
     description, gage, nominal, lower and upper limit) with five blank part columns, and the table again for each
     further five parts. A characteristic with no limits shows what the print says across the three number columns. The
     footer lines (a form number, a policy note) are yours, remembered on the computer.
-  - **List with Pass / Fail**: a row for each balloon with its requirement and limits, a results column for each part
-    and a Pass / Fail the workbook works out as results are typed in (type Pass or Fail for what isn't measured), with
-    totals at the top; and the same characteristics as AS9102 Form 3, its results following the first part's.
+  - **First article**: a row for each balloon with its requirement and limits, a results column for each part and a
+    Pass / Fail the workbook works out as results are typed in (type Pass or Fail for what isn't measured: Fail as
+    soon as one part fails, Pass once every part's result is in, and "2 of 5" until then), with
+    totals at the top; then the AS9102 forms: **Form 1** (part number accountability), filled in from the job's
+    details with the rest to tick and sign, **Form 2** (materials, special processes and functional tests), with
+    rows to type them into, and **Form 3**, the characteristics with the first part's results.
 
-  The inspection sheet is also saved as a **PDF**, ready to print, beside the workbook under the same name: the
-  numbers in red, the headings in blue, in Calibri and Cambria, a table kept whole on its page, on as many pages as the
+  The inspection sheet is also saved as a **PDF**, ready to print, beside the workbook under the same name, with the
+  results measured so far (outside its limits, in red): the balloon numbers in red, the headings in blue, in Calibri and Cambria, a table kept whole on its page, on as many pages as the
   list takes.
 
   In both, a result typed in outside its limits turns red. A balloon's **Description** ("Overall Length") and **Gage**
-  ("Calipers") are typed in its dialog; without a description the sheet says Dimension, Diameter, Radius and so on.
+  ("Calipers") are typed in the list; without a description the sheet says Dimension, Diameter, Radius and so on.
 - **Saved in the PDF:** the balloons are real marks in the file, so the saved print shows and prints them in any PDF
   reader, and the list comes back with them when the file is opened here again.
 
-It's a first pass by rules, to check against the print, not a finished inspection plan. What it doesn't do yet: tell a
-basic size by its box (it comes out as a plain size, to delete), read an ISO fit class into limits, put a balloon on
-each of a `4X`'s instances, take measured results or CMM output, or balloon a picture (print it to a PDF first). A
+It's a first pass by rules, to check against the print, not a finished inspection plan. What it doesn't do yet: read an ISO fit class into limits, read a CMM program's own report format (export it as
+CSV or Excel), balloon a 3D model's PMI, let a report be laid out by hand, or balloon a picture (print it to a PDF first). A
 scanned print is read by OCR, which misreads more: a degree sign as a 0, for one.
 
 ## Printing
@@ -319,7 +388,7 @@ readers show it, and comments stay comments they can change.
 - **Fill & Sign:** type into a form's fields (text, check boxes, lists). Where a form has no fields, add text, check
   marks, crosses, dots and today's date anywhere. **Sign** and **Initials**: draw or type them once (they're kept on
   this computer) and click or drag where they go. **Flatten** makes comments, signatures and filled-in fields part of
-  the pages, so nobody can change them.
+  the pages, so nobody can change them. A print's balloons stay balloons.
 - **Prepare Form:** make any PDF fillable. **Detect fields** finds the blanks (rules to write on, boxes, a table's
   empty cells, squares to tick, runs of underscores; a scanned form's lines are found in its picture) and puts a field
   on each, named from the words beside it. The fields show as boxes: drag one to move it, its corner to size it,

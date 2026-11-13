@@ -5,11 +5,14 @@ page is shown ("vert": the line runs up the page, or with "down" too, down it), 
 found on it, and gives
 [{"kind": "dim" | "angle" | "chamfer" | "thread" | "finish" | "gdt" | "note", "text": the requirement as written,
   "count": 4 for "4X", "nominal", "plus", "minus", "lo", "hi": numbers or None, "places": decimals written,
-  "tol": "print" | "default" | None (where the limits came from), "box": [x, y, w, h] of the callout}, ...]
+  "tol": "print" | "default" | "ref" | "basic" | None (where the limits came from, or why there are none),
+  "box": [x, y, w, h] of the callout, "group": the same number for one callout's several characteristics}, ...]
 in reading order. A size's tolerance may be written beside it (±, +/-, limits), stacked over two lines, or left to
-the title block's table by the number of decimals (defaults(): ".XXX ±.005"). Reference sizes (in brackets, REF) and
-basic ones marked BSC aren't inspected and are left out; a basic size shown only by its box can't be told from the
-text and comes out as a plain one, to delete.
+the title block's table by the number of decimals (defaults(): ".XXX ±.005"). A reference size (in brackets, or with
+REF or STOCK beside or beneath it) and a basic one (BSC, or drawn in a box of its own) have no limits: they come out
+as "ref" and "basic", for the caller to balloon or leave out (read()'s `want`).
+A flag note (a note's number in a triangle or flag drawn by a feature, saying that note applies there) comes out as a
+"note" with "flag": its number, and the note's words when the page has that numbered note.
 
 This is rules, not a model: what it gives is a first pass to check against the print.
 """
@@ -34,7 +37,9 @@ SIGNED2 = re.compile(rf"^\+\s*(?P<up>{NUM})\s*/?\s*[-–]\s*(?P<dn>{NUM})$")
 COUNT = re.compile(r"^(?P<n>\d{1,3})\s*X(?:\s+|(?=[Ø⌴⌵↧R.#M\d]))")
 PLACES = re.compile(r"\(?\b(?P<n>\d{1,3})\s*(?:PLACES|PLCS|PLC|PL|HOLES)\b\.?\)?")
 NOTE = re.compile(r"^\(?(?P<n>\d{1,2})[.)]\s+(?=\S)")
-NOT_INSPECTED = re.compile(r"\b(?:REF|REFERENCE|BSC|BASIC)\b\.?")
+NOT_INSPECTED = re.compile(r"\b(?:REF|REFERENCE|BSC|BASIC|STOCK)\b\.?", re.I)  # a size with no limits of its own
+MODIFIER = re.compile(r"^\(?\s*(REF|REFERENCE|BSC|BASIC|STOCK)\.?\s*\)?$", re.I)  # one of those words alone on its line
+SIZES = ("dim", "angle", "chamfer")
 # words a callout may hold without being a sentence
 CALLOUT_WORDS = {"THRU", "THROUGH", "ALL", "DEEP", "DEPTH", "TYP", "TYPICAL", "MAX", "MIN", "PLACES", "PLCS", "PLC", "HOLES", "HOLE",
                  "EQ", "SP", "EQL", "SPACED", "DIA", "RAD", "UNC", "UNF", "UNEF", "UNJC", "UNJF", "UNS", "NPT", "NPTF", "RMS", "TAP",
@@ -99,10 +104,20 @@ def is_prose(t):
 
 
 def parse(text, unit=None):
-    """The characteristics in one line of a print: [{"kind", "text", "span": (a, b) in the cleaned line, ...}]."""
+    """The characteristics in one line of a print: [{"kind", "text", "span": (a, b) in the cleaned line, ...}].
+    A size given only for reference ("(3.000)", "3.000 REF", "Ø.625 STOCK") or as basic ("1.000 BSC") has "tol":
+    "ref" or "basic", and no limits."""
     t = clean(text)
-    if not t or (t.startswith("(") and t.endswith(")")) or t.startswith("[") or NOT_INSPECTED.search(t.upper()) or is_prose(t):
+    if not t or t.startswith("[") or is_prose(t):
         return []
+    line, mark = t, None
+    if re.match(r"^(?:\d{1,3}\s*X\s*)?\(.*\)$", t):  # (3.000), 2X (Ø.250)
+        mark = "ref"
+    for m in NOT_INSPECTED.finditer(t):  # (blanked, not cut: where things are in the line stays true)
+        mark = mark or ("basic" if m.group()[0] in "Bb" else "ref")
+        t = t[:m.start()] + " " * (m.end() - m.start()) + t[m.end():]
+    if mark:
+        t = t.replace("(", " ").replace(")", " ")
     count, lead = 1, 0
     m = COUNT.match(t)
     if m and not CHAMFER.match(t):
@@ -171,6 +186,14 @@ def parse(text, unit=None):
     if count > 1:
         for it in out:
             it["text"] = f"{count}X {it['text']}"
+    if mark:
+        for it in out:
+            it.update(plus=None, minus=None, lo=None, hi=None, tol=mark)
+            it.pop("open", None)
+            if len(out) == 1:
+                it.update(text=line, span=(0, len(line)))  # as the print writes it, brackets and all
+            else:
+                it["text"] += " REF" if mark == "ref" else " BSC"
     return out
 
 
@@ -215,29 +238,62 @@ def _union(a, b):
     return [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
 
 
-def zones(lines, size):
-    """The lines that are the border's zone labels (1 2 3 … along the top and bottom, A B C … down the sides), by
-    their place in `lines`: a number or a letter alone, in the page's margin, three or more in a row along an edge."""
+def _border(lines, size):
+    """The border's zone labels (1 2 3 … along the top and bottom, A B C … down the sides), edge by edge (top, bottom,
+    left, right): [(place in `lines`, where along the edge, label)]. A label is a number or a letter alone, in the
+    page's margin, three or more in a row along an edge."""
     W, H = size
     margin = 0.08 * min(W, H)
-    out = set()
-    for edge in range(4):  # top, bottom, left, right
+    out = []
+    for edge in range(4):
         found = []
         for i, ln in enumerate(lines):
-            if not re.fullmatch(r"\d{1,2}|[A-Za-z]", ln["text"].strip()):
+            t = ln["text"].strip()
+            if not re.fullmatch(r"\d{1,2}|[A-Za-z]", t):
                 continue
             x0, y0, x1, y1 = ln["box"]
             cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
             depth = (cy, H - cy, cx, W - cx)[edge]  # how far in from this edge
             if depth < margin:
-                found.append((i, depth, min(x1 - x0, y1 - y0) or 1.0, ln["text"].strip().upper()))
-        if len(found) < 3:
-            continue
-        mid = statistics.median(d for _, d, _, _ in found)
-        row = [f for f in found if abs(f[1] - mid) <= 1.5 * f[2]]
-        if len(row) >= 3 and len({t for _, _, _, t in row}) >= 3:
-            out |= {i for i, _, _, _ in row}
+                found.append((i, depth, min(x1 - x0, y1 - y0) or 1.0, t.upper(), cx if edge < 2 else cy))
+        row = []
+        if len(found) >= 3:
+            mid = statistics.median(f[1] for f in found)
+            row = [f for f in found if abs(f[1] - mid) <= 1.5 * f[2]]
+            if len(row) < 3 or len({f[3] for f in row}) < 3:
+                row = []
+        out.append([(f[0], f[4], f[3]) for f in row])
     return out
+
+
+def zones(lines, size):
+    """The lines that are the border's zone labels, by their place in `lines`: no part of what's inspected."""
+    return {i for edge in _border(lines, size) for i, _, _ in edge}
+
+
+def grid(lines, size):
+    """The border's zones, to say where on the sheet something is: {"cols": [(x, label)], "rows": [(y, label)]}, each
+    label where its zone's middle is. Empty lists on a sheet with no zones marked."""
+    top, bottom, left, right = _border(lines, size)
+    return {"cols": sorted((at, t) for _, at, t in (top or bottom)), "rows": sorted((at, t) for _, at, t in (left or right))}
+
+
+def zone_at(g, x, y):
+    """The zone a point is in, as a print gives it: the side's label then the top's ("A4"). "" with no zones."""
+    col = min(g["cols"], key=lambda c: abs(c[0] - x))[1] if g.get("cols") else ""
+    row = min(g["rows"], key=lambda r: abs(r[0] - y))[1] if g.get("rows") else ""
+    return f"{row}{col}"
+
+
+def type_of(c):
+    """A characteristic's type as an inspector names it: a size is Linear, a Diameter or a Radius; a feature control
+    frame goes by what it controls (Position, Flatness)."""
+    kind, text = c.get("kind"), c.get("text") or ""
+    if kind == "dim":
+        return "Diameter" if "Ø" in text else "Radius" if re.match(r"(?:\d+\s*X\s*)?S?R\s*[\d.]", text) else "Linear"
+    if kind == "gdt":
+        return re.sub(r"[^A-Za-z ]", "", text.split("|")[0]).strip() or "GD&T"
+    return {"angle": "Angular", "finish": "Surface Finish"}.get(kind) or KIND_LABEL.get(kind, "")
 
 
 def title_block(lines, size):
@@ -262,19 +318,101 @@ def _inside(box, outer, slack=0.0):
     return outer[0] - slack <= cx <= outer[2] + slack and outer[1] - slack <= cy <= outer[3] + slack
 
 
-def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True):
+def boxed(box, lines):
+    """Is this text in a frame of its own, the way a basic size is drawn: four lines closing a box close around it?
+    lines: the page's level and upright segments (x0, y0, x1, y1)."""
+    x0, y0, x1, y1 = box
+    h = max(min(x1 - x0, y1 - y0), 1.0)
+    m, e = 1.4 * h, 0.3 * h
+    tops, bottoms, lefts, rights = [], [], [], []
+    for sx0, sy0, sx1, sy1 in lines:
+        if abs(sy1 - sy0) <= 0.08 * h:
+            a, b = min(sx0, sx1), max(sx0, sx1)
+            if x0 - m <= a <= x0 + e and x1 - e <= b <= x1 + m:
+                if y0 - m <= sy0 <= y0 + e:
+                    tops.append((sy0, a, b))
+                elif y1 - e <= sy0 <= y1 + m:
+                    bottoms.append((sy0, a, b))
+        elif abs(sx1 - sx0) <= 0.08 * h:
+            a, b = min(sy0, sy1), max(sy0, sy1)
+            if y0 - m <= a <= y0 + e and y1 - e <= b <= y1 + m:
+                if x0 - m <= sx0 <= x0 + e:
+                    lefts.append((sx0, a, b))
+                elif x1 - e <= sx0 <= x1 + m:
+                    rights.append((sx0, a, b))
+    # (the lines of a dimension stand around its text too, but run on past it: a frame's meet at its corners)
+    return any(abs(ta - lx) <= e and abs(ba - lx) <= e and abs(tb - rx) <= e and abs(bb - rx) <= e
+               and abs(la - ty) <= e and abs(ra - ty) <= e and abs(lb - by) <= e and abs(rb - by) <= e
+               for ty, ta, tb in tops for by, ba, bb in bottoms for lx, la, lb in lefts for rx, ra, rb in rights)
+
+
+def _callouts(items):
+    """Give each item its callout's "group" number: those written on one line, or stacked right under one another
+    (a hole's size over its depth, a size over its feature control frame), are one callout's."""
+    root = list(range(len(items)))
+
+    def find(i):
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+
+    loc = [_local({"box": it["box"], "vert": it["vert"][0], "down": it["vert"][1]}) for it in items]
+    for i, a in enumerate(items):
+        for j in range(i + 1, len(items)):
+            b = items[j]
+            if a["vert"] != b["vert"]:
+                continue
+            (a0, b0, a1, b1), (c0, d0, c1, d1) = loc[i], loc[j]
+            h = max(min(b1 - b0, d1 - d0), 1.0)
+            gap, over = max(d0 - b1, b0 - d1), min(a1, c1) - max(a0, c0)
+            same = a.get("li") is not None and a.get("li") == b.get("li")
+            if same or (-0.4 * h <= gap <= 0.8 * h and (over > 0.4 * min(a1 - a0, c1 - c0) or abs(a0 - c0) < h)):
+                root[find(j)] = find(i)
+    for i, it in enumerate(items):
+        it["group"] = find(i)
+
+
+def flags(lines, shapes):
+    """The flag notes on a page: a note's number (1 to 99) alone in a closed outline of three, five or six sides drawn
+    close round it (a triangle, a flag: not a box, which is a basic size's). shapes: the page's closed outlines,
+    (x0, y0, x1, y1, sides). [(place in lines, number, outline's box)]."""
+    out = []
+    for i, ln in enumerate(lines):
+        t = ln["text"].strip()
+        if not re.fullmatch(r"\d{1,2}", t) or int(t) < 1:
+            continue
+        x0, y0, x1, y1 = ln["box"]
+        cx, cy, h = (x0 + x1) / 2, (y0 + y1) / 2, max(min(x1 - x0, y1 - y0), max(x1 - x0, y1 - y0) / max(len(t), 1), 1.0)
+        for sx0, sy0, sx1, sy1, sides in shapes:
+            if sides not in (3, 5, 6) or not (sx0 <= cx <= sx1 and sy0 <= cy <= sy1):
+                continue
+            if sx1 - sx0 <= 6 * h and sy1 - sy0 <= 6 * h and sx1 - sx0 >= (x1 - x0) * 0.9 and sy1 - sy0 >= (y1 - y0) * 0.9:
+                out.append((i, int(t), (sx0, sy0, sx1, sy1)))
+                break
+    return out
+
+
+def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True, segs=(), want=None, shapes=()):
     """A page's characteristics, in reading order (see the top of this file). frames: [{"box": [x, y, w, h], "text"}]
-    the feature control frames found on the page; tols: the title block's table, or None to read it from the lines."""
+    the feature control frames found on the page; tols: the title block's table, or None to read it from the lines;
+    segs: the page's linework (x0, y0, x1, y1), to tell a basic size by its box; shapes: its closed outlines (x0, y0,
+    x1, y1, sides), to find the flag notes. want: what to give, each True unless said: "ref" and "basic" sizes,
+    "general" (sizes with no tolerance of their own), "finish" (surface finishes), "flags" (flag notes), and "title"
+    (leave out what's in the title block)."""
+    want = {"ref": True, "basic": True, "general": True, "finish": True, "title": True, "flags": True, **(want or {})}
     lines = [{**ln, "text": clean(ln["text"])} for ln in lines if ln["text"].strip()]
     if tols is None:
         tols = defaults([ln["text"] for ln in lines])
-    block = title_block(lines, size)
+    block = title_block(lines, size) if want["title"] else None
     border = zones(lines, size)
     fboxes = [(f["box"][0], f["box"][1], f["box"][0] + f["box"][2], f["box"][1] + f["box"][3]) for f in frames]
-    items, signed = [], []
+    items, signed, marks = [], [], []
+    flagged = flags(lines, shapes) if shapes else []
+    skip = border | {i for i, _, _ in flagged}  # (a flag's number is no size)
     for i, ln in enumerate(lines):
         t, box = ln["text"], ln["box"]
-        if i in border:
+        if i in skip:
             continue
         if any(_inside(box, fb, 1.0) for fb in fboxes):
             continue  # a frame's own tolerance and datums
@@ -291,10 +429,15 @@ def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True
             continue
         if block and _inside(box, block):
             continue
+        m = MODIFIER.match(t)
+        if m:  # REF, BSC or STOCK on a line of its own: said of the size it's written by
+            marks.append((ln, "basic" if m.group(1)[0] in "Bb" else "ref"))
+            continue
         for it in parse(t, unit):
             it["box"] = _sub(ln, t, it.pop("span"))
             it["vert"] = (bool(ln.get("vert")), bool(ln.get("down")))
             it["alone"] = it["text"] == t
+            it["li"] = i
             items.append(it)
     # a tolerance stacked beside its size: +.005 over -.000, each a line of its own
     for ln, tol in signed:
@@ -302,7 +445,7 @@ def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True
         h, best = max(v1 - v0, 1.0), None
         for it in items:
             if it["kind"] not in ("dim", "angle") or it["vert"] != (bool(ln.get("vert")), bool(ln.get("down"))) \
-                    or (it["tol"] == "print" and "stack" not in it and not it.get("open")):
+                    or it["tol"] in ("ref", "basic") or (it["tol"] == "print" and "stack" not in it and not it.get("open")):
                 continue
             a0, b0, a1, b1 = _local({"box": it.get("core", it["box"]), "vert": it["vert"][0], "down": it["vert"][1]})
             gap = u0 - a1
@@ -340,12 +483,45 @@ def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True
                 gone.add(j)
                 break
     items = [it for i, it in enumerate(items) if i not in gone]
+    # REF, BSC or STOCK written under a size, or after it: that size has no limits
+    for ln, mark in marks:
+        u0, v0, u1, v1 = _local(ln)
+        h, best = max(v1 - v0, 1.0), None
+        for it in items:
+            if it["kind"] not in SIZES or it["vert"] != (bool(ln.get("vert")), bool(ln.get("down"))):
+                continue
+            a0, b0, a1, b1 = _local({"box": it["box"], "vert": it["vert"][0], "down": it["vert"][1]})
+            under = -0.4 * h <= v0 - b1 <= 1.0 * h and u0 < a1 + h and u1 > a0 - h
+            after = -0.5 * h <= u0 - a1 <= 2.5 * h and b0 - 0.6 * h <= (v0 + v1) / 2 <= b1 + 0.6 * h
+            d = abs(v0 - b1) if under else abs(u0 - a1) if after else None
+            if d is not None and (best is None or d < best[0]):
+                best = (d, it)
+        if best:
+            best[1].update(plus=None, minus=None, lo=None, hi=None, tol=mark, text=f"{best[1]['text']} {ln['text']}",
+                           box=_union(best[1]["box"], ln["box"]))
+    # a size in a box of its own is basic
+    frame = [s for s in segs if (abs(s[0] - s[2]) < 0.6 or abs(s[1] - s[3]) < 0.6) and abs(s[0] - s[2]) + abs(s[1] - s[3]) < 400]
+    for it in items:
+        if frame and it["kind"] in ("dim", "angle") and it["tol"] is None and boxed(it["box"], frame):
+            it["tol"] = "basic"
     for it in items:
         limits(it, tols)
     for f in frames:
         x, y, w, hh = f["box"]
         items.append({"kind": "gdt", "text": f["text"], "count": 1, "nominal": None, "plus": None, "minus": None, "lo": None,
                       "hi": None, "places": 0, "tol": None, "box": [x, y, x + w, y + hh], "vert": (False, False)})
+    items = [it for it in items if (want[it["tol"]] if it["tol"] in ("ref", "basic") else want["finish"] if it["kind"] == "finish"
+                                    else want["general"] if it["kind"] in SIZES and it["tol"] in (None, "default") else True)]
+    _callouts(items)
+    if flagged and want["flags"]:
+        said = {}
+        for nt in _notes(lines):
+            m = NOTE.match(nt["text"])
+            said.setdefault(int(m.group("n")), nt["text"][m.end():].strip())
+        for _, n, (x0, y0, x1, y1) in flagged:
+            items.append({"kind": "note", "text": f"Flag note {n}" + (f": {said[n]}" if n in said else ""), "count": 1, "nominal": None,
+                          "plus": None, "minus": None, "lo": None, "hi": None, "places": 0, "tol": None, "box": [x0, y0, x1, y1],
+                          "vert": (False, False), "flag": n})
     if notes:
         items += _notes(lines)
     band = max(size[1] / 14, 1.0)  # rows across the sheet, left to right
@@ -355,6 +531,8 @@ def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True
         it["box"] = [round(b[0], 2), round(b[1], 2), round(b[2] - b[0], 2), round(b[3] - b[1], 2)]
         it.pop("alone", None)
         it.pop("core", None)
+        it.pop("li", None)
+        it.setdefault("group", None)
         it["vert"] = it["vert"][0]
         it.pop("pre", None)
     return items
@@ -383,6 +561,169 @@ def _notes(lines):
 
 
 # ------------------------------------------------------------------------------------------------ where balloons go
+_PASS = {"P", "PASS", "OK", "A", "ACC", "ACCEPT", "ACCEPTED", "Y", "YES", "GO", "GOOD", "✓"}
+_FAIL = {"F", "FAIL", "NG", "R", "REJ", "REJECT", "REJECTED", "N", "NO", "NO GO", "NOGO", "BAD", "X"}
+
+
+def result(text):
+    """A measured result as it's kept: a number the way it was typed ("2.3751"), "Pass" or "Fail" (for what isn't
+    measured: P, OK, accept; F, NG, reject), or a few words as they are. "" for none."""
+    s = str(text or "").strip()
+    word = s.upper().rstrip(".")
+    if word in _PASS or word in _FAIL:
+        return "Pass" if word in _PASS else "Fail"
+    try:
+        float(s.replace(",", "."))
+    except ValueError:
+        return s[:40]
+    return s.replace(",", ".").lstrip("+")
+
+
+def judge(c, value):
+    """Does a result meet its characteristic? True, False, or None when that can't be said: nothing entered, words,
+    or a number for something with no limits."""
+    if value == "Pass" or value == "Fail":
+        return value == "Pass"
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return None
+    lo, hi = c.get("lo"), c.get("hi")
+    if lo is None and hi is None:
+        return None
+    return (lo is None or x >= lo - 1e-9) and (hi is None or x <= hi + 1e-9)
+
+
+def stats(c, values):
+    """How a characteristic's measurements spread, from two or more of them: {"n", "mean", "min", "max", "range",
+    "sd" (the sample's standard deviation), "cp", "cpk"}; Cp needs both limits, Cpk one; neither with no spread at
+    all. None with fewer than two numbers."""
+    xs = []
+    for v in values:
+        try:
+            xs.append(float(v))
+        except (TypeError, ValueError):
+            pass
+    if len(xs) < 2:
+        return None
+    n, mean = len(xs), sum(xs) / len(xs)
+    sd = (sum((x - mean) ** 2 for x in xs) / (n - 1)) ** 0.5
+    lo, hi = c.get("lo"), c.get("hi")
+    cp = (hi - lo) / (6 * sd) if sd > 1e-12 and lo is not None and hi is not None else None
+    sides = [s for s in ((hi - mean) if hi is not None else None, (mean - lo) if lo is not None else None) if s is not None]
+    cpk = min(sides) / (3 * sd) if sd > 1e-12 and sides else None
+    return {"n": n, "mean": mean, "min": min(xs), "max": max(xs), "range": max(xs) - min(xs), "sd": sd, "cp": cp, "cpk": cpk}
+
+
+def sample(lot, how="every", n=None, last=True):
+    """Which parts of a lot to inspect, by their place in it (1 is the first made): how "every" (all of them),
+    "ends" (the first and the last), "thirds" (the first, the middle one and the last), "one_in" (the first, then
+    every n-th after it, and the last too when `last`), "percent" (n percent of them, at least one, spread through
+    the lot)."""
+    lot = int(lot)
+    if lot < 1:
+        raise ValueError("A lot has at least one part.")
+    if how == "every":
+        out = range(1, lot + 1)
+    elif how == "ends":
+        out = {1, lot}
+    elif how == "thirds":
+        out = {1, (lot + 1) // 2, lot}
+    elif how == "one_in":
+        step = int(n or 0)
+        if step < 1:
+            raise ValueError("1 in how many?")
+        out = set(range(1, lot + 1, step)) | ({lot} if last else set())
+    elif how == "percent":
+        share = float(n or 0)
+        if not 0 < share <= 100:
+            raise ValueError("What percent of the lot, from more than 0 to 100?")
+        k = min(max(math.ceil(lot * share / 100), 1), lot)
+        out = {1} if k == 1 else {round(1 + i * (lot - 1) / (k - 1)) for i in range(k)}
+    else:
+        raise ValueError(f"Sample how? {how}")
+    return sorted(out)
+
+
+def frequency(lot, how="every", n=None, last=True):
+    """How a sampling is said on the inspection sheet's Inspection Frequency line."""
+    return {"every": "Every part", "ends": "First and last part", "thirds": "First, middle and last part",
+            "one_in": f"1 in {n}" + (", and the last" if last else ""), "percent": f"{n}% of the lot"}[how] + f" (lot of {lot})"
+
+
+def row_keys(c):
+    """What a characteristic's results are kept under: its id, or for a multiplied one, id.1, id.2 … for each place."""
+    n = c.get("count") or 1
+    return [f"{c['id']}.{k}" for k in range(1, n + 1)] if c.get("mult") and n > 1 else [str(c["id"])]
+
+
+def restate(c, text):
+    """A size's requirement written again after its nominal, tolerance or limits were changed: the size and its
+    tolerance as they are now, what's around them (4X, Ø, R, THRU) as it was. Anything else, or a reference or basic
+    size, as it was."""
+    t = clean(text or "")
+    if c.get("kind") not in ("dim", "angle") or c.get("tol") in ("ref", "basic") or not t:
+        return text
+    lead = COUNT.match(t).end() if COUNT.match(t) and not CHAMFER.match(t) else 0
+    if c["kind"] == "angle":
+        m = ANGLE.search(t, lead)
+        old, at = (m.group("num"), m.start("num")) if m else (None, None)
+    else:
+        m = LIMITS.search(t, lead)
+        if m:
+            old, at = m.group("a"), m.start("a")
+        else:
+            m = DIM.search(t, lead)
+            old, at = (m.group("num"), m.start("num")) if m else (None, None)
+    if m is None:
+        return text
+    places = c.get("places") or 0
+    inch = old.startswith(".")  # (.375 or 0.375, as the print writes it)
+    said_tol = re.search(r"[±+\-–]\s*([.,]?)\d", t[m.start():m.end()] if m.re is not LIMITS else "")
+    dot = bool(said_tol.group(1)) if said_tol else (inch or places >= 3)  # (±.005 or ±0.1, as the print writes it)
+
+    def num(v):
+        s = fmt(v, places)
+        return s[1:] if inch and s.startswith("0.") else s[0] + s[2:] if inch and s.startswith("-0.") else s
+
+    def tol(v):
+        s = fmt(v, places if c["kind"] == "angle" else max(places, 1))
+        return s[1:] if dot and s.startswith("0.") else s
+    deg = "°" if c["kind"] == "angle" else ""
+    nom, plus, minus, lo, hi = (c.get(k) for k in ("nominal", "plus", "minus", "lo", "hi"))
+    if plus is not None and nom is not None and c.get("tol") == "print":
+        said = f"{num(nom)}{deg} ±{tol(plus)}{deg}" if abs(plus - (minus or 0)) < 1e-12 else f"{num(nom)}{deg} +{tol(plus)}{deg}/-{tol(minus or 0)}{deg}"
+    elif lo is not None and hi is not None and plus is None:
+        if m.re is LIMITS:  # the way the print wrote them: which first, and what between
+            a, b = (hi, lo) if float(m.group("a").replace(",", ".")) > float(m.group("b").replace(",", ".")) else (lo, hi)
+            said = f"{num(a)}{t[m.end('a'):m.start('b')]}{num(b)}"
+        else:
+            said = f"{num(lo)}-{num(hi)}"
+    elif hi is not None and lo is None:
+        said = f"{num(hi)}{deg} MAX"
+    elif lo is not None and hi is None:
+        said = f"{num(lo)}{deg} MIN"
+    elif nom is not None:
+        said = f"{num(nom)}{deg}"
+    else:
+        return text
+    return (t[:at] + said + t[m.end():]).strip()
+
+
+def recount(text, count):
+    """A requirement with its count (4X) as it is now."""
+    t = (text or "").strip()
+    m = COUNT.match(t)
+    bare = t[m.end():] if m and not CHAMFER.match(t) else t
+    return f"{count}X {bare}" if count and count > 1 else bare
+
+
+def single(text):
+    """A requirement without its count: "4X Ø.250 ±.005" as it applies to one of the four."""
+    t = text or ""
+    return t if CHAMFER.match(clean(t)) else re.sub(r"^\s*\d{1,3}\s*[Xx×]\s*(?=\S)", "", t)
+
+
 def label(c):
     """What a balloon says: its number, or number.sub (2.1, 2.2) for one of several under the same number."""
     return f"{c['n']}.{c['sub']}" if c.get("sub") else str(c["n"])

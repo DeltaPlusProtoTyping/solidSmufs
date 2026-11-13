@@ -4,8 +4,9 @@ layout makes as a workbook, drawn here.
 write(path, data, drawing, parts, footer): landscape Letter. The job across the top (part number, revision, part name,
 customer, job number), the check boxes and inspection frequency, Time / Date / Initial over the part columns, then a
 table of every balloon (its number in red, description, gage, nominal, lower and upper limit) with five blank part
-columns; the table again for each further five parts, and on as many pages as it takes. footer: the shop's own
-lines, the first at the bottom left, the second at the bottom right.
+columns; the table again for each further five parts, and on as many pages as it takes. What the parts measured is
+written in under each part (a result outside its limits in red), the other part columns left to fill in. footer: the
+shop's own lines, the first at the bottom left, the second at the bottom right.
 
 Set in Calibri and Cambria where the computer has them (Windows does), else in the PDF's own Helvetica and Times.
 """
@@ -18,7 +19,7 @@ PAGE = (792.0, 612.0)
 # the columns' edges: number, description, gage, nominal, lower, upper, then the parts
 X = [50.5, 74.6, 202.8, 327.8, 379.4, 431.0, 482.6] + [482.6 + 51.6 * i for i in range(1, report.PER + 1)]
 TOP, BOTTOM, ROW, HEAD = 54.5, 560.0, 14.5, 14.7
-BLUE, RED, BLACK, WHITE = (0.553, 0.706, 0.886), (1, 0, 0), (0, 0, 0), (1, 1, 1)
+BLUE, RED, BLACK, WHITE, FAIL = (0.553, 0.706, 0.886), (1, 0, 0), (0, 0, 0), (1, 1, 1), (0.8, 0, 0)
 THICK, THIN = 1.9, 0.9
 FONTS = {"sans": ("calibri.ttf", "helv"), "bold": ("calibrib.ttf", "hebo"), "bolditalic": ("calibriz.ttf", "hebi"),
          "serif": ("cambria.ttc", "tiro"), "small": ("segoeui.ttf", "helv")}
@@ -49,7 +50,7 @@ class _Sheet:
     def __init__(self, doc, fonts):
         import pymupdf
         self.mu, self.doc, self.fonts = pymupdf, doc, fonts
-        self.page = self.black = self.white = None
+        self.page = self.black = self.white = self.red = None
         self.pages = []
         self.used = {}  # a font's name: the characters set in it
 
@@ -57,14 +58,15 @@ class _Sheet:
         self.flush()
         self.page = self.doc.new_page(width=PAGE[0], height=PAGE[1])
         self.black, self.white = self.mu.TextWriter(self.page.rect, color=BLACK), self.mu.TextWriter(self.page.rect, color=WHITE)
+        self.red = self.mu.TextWriter(self.page.rect, color=FAIL)
         self.pages.append(self.page)
         self.text("Inspection Report", X[-1] + 23, 32.5, "bold", 18, "right")
         return TOP
 
     def flush(self):
         if self.page is not None:
-            self.black.write_text(self.page)
-            self.white.write_text(self.page)
+            for writer in (self.black, self.white, self.red):
+                writer.write_text(self.page)
 
     def text(self, s, x, base, font="serif", size=9.0, align="left", width=None, color=BLACK, underline=False):
         """A line of text with its baseline at `base`: from x, ending at x, or about x. width: made smaller to fit it,
@@ -83,7 +85,7 @@ class _Sheet:
                 n = f.text_length(s, size)
         x0 = x - n if align == "right" else x - n / 2 if align == "center" else x
         self.used.setdefault(f.name, (f, set()))[1].update(s)
-        (self.white if color == WHITE else self.black).append((x0, base), s, font=f, fontsize=size)
+        (self.white if color == WHITE else self.red if color == FAIL else self.black).append((x0, base), s, font=f, fontsize=size)
         if underline:
             self.page.draw_line((x0, base + 1.6), (x0 + n, base + 1.6), color=BLACK, width=0.6)
 
@@ -115,7 +117,7 @@ class _Sheet:
             self.line(a, y2, a, y3)
         self.line(X[0], y3, X[-1], y3, THICK)
         # the drawing it's from, and who filled each part's column in, when
-        self.text(f"Drawing: {drawing}", X[0] + 2, y3 + 10.4, "bold", 9, width=X[5] - X[0] - 6)
+        self.text(report.drawing_line(info, drawing), X[0] + 2, y3 + 10.4, "bold", 9, width=X[5] - X[0] - 6)
         yy = y3
         for label, size, h in (("Time   →", 8, 14.5), ("Date   →", 8, 14.7), ("Initial   →", 11, 15.8)):
             self.text(label, X[6] - 1.8, yy + h - 3.6, "sans", size, "right")
@@ -128,8 +130,10 @@ class _Sheet:
         return yy
 
     # ------------------------------------------------------------------ a table: its rows and the part columns
-    def table(self, y, rows, initial):
-        """Draw a table at y; initial: with a row above it for the inspector's initials. Returns where it ends."""
+    def table(self, y, rows, initial, data=None, at=0):
+        """Draw a table at y; initial: with a row above it for the inspector's initials. data: the list, for what the
+        parts measured, this table's first part column being part number `at`. Returns where it ends."""
+        data = data or {}
         top = y
         if initial:
             self.text("Initial   →", X[6] - 1.8, y + 11.2, "sans", 11, "right")
@@ -143,7 +147,7 @@ class _Sheet:
         for i, label in enumerate(("Nominal", "Lower Limit", "Upper Limit")):
             self.text(label, (X[3 + i] + X[4 + i]) / 2, y + 10.8, "bolditalic", 9, "center", underline=True)
         for i in range(6, len(X) - 1):
-            self.text("Part # ____", (X[i] + X[i + 1]) / 2, y + 10.8, "bolditalic", 9, "center")
+            self.text(report._part(data, at + i - 6, "Part # ____"), (X[i] + X[i + 1]) / 2, y + 10.8, "bolditalic", 9, "center", X[i + 1] - X[i] - 3)
         for a in X[2:-1]:
             self.line(a, y, a, y + HEAD)
         y += HEAD
@@ -162,6 +166,12 @@ class _Sheet:
                 for i, key in enumerate(("nominal", "lo", "hi")):
                     self.text(_number(c, key), (X[3 + i] + X[4 + i]) / 2, base, "serif", 9, "center", X[4 + i] - X[3 + i] - 3)
                 rules = X[1:-1]
+            for i in range(6, len(X) - 1):  # what each part measured: outside its limits, in red
+                value = report._measured(data, c, at + i - 6)[0]
+                if value != "":
+                    said = ((data.get("results") or {}).get(c.get("key") or str(c.get("id"))) or {}).get(str(data["samples"][at + i - 6]["id"]), "")
+                    self.text(said, (X[i] + X[i + 1]) / 2, base, "serif", 9, "center", X[i + 1] - X[i] - 3,
+                              FAIL if balloons.judge(c, said) is False else BLACK)
             for a in rules:
                 self.line(a, y, a, y + ROW)
             y += ROW
@@ -198,8 +208,8 @@ def _readable(doc, used):
 def write(path, data, drawing, parts=report.PER, footer=""):
     """Write the inspection sheet for an inspection list (see the top of this file). Returns how many pages."""
     import pymupdf
-    info, chars = data.get("info") or {}, data["chars"]
-    tables = -(-min(max(int(parts or 1), 1), report.MAX_PARTS) // report.PER)
+    info, chars = data.get("info") or {}, report.expanded(data["chars"])
+    tables = -(-min(max(int(parts or 1), len(data.get("samples") or []), 1), report.MAX_PARTS) // report.PER)
     doc = pymupdf.open()
     sh = _Sheet(doc, _fonts())
     y = sh.new_page()
@@ -218,7 +228,7 @@ def write(path, data, drawing, parts=report.PER, footer=""):
                 y, first = sh.new_page(), False
                 continue
             part, rows = rows[:max(fit, 1)], rows[max(fit, 1):]
-            end = sh.table(y, part, initial)
+            end = sh.table(y, part, initial, data, t * report.PER)
             if first:  # the job and the first table are one box
                 sh.box(X[0], job_top, X[-1], end)
             first = False

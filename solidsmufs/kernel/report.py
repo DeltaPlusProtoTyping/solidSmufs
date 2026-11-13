@@ -1,13 +1,16 @@
 """The inspection report: an inspection list (kernel/balloonops.py keeps it) laid out as an Excel workbook.
 
-build(data, drawing, parts, layout, footer) gives the sheets for kernel/xlsx.py. Two layouts:
+build(data, drawing, parts, layout, footer) gives the sheets for kernel/xlsx.py. What the parts measured (the list's
+"samples" and "results") is written in under each part, the rest of the part columns left to fill in. Two layouts:
 - "sheet", the one to print and fill in at the machine: the job across the top, then a table of every balloon (its
   number, what it is, the gage, nominal and limits) with five blank part columns, the table again for each further
   five parts. A result typed into the workbook instead turns red when it's outside its limits.
 - "list": "Inspection", who and what at the top, then a row for each balloon with its requirement and limits, a
   column for each part's result, and a Pass / Fail the workbook works out itself as results are typed in; and
-  "AS9102 Form 3", the same characteristics in the first article form's layout, its results following the first
-  part's. What the Inspection sheet holds is a layout, not code: LAYOUT names its columns, COLUMNS says what each is.
+  the first article's forms after AS9102: "AS9102 Form 1" (part number accountability) and "AS9102 Form 2"
+  (materials, special processes and functional tests), filled in from the job's details as far as they go and
+  otherwise left to type into, and "AS9102 Form 3", the same characteristics in that form's layout, its results
+  following the first part's. What the Inspection sheet holds is a layout, not code: LAYOUT names its columns, COLUMNS says what each is.
 """
 
 import datetime
@@ -18,10 +21,12 @@ from . import balloons, xlsx
 INFO = [("part", "Part number", "1. Part Number"), ("name", "Part name", "2. Part Name"), ("rev", "Revision", None),
         ("customer", "Customer", None), ("job", "Job number", None), ("lot", "Lot / serial number", "3. Serial Number"),
         ("fai", "Report number", "4. FAI Report Number"), ("inspector", "Inspected by", None),
-        ("frequency", "Inspection frequency", None)]
+        ("frequency", "Inspection frequency", None), ("dwg", "Drawing number", None), ("dwgrev", "Drawing revision", None),
+        ("po", "P.O. number", None), ("org", "Organization", None), ("supplier", "Supplier code", None),
+        ("process", "Mfg. process reference", None)]
 MAX_PARTS = 50
 PER = 5  # part columns in one table of the sheet layout
-LAYOUTS = [["sheet", "Inspection sheet, five parts to a table"], ["list", "List with Pass / Fail, and AS9102 Form 3"]]
+LAYOUTS = [["sheet", "Inspection sheet, five parts to a table"], ["list", "First article: results with Pass / Fail, AS9102 Forms 1, 2 and 3"]]
 MEASURED = ("dim", "angle", "chamfer")
 
 # a column: its heading, its width, and what goes in it for a characteristic c (o: the report's settings)
@@ -36,7 +41,7 @@ COLUMNS = {
     "minus": ("- Tol", 9, lambda c, o: _num(c, "minus", o)),
     "lo": ("Lower limit", 12, lambda c, o: _num(c, "lo", o)),
     "hi": ("Upper limit", 12, lambda c, o: _num(c, "hi", o)),
-    "from": ("Tolerance from", 14, lambda c, o: ({"print": "Print", "default": "Title block"}.get(c.get("tol"), ""), "box")),
+    "from": ("Tolerance from", 14, lambda c, o: ({"print": "Print", "default": "Title block", "ref": "Reference", "basic": "Basic"}.get(c.get("tol"), ""), "box")),
     "desc": ("Description", 24, lambda c, o: (describe(c), "box")),
     "gage": ("Gage", 16, lambda c, o: (c.get("gage") or "", "box")),
     "comments": ("Comments", 28, lambda c, o: ("", "box")),
@@ -60,7 +65,38 @@ def describe(c):
 
 
 def _n(c):
-    return balloons.label(c) if c.get("sub") else c["n"]
+    return c.get("label") or (balloons.label(c) if c.get("sub") else c["n"])
+
+
+def expanded(chars):
+    """The list as a report writes it: a multiplied characteristic (4X, each place inspected) is a row for each
+    place, 3.1 to 3.4, its requirement said of one."""
+    out = []
+    for c in chars:
+        n = c.get("count") or 1
+        if c.get("mult") and n > 1:
+            out += [{**c, "label": f"{balloons.label(c)}.{k}", "count": 1, "text": balloons.single(c.get("text") or ""), "key": f"{c.get('id')}.{k}"}
+                    for k in range(1, n + 1)]
+        else:
+            out.append(c)
+    return out
+
+
+def _measured(data, c, j):
+    """What the j-th part measured for a row, as a cell: a number as a number, to the places it was typed with."""
+    parts = data.get("samples") or []
+    value = ((data.get("results") or {}).get(c.get("key") or str(c.get("id"))) or {}).get(str(parts[j]["id"]), "") if j < len(parts) else ""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return (value or "", "center")
+    return (x, {3: "c3", 4: "c4"}.get(len(value.split(".")[1]) if "." in value else 0, "center"))
+
+
+def _part(data, j, blank):
+    """The j-th part column's heading: the part's name, or `blank` for one that's still to inspect."""
+    parts = data.get("samples") or []
+    return f"Part # {parts[j]['name']}" if j < len(parts) else blank
 
 
 def _look(c):
@@ -89,27 +125,30 @@ def _tols_said(tols):
                      for k, v in sorted(tols.items(), key=lambda kv: (kv[0] == "angle", kv[0]))) or "none found on the print"
 
 
-def _status(rng, lo, hi):
+def _status(rng, lo, hi, parts=1):
     """Pass / Fail for a row from its results (cells rng): any Fail typed there, or any number outside lo..hi (cell
-    names or numbers; None: no such limit), fails it. Nothing there yet: empty."""
+    names or numbers; None: no such limit), fails it; with every part's result in, and none failing, it passes; in
+    between it says how many are in ("2 of 5"). Nothing there yet: empty."""
     bad = [f'COUNTIF({rng},"Fail")']
     if lo is not None:
         bad.append(f'COUNTIF({rng},"<"&{lo})')
     if hi is not None:
         bad.append(f'COUNTIF({rng},">"&{hi})')
-    return f'IF(COUNTA({rng})=0,"",IF({"+".join(bad)}>0,"Fail","Pass"))'
+    done = '"Pass"' if parts <= 1 else f'IF(COUNTA({rng})<{parts},COUNTA({rng})&" of {parts}","Pass")'
+    return f'IF(COUNTA({rng})=0,"",IF({"+".join(bad)}>0,"Fail",{done}))'
 
 
 def inspection(data, drawing, parts=1, layout=None):
     """The Inspection sheet, and where its results are: (sheet, {"first": row, "last": row, "result": column of the
     first part's results or None})."""
     layout = layout or LAYOUT
-    info, unit, chars = data.get("info") or {}, data.get("unit"), data["chars"]
+    info, unit, chars = data.get("info") or {}, data.get("unit"), expanded(data["chars"])
+    parts = max(parts, len(data.get("samples") or []))
     o = {}
     cols = []  # (key, heading, width)
     for key in layout["columns"]:
         if key == "results":
-            cols += [("result", f"Part {i}" if parts > 1 else "Result", 11) for i in range(1, parts + 1)]
+            cols += [("result", _part(data, i, f"Part {i + 1}" if parts > 1 else "Result"), 11) for i in range(parts)]
         elif key == "status":
             cols.append(("status", "Pass / Fail", 11))
         else:
@@ -140,14 +179,14 @@ def inspection(data, drawing, parts=1, layout=None):
     for r, c in enumerate(chars, first):
         row = []
         rng = f"{xlsx.col(res[0])}{r}:{xlsx.col(res[-1])}{r}" if res else None
-        for key in keys:
+        for i, key in enumerate(keys):
             if key == "result":
-                row.append(("", "center"))
+                row.append(_measured(data, c, i - res[0]))
             elif key == "status":
                 lim = {}
                 for k in ("lo", "hi"):
                     lim[k] = None if c.get(k) is None else f"{xlsx.col(at[k])}{r}" if k in at else repr(float(c[k]))
-                row.append(({"f": _status(rng, lim["lo"], lim["hi"])} if rng else "", "status"))
+                row.append(({"f": _status(rng, lim["lo"], lim["hi"], len(res))} if rng else "", "status"))
             else:
                 row.append(COLUMNS[key][2](c, o))
         rows.append(row)
@@ -171,7 +210,45 @@ def inspection(data, drawing, parts=1, layout=None):
             color += [{"range": rng, "when": f'{s}="Fail"', "as": "bad"}, {"range": rng, "when": f'{s}="Pass"', "as": "good"}]
     sheet = {"name": layout.get("name") or "Inspection", "rows": rows, "widths": [w for _, _, w in cols], "freeze": first - 1,
              "color": color, "landscape": True, "repeat": (first - 1, first - 1)}
-    return sheet, {"first": first, "last": last, "result": res[0] if res else None}
+    return sheet, {"first": first, "last": last, "result": res[0] if res else None, "results": (res[0], res[-1]) if res else None,
+                   "lo": at.get("lo"), "hi": at.get("hi")}
+
+
+def statistics(data, source, where):
+    """How each characteristic's measurements spread, worked out by the workbook from the results on the source sheet
+    (`where`: its rows and result columns), so it follows what's typed there: count, mean, min, max, range, standard
+    deviation, Cp and Cpk. A row with fewer than two numbers is left empty."""
+    if not where or not where.get("results"):
+        return None
+    chars, (a, b) = expanded(data["chars"]), where["results"]
+    s = xlsx.ref(source)
+    cols = ["Balloon", "Requirement", "Lower limit", "Upper limit", "Count", "Mean", "Min", "Max", "Range", "Std dev", "Cp", "Cpk"]
+    rows = [[("Statistics", "title")], [("Worked out from the measurements on the Inspection sheet, as they're typed in. "
+                                         "Cp needs both limits; Cpk one. 1.33 or more is the usual aim.", "label")], [],
+            [(t, "head") for t in cols]]
+    first = len(rows) + 1
+    for i, c in enumerate(chars):
+        r, me = where["first"] + i, first + i
+        rng = f"{s}!${xlsx.col(a)}${r}:${xlsx.col(b)}${r}"
+        lo = f"{s}!${xlsx.col(where['lo'])}${r}" if where.get("lo") is not None else None
+        hi = f"{s}!${xlsx.col(where['hi'])}${r}" if where.get("hi") is not None else None
+        look = "c4" if (c.get("places") or 0) >= 4 else "c3"
+        two = f"COUNT({rng})>=2"
+        f = lambda expr, look=look: ({"f": f'IF({two},{expr},"")'}, look)  # noqa: E731
+        sd = f"STDEV({rng})"
+        cp = f'IF(AND(ISNUMBER({lo}),ISNUMBER({hi}),{two}),IF({sd}>0,({hi}-{lo})/(6*{sd}),""),"")' if lo and hi else '""'
+        sides = [f"({hi}-AVERAGE({rng}))" if hi else None, f"(AVERAGE({rng})-{lo})" if lo else None]
+        sides = [x for x in sides if x]
+        cpk = (f'IF({two},IF({sd}>0,MIN({",".join(sides)})/(3*{sd}),""),"")' if sides else '""')
+        rows.append([(_n(c), "center"), (c.get("text") or "", "box"), _num(c, "lo", {}), _num(c, "hi", {}),
+                     ({"f": f"COUNT({rng})"}, "center"), f(f"AVERAGE({rng})"), f(f"MIN({rng})"), f(f"MAX({rng})"),
+                     f(f"MAX({rng})-MIN({rng})"), f(sd, "c4"), ({"f": cp}, "c3"), ({"f": cpk}, "c3")])
+    last = first + len(chars) - 1
+    k = xlsx.col(len(cols) - 1)
+    color = [{"range": f"{k}{first}:{k}{last}", "when": f'AND(ISNUMBER({k}{first}),{k}{first}<1.33)', "as": "bad"},
+             {"range": f"{k}{first}:{k}{last}", "when": f'AND(ISNUMBER({k}{first}),{k}{first}>=1.33)', "as": "good"}]
+    return {"name": "Statistics", "rows": rows, "widths": [9, 30, 12, 12, 8, 11, 11, 11, 10, 11, 8, 8], "freeze": first - 1,
+            "color": color, "landscape": True}
 
 
 def form3(data, drawing, source=None, where=None):
@@ -185,7 +262,7 @@ def form3(data, drawing, source=None, where=None):
             [(field, "head") for field, _ in fields], [(v, "center") for _, v in fields],
             [("Drawing", "label"), drawing, ("Revision", "label"), info.get("rev", "")], [],
             [(c, "head") for c in cols]]
-    for i, c in enumerate(data["chars"]):
+    for i, c in enumerate(expanded(data["chars"])):
         req = c["text"]
         if c.get("lo") is not None and c.get("hi") is not None:
             p = max(c.get("places") or 0, 3 if unit != "mm" else 2)
@@ -194,16 +271,71 @@ def form3(data, drawing, source=None, where=None):
         if source and where and where.get("result") is not None:
             cell = f"{xlsx.ref(source)}!{xlsx.col(where['result'])}{where['first'] + i}"
             result = {"f": f'IF({cell}="","",{cell})'}
-        rows.append([(_n(c), "center"), (f"Sheet {c['page'] + 1}", "box"), ("", "box"), (req, "box"), (result, "center"),
+        rows.append([(_n(c), "center"), (f"Sheet {c['page'] + 1}" + (f", zone {c['zone']}" if c.get("zone") else ""), "box"), ("", "box"), (req, "box"), (result, "center"),
                      ("", "box"), ("", "box"), ("", "box")])
+    rows += [[], [("12. Prepared By", "head"), ("13. Date", "head")], [(info.get("inspector", ""), "center"), ("", "center")]]
     return {"name": "AS9102 Form 3", "rows": rows, "widths": [18, 22, 24, 44, 18, 24, 22, 30], "freeze": 6, "landscape": True, "repeat": (6, 6)}
+
+
+def _form_head(info):
+    """Fields 1 to 4, the same on each of the three forms."""
+    return [[(label, "head") for label in ("1. Part Number", "2. Part Name", "3. Serial Number", "4. FAI Report Number")],
+            [(info.get(k, ""), "center") for k in ("part", "name", "lot", "fai")]]
+
+
+def form1(data, drawing):
+    """AS9102 Form 1, part number accountability: filled in from the job's details as far as they go, the rest (the
+    kind of first article, an assembly's parts, the signatures) left to tick and type."""
+    info = data.get("info") or {}
+    head = lambda *labels: [(x, "head") for x in labels]  # noqa: E731
+    vals = lambda *values: [(v, "center") for v in values]  # noqa: E731
+    rows = [[("AS9102 Form 1: Part Number Accountability", "title")], *_form_head(info),
+            head("5. Part Revision Level", "6. Drawing Number", "7. Drawing Revision Level", "8. Additional Changes"),
+            vals(info.get("rev", ""), info.get("dwg") or drawing, info.get("dwgrev", ""), ""),
+            head("9. Manufacturing Process Reference", "10. Organization Name", "11. Supplier Code", "12. P.O. Number"),
+            vals(info.get("process", ""), info.get("org", ""), info.get("supplier", ""), info.get("po", "")),
+            head("13. Detail FAI / Assembly FAI", "14. Full FAI / Partial FAI", "Baseline Part Number, with revision level", "Reason for Partial FAI"),
+            vals("☐ Detail FAI      ☐ Assembly FAI", "☐ Full FAI      ☐ Partial FAI", "", ""),
+            [],
+            [("Index of the part numbers or sub-assembly numbers needed to make the assembly above", "label")],
+            head("15. Part Number", "16. Part Name", "17. Part Serial Number", "18. FAI Report Number"),
+            *[vals("", "", "", "") for _ in range(8)],
+            [],
+            [("☐ FAI Complete      ☐ FAI Not Complete", "label")],
+            head("19. Signature", "20. Date", "21. Reviewed By", "22. Date"),
+            vals(info.get("inspector", ""), "", "", ""),
+            head("23. Customer Approval", "24. Date"),
+            vals("", "")]
+    return {"name": "AS9102 Form 1", "rows": rows, "widths": [36, 36, 36, 36], "landscape": True}
+
+
+def form2(data, drawing):
+    """AS9102 Form 2, product accountability: the header from the job's details, and rows to type the materials,
+    special processes and functional tests into."""
+    info = data.get("info") or {}
+    head = lambda *labels: [(x, "head") for x in labels]  # noqa: E731
+    rows = [[("AS9102 Form 2: Product Accountability - Materials, Special Processes and Functional Testing", "title")], *_form_head(info), [],
+            head("5. Material or Process Name", "6. Specification Number", "7. Code", "8. Special Process Supplier Code",
+                 "9. Customer Approval Verification (Yes / No / NA)", "10. Certificate of Conformance Number"),
+            *[[("", "box")] * 6 for _ in range(10)],
+            [],
+            head("11. Functional Test Procedure Number", "12. Acceptance Report Number, if applicable"),
+            *[[("", "box")] * 2 for _ in range(4)],
+            [],
+            head("13. Comments")]
+    merge = []
+    for _ in range(3):
+        rows.append([("", "box")] * 6)
+    merge.append(f"A{len(rows) - 2}:F{len(rows)}")
+    rows += [[], head("14. Prepared By", "15. Date"), [(info.get("inspector", ""), "center"), ("", "center")]]
+    return {"name": "AS9102 Form 2", "rows": rows, "widths": [36, 30, 14, 30, 30, 30], "merge": merge, "landscape": True}
 
 
 def sheet(data, drawing, parts=PER, footer=""):
     """The inspection sheet: one page to print and fill in. Columns: number, description, gage, nominal, lower and
     upper limit, then PER parts; the table comes again for every further PER parts. footer: the shop's own lines
     for the bottom (its form number, its policy), one to a line."""
-    info, chars = data.get("info") or {}, data["chars"]
+    info, chars = data.get("info") or {}, expanded(data["chars"])
     last_col = 5 + PER
     A = xlsx.col
     rows, merge, color = [], [], []
@@ -227,21 +359,22 @@ def sheet(data, drawing, parts=PER, footer=""):
              **{i: ("", "center") for i in range(7, last_col + 1)}})
     merge += [f"{A(3)}{r}:{A(5)}{r}", f"{A(6)}{r}:{A(last_col)}{r}"]
     parts_blank = {i: ("", "center") for i in range(6, last_col + 1)}
-    r = put({**{i: ("", "box") for i in range(5)}, 0: (f"Drawing: {drawing}", "box"), 5: ("Time   →", "label"), **parts_blank})
+    r = put({**{i: ("", "box") for i in range(5)}, 0: (drawing_line(info, drawing), "box"), 5: ("Time   →", "label"), **parts_blank})
     put({**{i: ("", "box") for i in range(5)}, 5: ("Date   →", "label"), **parts_blank})
     put({**{i: ("", "box") for i in range(5)}, 5: ("Initial  →", "label"), **parts_blank})
     merge.append(f"{A(0)}{r}:{A(4)}{r + 2}")
-    tables = -(-min(max(int(parts or 1), 1), MAX_PARTS) // PER)
+    tables = -(-min(max(int(parts or 1), len(data.get("samples") or []), 1), MAX_PARTS) // PER)
     for t in range(tables):
         if t:
             put({})
             put({5: ("Initial  →", "label"), **parts_blank})
         r = put({0: ("DIMENSION DESCRIPTION", "head"), 2: ("GAGE", "head"), 3: ("Nominal", "head"), 4: ("Lower Limit", "head"), 5: ("Upper Limit", "head"),
-                 **{i: ("Part # ____", "head") for i in range(6, last_col + 1)}}, "head")
+                 **{6 + i: (_part(data, t * PER + i, "Part # ____"), "head") for i in range(PER)}}, "head")
         merge.append(f"{A(0)}{r}:{A(1)}{r}")
         first = r + 1
         for c in chars:
-            cells = {0: (_n(c), "center"), 1: (describe(c), "box"), 2: (c.get("gage") or "", "box"), **parts_blank}
+            cells = {0: (_n(c), "center"), 1: (describe(c), "box"), 2: (c.get("gage") or "", "box"),
+                     **{6 + i: _measured(data, c, t * PER + i) for i in range(PER)}}
             if c.get("lo") is None and c.get("hi") is None:  # nothing to measure against: what the print says, across the three
                 r = put({**cells, 3: (c.get("text") or "", "center"), 4: ("", "center"), 5: ("", "center")})
                 merge.append(f"{A(3)}{r}:{A(5)}{r}")
@@ -259,11 +392,18 @@ def sheet(data, drawing, parts=PER, footer=""):
     return {"name": "Inspection Report", "rows": rows, "widths": [6, 26, 20, 10, 10, 10] + [10] * PER, "merge": merge, "color": color, "landscape": True}
 
 
+def drawing_line(info, drawing):
+    """The drawing a sheet is from: its number and revision when the job's details give them, else the file's name."""
+    return f"Drawing: {info['dwg']}{' Rev ' + info['dwgrev'] if info.get('dwgrev') else ''}" if info.get("dwg") else f"Drawing: {drawing}"
+
+
 def build(data, drawing, parts=1, layout=None, footer=""):
-    """The workbook's sheets for an inspection list. layout: "sheet" (the page to fill in), "list" (Pass / Fail
-    worked out, and AS9102 Form 3), or a list layout of your own like LAYOUT."""
+    """The workbook's sheets for an inspection list. layout: "sheet" (the page to fill in), "list" (the first
+    article: results with Pass / Fail worked out, and AS9102 Forms 1, 2 and 3), or a list layout of your own like
+    LAYOUT."""
     parts = min(max(int(parts or 1), 1), MAX_PARTS)
     if layout in (None, "sheet"):
         return [sheet(data, drawing, parts, footer)]
     page, where = inspection(data, drawing, parts, None if layout == "list" else layout)
-    return [page, form3(data, drawing, page["name"], where)]
+    spread = statistics(data, page["name"], where) if max(parts, len(data.get("samples") or [])) > 1 else None
+    return [page, *([spread] if spread else []), form1(data, drawing), form2(data, drawing), form3(data, drawing, page["name"], where)]
