@@ -7,12 +7,19 @@ table of every balloon (its number in red, description, gage, nominal, lower and
 columns; the table again for each further five parts, and on as many pages as it takes. What the parts measured is
 written in under each part (a result outside its limits in red), the other part columns left to fill in. footer: the
 shop's own lines, the first at the bottom left, the second at the bottom right.
+printing ({"header", "issues", "photos", "logo", "pictures", "who"}): a line across the top of every page saying what
+it's of (part, revision, sheet id, status: on unless header is False), and along the very bottom when it was printed,
+by whom and with what; the shop's logo at the top left (logo: a picture's bytes); the production issues not hidden
+(issues: True) on a page of their own; and the photos (photos: "small", three across, "medium", two, or "large", one
+to a page; pictures: {photo id: its bytes}) with what's drawn on them, each saying what it's of.
 
 Set in Calibri and Cambria where the computer has them (Windows does), else in the PDF's own Helvetica and Times.
 """
 
+import datetime
 import os
 
+from .. import __version__
 from . import balloons, report
 
 PAGE = (792.0, 612.0)
@@ -205,9 +212,120 @@ def _readable(doc, used):
         doc.update_stream(int(val.split()[0]), "".join(body).encode("ascii"))
 
 
-def write(path, data, drawing, parts=report.PER, footer=""):
+STATUS = {"draft": "Draft", "released": "Released", "superseded": "Superseded"}
+ISSUE_COLS = [("#", 50.5, 80.0), ("Balloon", 80.0, 125.0), ("Title", 125.0, 300.0), ("Tags", 300.0, 420.0),
+              ("Status", 420.0, 545.0), ("Job", 545.0, 595.0), ("Notes", 595.0, 740.6)]
+
+
+def _issue_status(i):
+    if i.get("status") == "resolved":
+        return "Resolved: moved to troubleshooting" if i.get("route") == "troubleshooting" else "Resolved: machinist fix"
+    return "Fixed, ready for lead" if i.get("status") == "fixed" else "Open"
+
+
+def _issues(sh, data):
+    """The production issues not hidden, on pages of their own."""
+    issues = [i for i in data.get("issues") or [] if not i.get("hidden")]
+    if not issues:
+        return
+    labels = {c["id"]: balloons.label(c) for c in data["chars"]}
+    y = sh.new_page()
+    sh.text("Production Issues", X[0], y + 12, "bold", 14)
+    y += 22
+    head = y
+    sh.box(X[0], y, X[-1], y + HEAD, 0, BLUE)
+    for label, a, b in ISSUE_COLS:
+        sh.text(label, (a + b) / 2, y + 10.8, "bolditalic", 9, "center", b - a - 4)
+    y += HEAD
+    for i in issues:
+        if y + ROW > BOTTOM:
+            sh.box(X[0], head, X[-1], y)
+            y = head = sh.new_page()
+        cells = [f"#{i['n']}", labels.get(i.get("char"), i.get("label") or ""), i.get("title") or "", ", ".join(i.get("tags") or []),
+                 _issue_status(i), i.get("job") or "", (i.get("notes") or "").replace("\n", "  ")]
+        for (label, a, b), s in zip(ISSUE_COLS, cells):
+            sh.text(s, a + 2, y + ROW - 3.9, "serif", 9, width=b - a - 4)
+        for _, a, _b in ISSUE_COLS[1:]:
+            sh.line(a, y, a, y + ROW)
+        y += ROW
+        sh.line(X[0], y, X[-1], y)
+    sh.box(X[0], head, X[-1], y)
+
+
+def _marks(page, rect, p):
+    """What's drawn on a photo, drawn over it where it's placed (rect), in the photo's own pixels scaled."""
+    import math
+    import pymupdf
+    k = rect.width / p["w"]
+    pt = lambda q: pymupdf.Point(rect.x0 + q[0] * k, rect.y0 + q[1] * k)  # noqa: E731
+    for m in p.get("marks") or []:
+        c = m.get("c", "#e02020").lstrip("#")
+        color = tuple(int(c[i:i + 2], 16) / 255 for i in (0, 2, 4)) if len(c) == 6 else (1, 0, 0)
+        w = max(m.get("w", 4) * k, 0.5)
+        s = page.new_shape()
+        if m["t"] == "pen" and len(m.get("pts") or []) > 1:
+            s.draw_polyline([pt(q) for q in m["pts"]])
+        elif m["t"] in ("line", "arrow"):
+            a, b = pt(m["a"]), pt(m["b"])
+            s.draw_line(a, b)
+            if m["t"] == "arrow":
+                ang, L = math.atan2(b.y - a.y, b.x - a.x), max(m.get("w", 4) * 4, 18) * k
+                for d in (0.45, -0.45):
+                    s.draw_line(b, pymupdf.Point(b.x - L * math.cos(ang + d), b.y - L * math.sin(ang + d)))
+        elif m["t"] == "oval":
+            s.draw_oval(pymupdf.Rect(pt(m["a"]), pt(m["b"])).normalize())
+        elif m["t"] == "rect":
+            s.draw_rect(pymupdf.Rect(pt(m["a"]), pt(m["b"])).normalize())
+        elif m["t"] == "text":
+            size = max((m.get("size") or 48) * k, 4)
+            page.insert_text(pt(m["at"]), m.get("s", ""), fontsize=size, color=color, fontname="hebo",
+                             render_mode=2, border_width=0.04 if color != (1, 1, 1) else 0.08)
+            continue
+        s.finish(color=color, width=w, lineCap=1, lineJoin=1)
+        s.commit()
+
+
+def _photos(sh, data, size, pictures):
+    """The photos with what's drawn on them, each saying what it's of: small three across, medium two, large one."""
+    import pymupdf
+    photos = [p for p in data.get("photos") or [] if p["id"] in pictures]
+    chars = {c["id"]: c for c in data["chars"]}
+    issues = {i["id"]: i for i in data.get("issues") or [] if not i.get("hidden")}
+    photos = [p for p in photos if (p["on"] == "char" and p["of"] in chars) or (p["on"] == "issue" and p["of"] in issues)]
+    if not photos:
+        return
+    across = {"small": 3, "medium": 2, "large": 1}[size]
+    gap, cap = 12.0, 14.0
+    width = (X[-1] - X[0] - gap * (across - 1)) / across
+    tall = (BOTTOM - TOP - 22 - cap) if across == 1 else width * 0.75
+    y = sh.new_page()
+    sh.text("Photos", X[0], y + 12, "bold", 14)
+    y += 22
+    col = 0
+    for p in photos:
+        if col == 0 and y + tall + cap > BOTTOM:
+            y = sh.new_page()
+        x = X[0] + col * (width + gap)
+        k = min(width / p["w"], tall / p["h"])
+        r = pymupdf.Rect(x, y, x + p["w"] * k, y + p["h"] * k)
+        sh.page.insert_image(r, stream=pictures[p["id"]])
+        _marks(sh.page, r, p)
+        if p["on"] == "char":
+            c = chars[p["of"]]
+            say = f"Balloon {balloons.label(c)}: {c.get('text') or ''}"
+        else:
+            i = issues[p["of"]]
+            say = f"Issue #{i['n']}: {i.get('title') or ''}"
+        sh.text(say, x, y + tall + 10, "sans", 9, width=width)
+        col += 1
+        if col == across:
+            col, y = 0, y + tall + cap + gap
+
+
+def write(path, data, drawing, parts=report.PER, footer="", printing=None):
     """Write the inspection sheet for an inspection list (see the top of this file). Returns how many pages."""
     import pymupdf
+    o = printing or {}
     info, chars = data.get("info") or {}, report.expanded(data["chars"])
     tables = -(-min(max(int(parts or 1), len(data.get("samples") or []), 1), report.MAX_PARTS) // report.PER)
     doc = pymupdf.open()
@@ -236,13 +354,39 @@ def write(path, data, drawing, parts=report.PER, footer=""):
             if not rows:
                 break
             y = sh.new_page()
+    if o.get("issues"):
+        _issues(sh, data)
+    if o.get("photos") in ("small", "medium", "large") and o.get("pictures"):
+        _photos(sh, data, o["photos"], o["pictures"])
     sh.flush()
+    # the logo, at the top left of the first page
+    logo_right = X[0]
+    if o.get("logo"):
+        try:
+            pix = pymupdf.Pixmap(o["logo"])
+            k = min(150 / pix.width, 36 / pix.height)
+            r = pymupdf.Rect(X[0], 12, X[0] + pix.width * k, 12 + pix.height * k)
+            doc[0].insert_image(r, stream=o["logo"])
+            logo_right = r.x1 + 10
+        except Exception:
+            pass
+    # what each page is of, along its top; when it was printed, by whom, with what, along the very bottom
+    head = ""
+    if o.get("header", True):
+        bits = [f"Part {info['part']}" if info.get("part") else "", f"Rev {info['rev']}" if info.get("rev") else "",
+                f"Job {info['job']}" if info.get("job") else "", data.get("sid") or "", STATUS.get(data.get("status") or "draft", "")]
+        head = "  ·  ".join(b for b in bits if b)
+    printed = f"Printed {datetime.datetime.now().strftime('%b %d, %Y %I:%M %p')}{(' by ' + o['who']) if o.get('who') else ''} · SolidSmurfs {__version__}" if o.get("header", True) else ""
     lines = [ln.strip() for ln in str(footer or "").splitlines() if ln.strip()]
     n = doc.page_count
     for i, page in enumerate(doc, 1):
         w = pymupdf.TextWriter(page.rect, color=BLACK)
         f = sh.fonts["sans"]
-        sh.used.setdefault(f.name, (f, set()))[1].update("".join(lines) + f"Page {i} of {n}")
+        sh.used.setdefault(f.name, (f, set()))[1].update("".join(lines) + f"Page {i} of {n}" + head + printed)
+        if head:
+            w.append((logo_right if i == 1 else X[0], 24.0 if i > 1 or logo_right == X[0] else 34.0), head, font=f, fontsize=8)
+        if printed:
+            w.append((PAGE[0] / 2 - f.text_length(printed, 6.5) / 2, 597.5), printed, font=f, fontsize=6.5)
         for k, ln in enumerate(lines[:1] + lines[2:]):
             w.append((33.4, 590.0 - 10.5 * k), ln, font=f, fontsize=9)
         if len(lines) > 1:
@@ -250,7 +394,7 @@ def write(path, data, drawing, parts=report.PER, footer=""):
         if n > 1:
             s = f"Page {i} of {n}"
             w.append((PAGE[0] / 2 - f.text_length(s, 9) / 2, 591.0), s, font=f, fontsize=9)
-        if lines or n > 1:
+        if lines or n > 1 or head or printed:
             w.write_text(page)
     try:
         doc.subset_fonts()

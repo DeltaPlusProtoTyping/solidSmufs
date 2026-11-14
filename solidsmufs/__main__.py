@@ -1,6 +1,7 @@
 """python -m solidsmufs [file] [--browser | --no-open] [--port N]"""
 
 import multiprocessing
+import os
 import sys
 
 
@@ -32,6 +33,7 @@ def main():
         return
     from solidsmufs.app import run
 
+    os.environ["SOLIDSMUFS_APP"] = "1"  # (the app keeps ballooned prints searchable and has roles; tests and scripts don't)
     sys.exit(run(sys.argv[1:]))
 
 

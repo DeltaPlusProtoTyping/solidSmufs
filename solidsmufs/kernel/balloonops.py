@@ -20,11 +20,33 @@ its places become entries of their own, each with its balloon.
 The comments are made again from the list after every change. A balloon whose comment is gone (its page was deleted,
 or it was removed in another program) leaves the list; one whose page moved follows it.
 Places in the list are in the page's own points (not turned); the window gets and gives them as the page is shown.
+Each characteristic may carry inspection tags ("tags": some of TAGS, in that order): how it's inspected, for sorting
+and finding, not printed.
+The list has a sheet id ("sid", SS-XXXXXX) of its own from when it's first written, that nothing edited changes; a list
+carried over from a last revision's says which it came from ("from"). A job detail changed once it was filled in needs
+a change note: each change is kept in "log" ([{"at", "who", "field", "old", "new", "note"}]).
+Production issues ("issues") are what has to be dialed in before a part runs, or while it does: each has a number
+("n", 1, 2, 3 on this sheet), the balloon it's about ("char", a characteristic's id, and "label", its number when last
+seen), a title, notes, tags (ISSUE_TAGS), the job number, and a status: "open", "fixed" (a machinist says it's fixed,
+ready for a lead) or "resolved", with how ("route": "machinist", a machinist's fix, or "troubleshooting", moved there).
+Hidden ones are out of the way but kept; one asked to be deleted ("delete": {"reason", "who", "at"}) is hidden and
+waits for someone to delete it for good, or to switch it back to hidden. Each has its history ("history").
+A list is a "draft" until it's released ("status"): released, its balloons and characteristics are fixed (the parts'
+results, the production issues and the job's details are still filled in); superseded by the next revision, nothing
+in it changes. Back to draft is how either is changed again, with a change note; each change of status is logged.
+Photos ("photos": [{"id", "on": "char" or "issue", "of": its id, "name", "w", "h", "at", "by", "marks"}]) are kept in
+the PDF as embedded files (ssp-<id>.jpg, no more than 1920 pixels along), each on a characteristic or an issue. What's
+drawn on one ("marks": lines, arrows, ovals, boxes, freehand, text, in its pixels) is kept beside it, never in the
+picture, so it can be shown, hidden or changed again.
 """
 
+import base64
+import datetime
+import getpass
 import json
 import math
 import re
+import secrets
 import statistics
 from pathlib import Path
 
@@ -42,10 +64,67 @@ def _rgb(color):
         return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
     except ValueError:
         return RED
-FIELDS = ("kind", "text", "count", "nominal", "plus", "minus", "lo", "hi", "places", "tol", "desc", "gage", "note", "reviewed", "zone", "mult")
+FIELDS = ("kind", "text", "count", "nominal", "plus", "minus", "lo", "hi", "places", "tol", "desc", "gage", "note", "reviewed", "zone", "mult", "tags")
+# how a characteristic is inspected: as many as apply, or none (not printed)
+TAGS = ("Visual", "Measured", "Dimension", "Finish", "Deburring", "Spot check", "100% check", "Custom gage")
+
+
+def _tags(given):
+    given = {str(t) for t in (given or [])}
+    return [t for t in TAGS if t in given] or None
+
+
+def who():
+    """Who's at this computer, First Last from their sign-in name (ben.pauza: Ben Pauza)."""
+    try:
+        name = getpass.getuser()
+    except Exception:
+        return ""
+    return " ".join(w.capitalize() for w in re.split(r"[._\s]+", name) if w)
+
+
+# what's changed by each edit: the characteristics (fixed once released), or the work on them (fixed once superseded)
+FIXED_RELEASED = {"auto", "add", "move", "edit", "sub", "multiply", "detach", "carry", "tag", "reviewed", "delete", "renumber",
+                  "view_add", "view_edit", "view_delete", "clear", "tols"}
+FIXED_SUPERSEDED = FIXED_RELEASED | {"part_add", "sample", "part_edit", "part_delete", "result", "import", "results_clear",
+                                     "issue_add", "issue_edit", "issue_act", "info", "photo_add", "photo_marks", "photo_delete"}
+PHOTO_MOST = 1920  # pixels along a photo's longer side
+MARK_KINDS = ("pen", "line", "arrow", "oval", "rect", "text")
+STATUSES = ("draft", "released", "superseded")
+ISSUE_TAGS = ("OK / watch", "Improve", "Out of tolerance", "Dimension", "Finish", "Deburring")
+ISSUE_ACTS = ("fixed", "resolve", "reopen", "hide", "show", "delete", "keep", "purge")
+
+
+def _issue_tags(given):
+    given = {str(t) for t in (given or [])}
+    return [t for t in ISSUE_TAGS if t in given]
+
+
+def _stamp():
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _sid():
+    return "SS-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
 
 
 class BalloonOps:
+    def _balloon_guard(self, op, args):
+        """A released list's characteristics aren't changed, and nothing in a superseded one is. A lead's actions wait
+        for a lead to unlock (kernel/roles.py)."""
+        if not op.startswith("balloon_"):
+            return
+        from . import roles
+        roles.need_for(op, args)
+        what = op[len("balloon_"):]
+        if what not in FIXED_SUPERSEDED or (what == "import" and args.get("preview")):
+            return
+        status = self._insp().get("status") or "draft"
+        if status == "superseded":
+            raise ValueError("This revision is superseded: nothing in it changes. Back to draft (Status) to change it.")
+        if status == "released" and what in FIXED_RELEASED:
+            raise ValueError("This list is released: its balloons and characteristics are fixed. Back to draft (Status) to change them.")
+
     # ================================================================== the list, kept in the PDF
     def _insp(self):
         import pymupdf
@@ -114,6 +193,7 @@ class BalloonOps:
 
     def _insp_write(self, data):
         doc = self.fz
+        data.setdefault("sid", _sid())  # (once, for good)
         if data.get("views"):
             data["vmarks"] = True  # (its views have their marks on their pages, drawn with it)
         cat = doc.pdf_catalog()
@@ -243,7 +323,13 @@ class BalloonOps:
                           "type": balloons.type_of(c), "where": f"S{c['page'] + 1}" + (f"-{c['zone']}" if c.get("zone") else ""),
                           "at": self._pt_out(pg, c["at"]), **{k: c.get(k) for k in FIELDS}})
         from . import report
-        return {"chars": chars, "tols": data.get("tols") or {}, "unit": data.get("unit"), "labels": balloons.KIND_LABEL,
+        labels = {c["id"]: balloons.label(c) for c in data["chars"]}
+        issues = [{**i, "label": labels.get(i.get("char"), i.get("label")), "gone": i.get("char") is not None and i.get("char") not in labels}
+                  for i in data.get("issues") or []]
+        return {"sid": data.get("sid"), "from": data.get("from"), "log": data.get("log") or [], "tags": list(TAGS), "who": who(),
+                "status": data.get("status") or "draft", "photos": data.get("photos") or [],
+                "issues": issues, "issueTags": list(ISSUE_TAGS),
+                "chars": chars, "tols": data.get("tols") or {}, "unit": data.get("unit"), "labels": balloons.KIND_LABEL,
                 "info": data.get("info") or {}, "fields": [[k, label] for k, label, _ in report.INFO], "layouts": report.LAYOUTS,
                 "samples": data.get("samples") or [], "results": data.get("results") or {},
                 "views": [{**v, "rect": self._out(self.fz[v["page"]], v["rect"]), "count": sum(1 for c in chars if c["view"] == v["id"])}
@@ -532,6 +618,8 @@ class BalloonOps:
             c["mult"] = None  # (one place: nothing to multiply)
         if o.get("reviewed") is not None:
             c["reviewed"] = bool(o["reviewed"])
+        if "tags" in o:
+            c["tags"] = _tags(o["tags"])
         if o.get("tol") is not None:
             if o["tol"] in ("ref", "basic"):
                 c.update(plus=None, minus=None, lo=None, hi=None, tol=o["tol"])
@@ -885,7 +973,7 @@ class BalloonOps:
         kept, changed = [], []
         for o, n, same in pairs:
             n["n"], n["sub"] = o["n"], o.get("sub")
-            for k in ("desc", "gage", "note"):
+            for k in ("desc", "gage", "note", "tags"):
                 if o.get(k):
                     n[k] = o[k]
             if o.get("mult") and (o.get("count") or 1) == (n.get("count") or 1):
@@ -914,12 +1002,26 @@ class BalloonOps:
         data["chars"].sort(key=lambda c: (c["n"], c.get("sub") or 0))
         info = {**old["info"], **{k: v for k, v in (data.get("info") or {}).items() if v}}
         data["info"] = info
+        if old.get("sid") and not data.get("from"):
+            data["from"] = old["sid"]
         label = lambda c: balloons.label(c)  # noqa: E731
         report = {"from": Path(path).name, "kept": len(kept),
                   "changed": [{"n": label(n), "was": o["text"], "now": n["text"]} for o, n in changed],
                   "added": [{"n": label(n), "now": n["text"]} for n in added],
                   "removed": [{"n": label(o), "was": o["text"]} for o in removed]}
         return self._balloon_done(data, {c["page"] for c in data["chars"]}, {"carried": report})
+
+    def op_balloon_tag(self, ids, tag, on=True):
+        """Put an inspection tag on these characteristics, or take it off."""
+        if tag not in TAGS:
+            raise ValueError(f"There's no tag {tag}.")
+        data = self._insp()
+        want = {int(i) for i in ids}
+        self._snapshot()
+        for c in data["chars"]:
+            if c["id"] in want:
+                c["tags"] = _tags(set(c.get("tags") or []) | {tag} if on else set(c.get("tags") or []) - {tag})
+        return self._balloon_done(data, [])
 
     def op_balloon_reviewed(self, ids, on=True):
         """Mark these characteristics as checked against the print, or not."""
@@ -1084,22 +1186,245 @@ class BalloonOps:
             balloons.limits(c, data["tols"])
         return self._balloon_done(data, [])
 
-    # ================================================================== the inspection report
-    def op_balloon_info(self, info):
-        """What the report says about the job ({"part", "name", "rev", "customer", "job", "lot", "fai", "inspector",
-        "parts": how many parts' results it has room for}), kept with the list."""
-        from . import report
+    def op_balloon_status(self, status, note=None):
+        """Release the list ("released"), mark it superseded by the next revision ("superseded"), or put it back to
+        "draft" to change it (which needs a note saying why). Each change is logged."""
+        if status not in STATUSES:
+            raise ValueError(f"A list is {', '.join(STATUSES)}, not {status}.")
         data = self._insp()
+        was = data.get("status") or "draft"
+        if status == was:
+            return self._balloon_done(data, [])
+        if status == "draft" and not str(note or "").strip():
+            raise ValueError("Say why it goes back to draft: a change note is needed.")
+        if status == "released" and not data["chars"]:
+            raise ValueError("There's nothing to release: balloon the print first.")
         self._snapshot()
-        data["info"] = report.clean_info(info)
+        data["status"] = status
+        data["log"] = (data.get("log") or []) + [{"at": _stamp(), "who": who(), "field": "status", "old": was, "new": status,
+                                                 "note": str(note or "").strip()[:1000]}]
         return self._balloon_done(data, [])
 
-    def op_balloon_report(self, path, parts=None, layout=None, footer=""):
+    # ================================================================== production issues
+    @staticmethod
+    def _issue(data, id):
+        for i in data.get("issues") or []:
+            if i["id"] == int(id):
+                return i
+        raise ValueError("That issue is gone.")
+
+    def op_balloon_issue_add(self, char=None, title="", notes="", tags=None, job=None):
+        """A new production issue, about a balloon (char: its characteristic's id) or none. Its job number is the
+        sheet's unless another is given."""
+        data = self._insp()
+        if char is not None:
+            c = self._balloon_find(data, char)
+        self._snapshot()
+        issues = data.setdefault("issues", [])
+        id = max([i["id"] for i in issues], default=0) + 1
+        n = max([i["n"] for i in issues], default=0) + 1
+        me, at = who(), _stamp()
+        issues.append({"id": id, "n": n, "char": c["id"] if char is not None else None, "label": balloons.label(c) if char is not None else None,
+                       "title": str(title or "").strip()[:200], "notes": str(notes or "").strip()[:4000], "tags": _issue_tags(tags),
+                       "job": str(job if job is not None else (data.get("info") or {}).get("job", "")).strip()[:60],
+                       "status": "open", "route": None, "hidden": False, "delete": None, "by": me, "at": at,
+                       "history": [{"at": at, "who": me, "what": "Added"}]})
+        return self._balloon_done(data, [], {"issue": id})
+
+    def op_balloon_issue_edit(self, id, **o):
+        """Change an issue's title, notes, tags, job number, or the balloon it's about (char: an id, or None)."""
+        data = self._insp()
+        i = self._issue(data, id)
+        if o.get("char") is not None:
+            c = self._balloon_find(data, o["char"])
+        self._snapshot()
+        said = []
+        for k, most in (("title", 200), ("notes", 4000), ("job", 60)):
+            if k in o and o[k] is not None and str(o[k]).strip() != i.get(k, ""):
+                i[k] = str(o[k]).strip()[:most]
+                said.append({"title": "Title", "notes": "Notes", "job": "Job number"}[k])
+        if "tags" in o and _issue_tags(o["tags"]) != i.get("tags"):
+            i["tags"] = _issue_tags(o["tags"])
+            said.append("Tags")
+        if "char" in o and (o["char"] if o["char"] is None else int(o["char"])) != i.get("char"):
+            i["char"], i["label"] = (c["id"], balloons.label(c)) if o["char"] is not None else (None, None)
+            said.append("Balloon")
+        if said:
+            i["history"].append({"at": _stamp(), "who": who(), "what": "Changed " + ", ".join(said).lower()})
+        return self._balloon_done(data, [])
+
+    def op_balloon_issue_act(self, id, act, route=None, reason=None):
+        """What's done with an issue: "fixed" (a machinist's fixed it: ready for a lead), "resolve" (route: "machinist",
+        a machinist's fix, or "troubleshooting", moved there), "reopen", "hide", "show", "delete" (hidden and asked to
+        be deleted for good, with a reason), "keep" (just hidden again: no longer to be deleted), "purge" (deleted for
+        good: only one asked to be deleted)."""
+        if act not in ISSUE_ACTS:
+            raise ValueError(f"Nothing is done to an issue by {act}.")
+        data = self._insp()
+        i = self._issue(data, id)
+        self._snapshot()
+        me, at = who(), _stamp()
+        what = None
+        if act == "fixed":
+            if i["status"] == "resolved":
+                raise ValueError("It's resolved already.")
+            i["status"], what = "fixed", "Fixed, ready for lead"
+        elif act == "resolve":
+            if route not in ("machinist", "troubleshooting"):
+                raise ValueError("Say how it's resolved: a machinist's fix, or moved to troubleshooting.")
+            i["status"], i["route"] = "resolved", route
+            what = "Resolved: machinist fix" if route == "machinist" else "Resolved: moved to troubleshooting"
+        elif act == "reopen":
+            i["status"], i["route"], what = "open", None, "Reopened"
+        elif act == "hide":
+            i["hidden"], what = True, "Hidden"
+        elif act == "show":
+            i["hidden"], i["delete"], what = False, None, "Shown again"
+        elif act == "delete":
+            if not str(reason or "").strip():
+                raise ValueError("Say why it's to be deleted.")
+            i["hidden"], i["delete"] = True, {"reason": str(reason).strip()[:500], "who": me, "at": at}
+            what = f"Asked to delete: {i['delete']['reason']}"
+        elif act == "keep":
+            i["delete"], what = None, "Switched to hidden: not to be deleted"
+        elif act == "purge":
+            if not i.get("delete"):
+                raise ValueError("Only an issue asked to be deleted is deleted for good: Delete it first.")
+            data["issues"] = [x for x in data["issues"] if x is not i]
+            for p in [p for p in data.get("photos") or [] if p["on"] == "issue" and p["of"] == i["id"]]:
+                self._photo_drop(data, p)
+        if what:
+            i["history"].append({"at": at, "who": me, "what": what})
+        return self._balloon_done(data, [])
+
+    # ================================================================== roles
+    def op_balloon_roles(self, action="status", password=None, role=None, new=None, current=None):
+        """The roles on this PC (kernel/roles.py): "status"; "unlock" (password); "lock"; "set" (role, new, current)."""
+        from . import roles
+        if action == "unlock":
+            roles.unlock(str(password or ""))
+        elif action == "lock":
+            roles.lock()
+        elif action == "set":
+            return roles.set_password(role, new, current)
+        return roles.status()
+
+    # ================================================================== searching
+    def op_balloon_search(self, query, here=False):
+        """Characteristics and production issues matching every word of the query: on this print (here), or on
+        every ballooned print saved on this computer, this one as it is now first (kernel/inspindex.py)."""
+        from . import inspindex
+        hits = inspindex.search(query, self._insp(), self.path)
+        return [x for x in hits if x["here"]] if here else hits
+
+    # ================================================================== photos
+    def _photo_drop(self, data, p):
+        try:
+            self.fz.embfile_del(f"ssp-{p['id']}")
+        except Exception:
+            pass
+        data["photos"] = [x for x in data.get("photos") or [] if x is not p]
+
+    def _photo(self, data, id):
+        for p in data.get("photos") or []:
+            if p["id"] == int(id):
+                return p
+        raise ValueError("That photo is gone.")
+
+    def op_balloon_photo_add(self, on, of, image, name=""):
+        """A photo on a characteristic (on "char") or an issue (on "issue"), of: its id; image: the picture as a data URL
+        or base64. It's kept as a JPEG no more than PHOTO_MOST pixels along."""
+        import pymupdf
+        data = self._insp()
+        if on == "char":
+            self._balloon_find(data, of)
+        elif on == "issue":
+            self._issue(data, of)
+        else:
+            raise ValueError("A photo goes on a characteristic or an issue.")
+        raw = base64.b64decode(str(image).split(",", 1)[-1])
+        try:
+            pix = pymupdf.Pixmap(raw)
+        except Exception:
+            raise ValueError("That isn't a picture this can read (a JPEG, PNG, GIF, BMP or TIFF).")
+        if pix.alpha or pix.n not in (1, 3):
+            pix = pymupdf.Pixmap(pymupdf.csRGB, pix)  # (no transparency in a JPEG)
+            if pix.alpha:
+                pix = pymupdf.Pixmap(pix, 0)
+        k = PHOTO_MOST / max(pix.width, pix.height)
+        if k < 1:
+            pix = pymupdf.Pixmap(pix, round(pix.width * k), round(pix.height * k), None)
+        jpg = pix.tobytes("jpg", jpg_quality=85)
+        self._snapshot()
+        photos = data.setdefault("photos", [])
+        id = max([p["id"] for p in photos], default=0) + 1
+        self.fz.embfile_add(f"ssp-{id}", jpg, filename=f"ssp-{id}.jpg", desc="SolidSmurfs inspection photo")
+        photos.append({"id": id, "on": on, "of": int(of), "name": str(name or "")[:120], "w": pix.width, "h": pix.height,
+                       "at": _stamp(), "by": who(), "marks": []})
+        return self._balloon_done(data, [], {"photo": id})
+
+    def op_balloon_photo(self, id):
+        """A photo's picture, as a data URL (it isn't changed)."""
+        data = self._insp()
+        p = self._photo(data, id)
+        jpg = self.fz.embfile_get(f"ssp-{p['id']}")
+        return {**p, "url": "data:image/jpeg;base64," + base64.b64encode(jpg).decode("ascii")}
+
+    def op_balloon_photo_marks(self, id, marks):
+        """What's drawn on a photo, all of it (in its pixels): [{"t": pen, line, arrow, oval, rect or text, "c": color,
+        "w": width, "pts" / "a", "b" / "at", "s", "size"}]."""
+        data = self._insp()
+        p = self._photo(data, id)
+        out = []
+        for m in marks or []:
+            if not isinstance(m, dict) or m.get("t") not in MARK_KINDS:
+                continue
+            keep = {"t": m["t"], "c": str(m.get("c") or "#e02020")[:9], "w": max(min(float(m.get("w") or 4), 60), 1)}
+            num = lambda q: [round(float(q[0]), 1), round(float(q[1]), 1)]  # noqa: E731
+            if m["t"] == "pen":
+                keep["pts"] = [num(q) for q in (m.get("pts") or [])[:4000]]
+            elif m["t"] == "text":
+                keep.update(at=num(m["at"]), s=str(m.get("s") or "")[:300], size=max(min(float(m.get("size") or 48), 400), 6))
+            else:
+                keep.update(a=num(m["a"]), b=num(m["b"]))
+            out.append(keep)
+        self._snapshot()
+        p["marks"] = out
+        return self._balloon_done(data, [])
+
+    def op_balloon_photo_delete(self, id):
+        data = self._insp()
+        p = self._photo(data, id)
+        self._snapshot()
+        self._photo_drop(data, p)
+        return self._balloon_done(data, [])
+
+    # ================================================================== the inspection report
+    def op_balloon_info(self, info, note=None):
+        """What the report says about the job ({"part", "name", "rev", "customer", "job", "lot", "fai", "inspector",
+        "parts": how many parts' results it has room for}), kept with the list. A detail that was filled in and is
+        changed (or emptied) needs a note saying why: each change is logged with it, who and when."""
+        from . import report
+        data = self._insp()
+        was, now = data.get("info") or {}, report.clean_info(info)
+        changed = [(k, str(was[k]), str(now.get(k, ""))) for k, _, _ in report.INFO if was.get(k) not in (None, "") and str(was[k]) != str(now.get(k, ""))]
+        if changed and not str(note or "").strip():
+            raise ValueError("A job detail that was filled in has changed: a change note is needed.")
+        self._snapshot()
+        data["info"] = now
+        at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        data["log"] = (data.get("log") or []) + [{"at": at, "who": who(), "field": k, "old": o, "new": n, "note": str(note).strip()[:1000]}
+                                                 for k, o, n in changed]
+        return self._balloon_done(data, [])
+
+    def op_balloon_report(self, path, parts=None, layout=None, footer="", printing=None):
         """Write the inspection report as an Excel workbook (kernel/report.py). layout: "sheet", the page to print
         and fill in (five parts to a table), or "list", the list with its limits, a column for each part's results
         with Pass / Fail worked out from them, and AS9102 Form 3. parts: how many parts' results to make room for
         (else what the list's details say). footer: the shop's own lines for the bottom of the sheet.
-        The inspection sheet is written as a PDF too (kernel/reportpdf.py), beside the workbook under its name."""
+        The inspection sheet is written as a PDF too (kernel/reportpdf.py), beside the workbook under its name.
+        printing: what else the PDF has ({"header", "issues", "photos": "small" / "medium" / "large", "logo": a picture
+        as a data URL}): see reportpdf.write."""
         from . import report, xlsx
         data = self._insp()
         if not data["chars"]:
@@ -1114,7 +1439,21 @@ class BalloonOps:
         if pdf.resolve() == Path(self.path).resolve():
             raise ValueError(f"The report's PDF would take the print's own name, {pdf.name}. Save the report under another name.")
         try:
-            pages = reportpdf.write(str(pdf), data, Path(self.path).name, parts, footer)
+            o = dict(printing or {})
+            if o.get("photos") in ("small", "medium", "large"):
+                o["pictures"] = {}
+                for p in data.get("photos") or []:
+                    try:
+                        o["pictures"][p["id"]] = self.fz.embfile_get(f"ssp-{p['id']}")
+                    except Exception:
+                        pass
+            if o.get("logo"):
+                try:
+                    o["logo"] = base64.b64decode(str(o["logo"]).split(",", 1)[-1])
+                except Exception:
+                    o["logo"] = None
+            o["who"] = who()
+            pages = reportpdf.write(str(pdf), data, Path(self.path).name, parts, footer, o)
         except (PermissionError, OSError) as e:
             if not isinstance(e, PermissionError) and "ermission" not in str(e) and "open" not in str(e):
                 raise

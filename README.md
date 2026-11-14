@@ -345,6 +345,39 @@ It asks first what to read, and remembers the answers:
   ("Calipers") are typed in the list; without a description the sheet says Dimension, Diameter, Radius and so on.
 - **Saved in the PDF:** the balloons are real marks in the file, so the saved print shows and prints them in any PDF
   reader, and the list comes back with them when the file is opened here again.
+- **Inspection tags:** each characteristic can be tagged Visual, Measured, Dimension, Finish, Deburring, Spot check,
+  100% check or Custom gage (as many as apply, or none): the **Tags** column, the Edit dialog, or a row's right-click
+  menu. **Show** filters the list by tag. Tags aren't printed.
+- **Sheet ID and job details:** a list gets a sheet ID (SS-XXXXXX) when it's first saved, shown beside the mode's name;
+  it never changes, and a revision carried over says which sheet it came from. **Job…** holds the job's details (part,
+  revision, customer, job number, lot…). Changing one that was filled in asks for a **change note**, kept with the old
+  and new value, who and when: ✎ beside the field shows its changes.
+- **Production Issues** (the third tab): what has to be dialed in before the part runs, or while it does. An issue is
+  on a balloon (or none), with a title, tags (OK / watch, Improve, Out of tolerance, Dimension, Finish, Deburring),
+  notes, photos and the job number (the sheet's, unless changed). A machinist marks it **Fixed, ready for lead**; a lead
+  **resolves** it (a machinist's fix, or moved to troubleshooting) or reopens it. A balloon with an open issue has a red
+  flag in the list. **Hide** puts one out of the way; **Delete** hides it and asks, with a reason, for it to be deleted
+  for good: **Switch to hide** takes that back, **Delete permanently** does it. Each issue keeps its history.
+- **Draft, Released, Superseded:** the status beside the sheet ID. Released, the balloons and characteristics are fixed,
+  while results, issues and job details are still filled in; superseded by the next revision, nothing changes. **Back
+  to draft** (with a change note) changes it again. Every change of status is logged.
+- **Roles (lead password):** the lock beside the status. With no password set there are no roles. Set a **lead
+  password** and releasing, back to draft, marking superseded, resolving or reopening an issue and deleting one for
+  good ask for it; it then stays unlocked for four hours, and each lead action starts the four hours again (**Lock
+  now** locks it). Anyone may do the rest: balloon, type results, add issues, mark them fixed, hide them, ask for them
+  to be deleted. An optional **admin password** does what the lead's does and changes either password. They're kept
+  hashed on this PC (`%APPDATA%\SolidSmufs\roles.json`), for whoever uses it: enough to keep the wrong button from
+  being pressed, not a lock against someone who edits the files.
+- **Photos** on a characteristic (its Edit dialog) or an issue: **+ Photo…**, or paste one. A photo opens nearly full
+  screen; **Edit markup** draws arrows, lines, ovals, boxes, sketches and text (Illini orange among the colors), with
+  undo and redo. The marks are kept beside the photo, never in it, so **Hide markup** shows it as taken. Photos are
+  kept in the PDF (no more than 1920 pixels along). *Remove hidden info* in the PDF editor takes them out.
+- **Search…:** characteristics and issues by balloon number, dimension, description, gage, tags or an earlier fix's
+  notes, on this print or on every ballooned print saved on this computer (kept in
+  `%APPDATA%\SolidSmufs\inspections.json`, nothing sent anywhere). A hit on another print opens it.
+- **The report's PDF** can also have a header line on every page (part, revision, job, sheet ID, status) and when it
+  was printed, by whom and with what version; the production issues; the photos with their markup (small, medium or
+  large); and a logo, chosen once and remembered on this computer.
 
 It's a first pass by rules, to check against the print, not a finished inspection plan. What it doesn't do yet: read an ISO fit class into limits, read a CMM program's own report format (export it as
 CSV or Excel), balloon a 3D model's PMI, let a report be laid out by hand, or balloon a picture (print it to a PDF first). A

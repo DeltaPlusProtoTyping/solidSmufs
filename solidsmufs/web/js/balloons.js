@@ -7,6 +7,14 @@
 // The dock has a second tab, Results: a column for each part inspected, to type what it measured for every
 // characteristic. A result is green inside its limits and red outside them, and each row says Pass or Fail. The parts
 // and their results are kept with the list in the PDF, and go into the report.
+// The third tab, Production Issues: what has to be dialed in before a part runs, or while it does, each about a balloon.
+// A machinist marks one fixed, ready for a lead; a lead resolves it (a machinist's fix, or moved to troubleshooting) or
+// reopens it. Hide puts one out of the way; Delete hides it and asks for it to be deleted for good.
+// A list is a Draft until it's released: then its balloons and characteristics are fixed, while results, issues and the
+// job's details are still filled in. Superseded by the next revision, nothing in it changes. Back to draft (with a
+// change note) is how either is changed again.
+// Roles, on this PC: with a lead password set, a lead's actions (release, back to draft, superseded, resolving or
+// reopening an issue, deleting one for good) ask for it first, and stay unlocked for four hours from the last one.
 // Views are boxes drawn round the drawing's views: their balloons are drawn in the view's color, and Renumber goes
 // view by view (by rows, by columns, or clockwise round the view), each from its own start number if it has one.
 // A characteristic that applies in several places (4X) can be multiplied: one balloon still, but a row for each place
@@ -16,6 +24,7 @@
 // editor's run(), so it's undone with Ctrl+Z.
 import { api } from './api.js';
 import { h, toast, modal, menu } from './ui.js';
+import { photoStrip } from './balloonphotos.js';
 
 const TOLS = [['0', 'X'], ['1', '.X'], ['2', '.XX'], ['3', '.XXX'], ['4', '.XXXX'], ['angle', 'Angles']];
 const MEASURED = new Set(['dim', 'angle', 'chamfer']);
@@ -24,7 +33,13 @@ const rectOf = (a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a
 const decimals = (s) => ((String(s).split(/[.,]/)[1] || '').length);
 const keep = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage off */ } };
 const kept = (k, d = '') => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
-const empty = () => ({ chars: [], tols: {}, unit: null, labels: {}, info: {}, fields: [], layouts: [], samples: [], results: {}, views: [] });
+const empty = () => ({ chars: [], tols: {}, unit: null, labels: {}, info: {}, fields: [], layouts: [], samples: [], results: {}, views: [], tags: [], log: [], sid: null, issues: [], issueTags: [], photos: [] });
+const ISSUE_SHOW = [['open', 'Not resolved'], ['all', 'All'], ['resolved', 'Resolved'], ['hidden', 'Hidden'], ['delete', 'To be deleted']];
+const issueStatus = (i) => (i.delete ? 'To be deleted' : i.status === 'fixed' ? 'Fixed, ready for lead'
+  : i.status === 'resolved' ? (i.route === 'troubleshooting' ? 'Resolved: moved to troubleshooting' : 'Resolved: machinist fix') : 'Open');
+const unresolved = (i) => !i.hidden && i.status !== 'resolved';
+const STATUS_LABEL = { draft: 'Draft', released: 'Released', superseded: 'Superseded' };
+const when = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? String(iso || '') : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); };
 const ORDERS = [['list', 'In list order', 'Close the gaps, keeping the order they are in'], ['rows', 'By rows', 'Across the sheet a row at a time, top to bottom'],
   ['columns', 'By columns', 'Down the sheet a column at a time, left to right'], ['clockwise', 'Clockwise', "Round from twelve o'clock about the middle of each view"]];
 // does a result meet its characteristic? true, false, or null when that can't be said (nothing there, words, no limits)
@@ -75,6 +90,7 @@ const COLS = [
   { k: 'tol', head: 'Tol Type', w: 86, edit: 'select', tip: "General: the size has no tolerance of its own, so it takes the title block's.\nReference and Basic sizes have no limits." },
   { k: 'desc', head: 'Description', w: 180, edit: 'text', tip: 'What it is, in words: Overall Length, Cross Hole Diameter…' },
   { k: 'gage', head: 'Gage', w: 140, edit: 'text', tip: "What it's checked with: Calipers, Height Gage, Gage Pin…" },
+  { k: 'tags', head: 'Tags', w: 160, edit: 'tags', tip: 'How it is inspected: Visual, Measured, Spot check, 100% check, Custom gage…\nAs many as apply, or none. Not printed.' },
   { k: 'note', head: 'Note', w: 220, edit: 'text' },
 ];
 const FILTERS = [['all', 'All'], ['todo', 'Not reviewed'], ['done', 'Reviewed'], ['open', 'No limits yet']];
@@ -92,7 +108,8 @@ export class Balloons {
     this.adding = false;
     this.busy = false;
     this.filter = 'all';
-    this.tab = 'chars'; // which of the dock's two lists is showing: 'chars', or 'results'
+    this.tab = 'chars'; // which of the dock's lists is showing: 'chars', 'results' or 'issues'
+    this.ishow = 'open'; // which issues the Issues tab shows
     this.col = 'text'; // the column last clicked: where Enter starts typing
     this.btn = h('button', { class: 'pv-btn pv-toggle', text: 'Balloon',
       title: 'Ballooning mode: number every dimension, tolerance, thread, finish, geometric tolerance and note on this print,\nlist them with their limits, and write the inspection report. The balloons are saved into the PDF.\nClick again to go back to the PDF view.',
@@ -117,6 +134,129 @@ export class Balloons {
   }
 
   get ed() { return this.v.editor; }
+
+  // the characteristics are fixed: the list is released or superseded
+  get fixed() { return (this.data.status || 'draft') !== 'draft'; }
+
+  _fixedSay() {
+    toast(this.data.status === 'superseded' ? 'This revision is superseded: nothing in it changes. Back to draft (the status beside the sheet id) to change it.'
+      : 'This list is released: its balloons and characteristics are fixed. Back to draft (the status beside the sheet id) to change them.', 'info');
+  }
+
+  _statusMenu(anchor) {
+    const s = this.data.status || 'draft';
+    menu(anchor, [
+      { head: `Status: ${STATUS_LABEL[s]}` },
+      s === 'draft' ? { label: 'Release', action: () => this.release() } : null,
+      s === 'released' ? { label: 'Mark superseded (by the next revision)', action: () => this._lead(() => this.run('balloon_status', { status: 'superseded' })) } : null,
+      s !== 'draft' ? { label: 'Back to draft…', action: async () => {
+        if (!await this._asLead()) return;
+        const note = await this._ask('Back to draft', 'Why', 'Back to draft', s === 'superseded' ? 'It becomes a draft to change. The change note is kept with who and when.' : 'Its balloons and characteristics can be changed again. The change note is kept with who and when.');
+        if (note) this._lead(() => this.run('balloon_status', { status: 'draft', note }));
+      } } : null,
+    ]);
+  }
+
+  // ------------------------------------------------------------------ roles: a lead's actions, behind the lead password
+  _roleText() {
+    const r = this.roles;
+    if (!r?.on) return 'Roles off ▾';
+    return r.level ? `🔓 ${r.level === 'admin' ? 'Admin' : 'Lead'} ▾` : '🔒 Operator ▾';
+  }
+
+  _roleTip() {
+    const r = this.roles;
+    if (!r?.on) return 'No lead password is set on this PC, so everyone may release, resolve and delete.\nSet one to keep those for leads.';
+    if (r.level) return `Unlocked as ${r.level} until ${new Date(r.until).toLocaleTimeString(undefined, { timeStyle: 'short' })}: each lead action starts the four hours again.`;
+    return "Releasing, back to draft, resolving or reopening an issue and deleting one for good are a lead's:\nthey ask for the lead password, then stay unlocked for four hours.";
+  }
+
+  async _rolesRefresh() {
+    try { this.roles = await api.pdfEdit(this.doc.id, 'balloon_roles', {}); } catch { /* (kept as it was) */ }
+    this._row();
+  }
+
+  // a lead's action: unlocked first if it has to be (false: it wasn't)
+  async _asLead() {
+    if (!this.roles?.on || this.roles.level) return true;
+    const pw = await this._ask('Lead password', 'Password', 'Unlock', "That's a lead's to do. The lead (or admin) password unlocks it, and every lead action for the next four hours.", 'password');
+    if (!pw) return false;
+    try { this.roles = await api.pdfEdit(this.doc.id, 'balloon_roles', { action: 'unlock', password: pw }); } catch (e) { toast(e.message, 'error'); return false; }
+    this._row();
+    return true;
+  }
+
+  async _lead(fn) {
+    if (!await this._asLead()) return null;
+    const r = await fn();
+    this._rolesRefresh(); // (the four hours start again)
+    return r;
+  }
+
+  _rolesMenu(anchor) {
+    const r = this.roles || {};
+    const roleAct = async (o) => {
+      try { this.roles = await api.pdfEdit(this.doc.id, 'balloon_roles', o); } catch (e) { toast(e.message, 'error'); return false; }
+      this._row();
+      return true;
+    };
+    menu(anchor, [
+      { head: r.on ? (r.level ? `Unlocked as ${r.level}` : 'Operator: lead actions locked') : 'No roles on this PC' },
+      r.on && !r.level ? { label: 'Unlock…', action: () => this._asLead() } : null,
+      r.level ? { label: 'Lock now', action: () => roleAct({ action: 'lock' }) } : null,
+      { sep: true },
+      { label: r.lead ? 'Change the lead password…' : 'Set a lead password…', action: () => this._setPassword('lead') },
+      { label: r.admin ? 'Change the admin password…' : 'Set an admin password…', action: () => this._setPassword('admin') },
+    ]);
+  }
+
+  _setPassword(role) {
+    const r = this.roles || {};
+    const has = !!r[role], free = r.level === 'admin';
+    const field = (label) => { const inp = h('input', { type: 'password', autocomplete: 'new-password' }); return [inp, h('label', { class: 'pe-frow' }, h('span', { text: label }), inp)]; };
+    const [cur, curRow] = field(`The ${role} password now`);
+    const [pw, pwRow] = field('New password');
+    const [again, againRow] = field('Again');
+    let dlg = null;
+    const save = async () => {
+      if (pw.value !== again.value) { toast("The two new passwords don't match.", 'info'); return; }
+      if (!pw.value && !has) { toast('Type the new password.', 'info'); return; }
+      try { this.roles = await api.pdfEdit(this.doc.id, 'balloon_roles', { action: 'set', role, new: pw.value, current: cur.value }); } catch (e) { toast(e.message, 'error'); return; }
+      dlg.close();
+      this._row();
+      toast(pw.value ? `The ${role} password is set.` : `The ${role} password is taken away.`);
+    };
+    for (const el of [cur, pw, again]) el.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') save(); });
+    dlg = modal(`${has ? 'Change' : 'Set'} the ${role} password`, h('div', { class: 'pe-fprops bl-props' },
+      h('p', { class: 'bl-hint', text: role === 'lead'
+        ? 'With a lead password, releasing, back to draft, resolving or reopening an issue and deleting one for good ask for it, then stay unlocked for four hours. Kept on this PC, for everyone who uses it.'
+        : 'The admin password does what the lead password does, and changes either password. Kept on this PC.' }),
+      has && !free ? curRow : '', pwRow, againRow,
+      has ? h('p', { class: 'bl-hint', text: 'Leave the new password empty to take it away.' }) : '',
+      h('div', { class: 'pe-pop-foot' }, h('span', { class: 'pv-grow' }),
+        h('button', { class: 'btn', text: 'Cancel', onclick: () => dlg.close() }),
+        h('button', { class: 'btn primary', text: 'Save', onclick: save }))), { width: 520 });
+    setTimeout(() => (has && !free ? cur : pw).focus(), 30);
+  }
+
+  async release() {
+    if (!await this._asLead()) return;
+    const d = this.data, todo = d.chars.filter((c) => !c.reviewed).length, bare = d.chars.filter(open).length;
+    const warn = [todo ? `${todo} of ${d.chars.length} characteristics aren't reviewed.` : '', bare ? `${bare} have no limits yet.` : ''].filter(Boolean).join(' ');
+    const ok = await new Promise((done) => {
+      let dlg = null, answered = false;
+      const answer = (v) => { if (answered) return; answered = true; dlg.close(); done(v); };
+      dlg = modal('Release', h('div', { class: 'pe-fprops bl-props' },
+        h('p', { text: 'Released, the balloons and characteristics are fixed: the parts\' results, production issues and job details are still filled in. Back to draft changes them again, with a change note.' }),
+        warn ? h('p', { class: 'bl-warn', text: warn }) : '',
+        h('div', { class: 'pe-pop-foot' }, h('span', { class: 'pv-grow' }),
+          h('button', { class: 'btn', text: 'Cancel', onclick: () => answer(false) }),
+          h('button', { class: 'btn primary', text: warn ? 'Release anyway' : 'Release', onclick: () => answer(true) }))), { width: 540 });
+      const close = dlg.close.bind(dlg);
+      dlg.close = () => { close(); if (!answered) { answered = true; done(false); } };
+    });
+    if (ok) this._lead(() => this.run('balloon_status', { status: 'released' }));
+  }
 
   // ================================================================== into the mode and out of it
   open(doc) {
@@ -178,9 +318,10 @@ export class Balloons {
     const doc = this.doc;
     try {
       await this.ed._ready;
-      const data = await api.pdfEdit(doc.id, 'balloons');
+      const [data, roles] = await Promise.all([api.pdfEdit(doc.id, 'balloons'), api.pdfEdit(doc.id, 'balloon_roles', {}).catch(() => null)]);
       if (this.doc !== doc) return;
       this.data = data;
+      this.roles = roles;
     } catch (e) { toast(e.message, 'error'); }
     this.render();
   }
@@ -361,19 +502,173 @@ export class Balloons {
     this.run('balloon_clear');
   }
 
+  // the job's details as boxes to type in: [key, label, input], with a mark on those changed before that shows how
+  _infoInputs(was, showLog) {
+    const mine = { org: 'bl:org', supplier: 'bl:supplier' }; // (who we are: the same on every job, so kept on this computer)
+    const log = this.data.log || [];
+    return (this.data.fields || []).map(([k, label]) => {
+      const el = h('input', { type: 'text', spellcheck: 'false', value: was[k] ?? (mine[k] ? kept(mine[k]) : '') });
+      const n = log.filter((x) => x.field === k).length;
+      const mark = n ? h('button', { class: 'bl-edmark', type: 'button', text: '✎', title: `Changed ${n} time${n === 1 ? '' : 's'}: click to see when, by whom and why`, onclick: (e) => { e.preventDefault(); showLog(k); } }) : null;
+      return [k, label, el, mark];
+    });
+  }
+
+  // the job's details as typed, saved: a detail changed once it was filled in asks for a change note first
+  // (prefilled with what it was and is, when and who), and isn't saved without one. false: not saved.
+  async _saveInfo(info) {
+    const was = this.data.info || {}, label = Object.fromEntries(this.data.fields || []);
+    const changed = (this.data.fields || []).filter(([k]) => (was[k] ?? '') !== '' && String(was[k]) !== String(info[k] ?? ''));
+    const same = info.parts === was.parts && (this.data.fields || []).every(([k]) => (info[k] || '') === (was[k] || ''));
+    if (same) return true;
+    let note = null;
+    if (changed.length) {
+      const stamp = `${new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}${this.data.who ? `, ${this.data.who}` : ''}`;
+      const lines = changed.map(([k]) => `${label[k]}: ${was[k]} → ${info[k] || '(empty)'}`).join('\n');
+      note = await new Promise((done) => {
+        const ta = h('textarea', { rows: 3, spellcheck: 'true', placeholder: 'Why it changed' });
+        let dlg = null, answered = false;
+        const answer = (v) => { if (answered) return; answered = true; dlg.close(); done(v); };
+        const save = () => {
+          const v = ta.value.trim();
+          if (!v) { toast('Say why it changed: the change note is needed.', 'info'); return; }
+          answer(v);
+        };
+        ta.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && e.ctrlKey) save(); });
+        dlg = modal('Change note', h('div', { class: 'pe-fprops bl-props' },
+          h('div', { class: 'bl-logh', style: { whiteSpace: 'pre-wrap' }, text: lines }),
+          h('div', { class: 'bl-logw', text: stamp }),
+          h('p', { class: 'bl-hint', text: 'Say why it changed. The note is kept with the change, who made it and when (Job… shows them).' }),
+          ta,
+          h('div', { class: 'pe-pop-foot' },
+            h('span', { class: 'pv-grow' }),
+            h('button', { class: 'btn', text: 'Cancel', onclick: () => answer(null) }),
+            h('button', { class: 'btn primary', text: 'Save change', onclick: save }))), { width: 560 });
+        const close = dlg.close.bind(dlg);
+        dlg.close = () => { close(); if (!answered) { answered = true; done(null); } };
+        setTimeout(() => ta.focus(), 30);
+      });
+      if (note === null) return false;
+    }
+    return !!await this.run('balloon_info', { info, note });
+  }
+
+  // Search…: characteristics and issues, on this print or every ballooned print saved on this computer
+  search() {
+    const q = h('input', { type: 'search', spellcheck: 'false', placeholder: 'Balloon number, .375, cross hole, pin gage, burr, a job number…', value: this._lastSearch || '' });
+    const scope = h('select', {}, h('option', { value: 'here', text: 'This print' }), h('option', { value: 'all', text: 'All jobs on this computer', selected: kept('bl:searchAll') === '1' }));
+    const out = h('div', { class: 'bl-found' });
+    let dlg = null, seq = 0;
+    const go = async () => {
+      const text = q.value.trim(), mine = ++seq;
+      this._lastSearch = text;
+      keep('bl:searchAll', scope.value === 'all' ? '1' : '0');
+      if (!text) { out.replaceChildren(h('p', { class: 'bl-hint', text: 'Every word typed is looked for, in any order. All jobs searches every ballooned print saved on this computer.' })); return; }
+      let hits = [];
+      try { hits = await api.pdfEdit(this.doc.id, 'balloon_search', { query: text, here: scope.value === 'here' }); } catch (e) { toast(e.message, 'error'); return; }
+      if (mine !== seq) return;
+      if (!hits.length) { out.replaceChildren(h('p', { class: 'bl-hint', text: 'Nothing found.' })); return; }
+      out.replaceChildren(...hits.map((x) => {
+        const where = x.here ? 'This print' : `${x.part || x.path.split(/[\\/]/).pop()}${x.rev ? ` rev ${x.rev}` : ''}${x.job ? ` · job ${x.job}` : ''}${x.missing ? ' · file moved or gone' : ''}`;
+        const row = h('button', { class: `bl-hit${x.missing ? ' gone' : ''}`, type: 'button', title: x.path || '' },
+          h('span', { class: `bl-hk ${x.kind}`, text: x.kind === 'issue' ? 'Issue' : 'Balloon' }),
+          h('span', { class: 'bl-hl', text: x.label }),
+          h('span', { class: 'bl-ht', text: x.text || '' }),
+          h('span', { class: 'bl-hm', text: x.more || '' }),
+          h('span', { class: 'bl-hw', text: where }));
+        row.addEventListener('click', () => {
+          if (x.here) {
+            dlg.close();
+            if (x.kind === 'char') { const c = this.data.chars.find((c) => String(c.label) === String(x.label)); if (c) { if (this.tab === 'issues') { this.tab = 'chars'; this._head(); this._grid(); } this.select(c.id, { toPage: true, toRow: true }); } }
+            else { const i = (this.data.issues || []).find((i) => `#${i.n}` === x.label.split(' ')[0]); if (i) { this.tab = 'issues'; this.ishow = 'all'; this._head(); this._grid(); this.editIssue(i); } }
+          } else if (!x.missing) { dlg.close(); this.v.app?.openPath(x.path); }
+        });
+        return row;
+      }), hits.length >= 300 ? h('p', { class: 'bl-hint', text: 'The first 300: type more to narrow it.' }) : '');
+    };
+    let t = null;
+    q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(go, 250); });
+    q.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { clearTimeout(t); go(); } });
+    scope.addEventListener('change', go);
+    dlg = modal('Search', h('div', { class: 'pe-fprops bl-props' },
+      h('div', { class: 'bl-sbar' }, q, scope), out,
+      h('p', { class: 'bl-hint', text: 'A print is searchable across jobs once it has been saved with its balloons.' })), { width: 820 });
+    go();
+    setTimeout(() => q.focus(), 30);
+  }
+
+  // what was changed in the job's details, newest first (one field's, or all)
+  _logList(field = null) {
+    const label = Object.fromEntries(this.data.fields || []);
+    const rows = (this.data.log || []).filter((x) => !field || x.field === field).slice().reverse();
+    if (!rows.length) return h('p', { class: 'bl-hint', text: 'Nothing changed yet.' });
+    return h('div', { class: 'bl-log' }, ...rows.map((x) => h('div', { class: 'bl-logi' },
+      h('div', { class: 'bl-logh', text: x.field === 'status' ? `Status: ${STATUS_LABEL[x.old] || x.old} → ${STATUS_LABEL[x.new] || x.new}` : `${label[x.field] || x.field}: ${x.old || '(empty)'} → ${x.new || '(empty)'}` }),
+      h('div', { class: 'bl-logw', text: `${when(x.at)}${x.who ? ` · ${x.who}` : ''}` }),
+      h('div', { class: 'bl-logn', text: x.note || '' }))));
+  }
+
+  // Job…: the job's details, and what was changed in them
+  job() {
+    const was = this.data.info || {};
+    const row = (label, el, mark) => h('label', { class: 'pe-frow' }, h('span', { text: label }), mark ? h('span', { class: 'bl-withmark' }, el, mark) : el);
+    const hist = h('div', { class: 'bl-hist' });
+    const showLog = (k) => { hist.replaceChildren(h('div', { class: 'bl-histh' }, h('b', { text: k ? `${Object.fromEntries(this.data.fields)[k]}: changes` : 'All changes' }), k ? h('button', { class: 'bl-link', text: 'Show all', onclick: () => showLog(null) }) : ''), this._logList(k)); };
+    const inputs = this._infoInputs(was, showLog);
+    if ((this.data.log || []).length) showLog(null);
+    let dlg = null;
+    const ok = async () => {
+      const info = { parts: was.parts };
+      for (const [k, , el] of inputs) if (el.value.trim()) info[k] = el.value.trim();
+      dlg.close();
+      await this._saveInfo(info);
+    };
+    dlg = modal('Job details', h('div', { class: 'pe-fprops bl-props' },
+      h('div', { class: 'bl-sidline' }, h('span', { text: 'Sheet ID' }), h('b', { text: this.data.sid || '(given when first saved)' }), this.data.from ? h('span', { class: 'bl-hint', text: `carried over from ${this.data.from}` }) : ''),
+      h('div', { class: 'bl-two' }, ...inputs.map(([, label, el, mark]) => row(label, el, mark))),
+      hist,
+      h('p', { class: 'bl-hint', text: 'Kept with the balloons in the print, and written on the report. A detail changed once it was filled in needs a change note: ✎ beside it shows what it was, who changed it, when and why.' }),
+      h('div', { class: 'pe-pop-foot' },
+        h('span', { class: 'pv-grow' }),
+        h('button', { class: 'btn', text: 'Cancel', onclick: () => dlg.close() }),
+        h('button', { class: 'btn primary', text: 'Save', onclick: ok }))), { width: 780 });
+    for (const [, , el] of inputs) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); e.stopPropagation(); });
+    setTimeout(() => inputs[0]?.[2].focus(), 30);
+  }
+
   // Report…: what the report says about the job (kept with the list in the PDF), then where to save the workbook
   report() {
     if (!this.data.chars.length) { toast('There are no balloons to report yet.', 'info'); return; }
     const was = this.data.info || {}, doc = this.doc;
     const row = (label, el) => h('label', { class: 'pe-frow' }, h('span', { text: label }), el);
     const mine = { org: 'bl:org', supplier: 'bl:supplier' }; // (who we are: the same on every job, so kept on this computer)
-    const inputs = (this.data.fields || []).map(([k, label]) => [k, label, h('input', { type: 'text', spellcheck: 'false', value: was[k] ?? (mine[k] ? kept(mine[k]) : '') })]);
+    const inputs = this._infoInputs(was, () => this.job());
     const parts = h('input', { type: 'number', min: 1, max: 50, step: 1, value: Math.max(was.parts || 5, (this.data.samples || []).length),
       title: 'How many parts will be inspected: the report gets a results column for each one\n(the inspection sheet has them in fives)' });
     const layout = h('select', {}, ...(this.data.layouts || []).map(([k, label]) => h('option', { value: k, text: label, selected: k === kept('bl:layout') })));
     const footer = h('textarea', { rows: 2, spellcheck: 'false', placeholder: 'Your form number, a policy note…',
       title: 'Lines for the bottom of the inspection sheet. Remembered on this computer for every report.' });
     footer.value = kept('bl:footer');
+    // what else the PDF has: set fresh each time (the logo is remembered on this computer)
+    const check = (label, on, tip) => { const box = h('input', { type: 'checkbox' }); box.checked = on; return [box, h('label', { class: 'bl-pcheck', title: tip }, box, label)]; };
+    const [headBox, headEl] = check('Header and printed line', true, "A line across the top of every page: part, revision, job, sheet id and status;\nand along the bottom when it was printed, by whom, and the app's version");
+    const nIssues = (this.data.issues || []).filter((i) => !i.hidden).length, nPhotos = (this.data.photos || []).length;
+    const [issueBox, issueEl] = check(`Production issues${nIssues ? ` (${nIssues})` : ''}`, false, 'The production issues not hidden, on a page of their own');
+    issueBox.disabled = !nIssues;
+    const photoSel = h('select', { disabled: !nPhotos, title: 'The photos with their markup, each saying what it is of' },
+      ...[['', 'No photos'], ['small', 'Photos: small'], ['medium', 'Photos: medium'], ['large', 'Photos: large']].map(([k, label]) => h('option', { value: k, text: nPhotos && k ? `${label} (${nPhotos})` : label })));
+    let logo = kept('bl:logo');
+    const logoName = h('span', { class: 'bl-hint', text: logo ? 'Logo chosen' : 'No logo' });
+    const logoFile = h('input', { type: 'file', accept: 'image/*', hidden: true });
+    logoFile.addEventListener('change', () => {
+      const f = logoFile.files[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = () => { logo = String(r.result); keep('bl:logo', logo); logoName.textContent = f.name; };
+      r.readAsDataURL(f);
+    });
+    const logoRow = h('span', { class: 'bl-logo' }, h('button', { class: 'btn', type: 'button', text: 'Logo…', title: "A picture for the top left of the PDF's first page. Remembered on this computer.", onclick: () => logoFile.click() }),
+      h('button', { class: 'bl-link', type: 'button', text: 'None', onclick: () => { logo = ''; keep('bl:logo', ''); logoName.textContent = 'No logo'; } }), logoName, logoFile);
     let dlg = null;
     const ok = async () => {
       dlg.close();
@@ -382,19 +677,20 @@ export class Balloons {
       keep('bl:layout', layout.value);
       keep('bl:footer', footer.value);
       for (const [k, key] of Object.entries(mine)) if (info[k]) keep(key, info[k]);
-      const same = info.parts === was.parts && inputs.every(([k]) => (info[k] || '') === (was[k] || ''));
-      if (!same && !await this.run('balloon_info', { info })) return;
+      if (!await this._saveInfo(info)) return;
       const name = `${info.part || doc.name.replace(/\.pdf$/i, '')} inspection report.xlsx`;
       const r = await api.saveXlsxDialog(name, 'Save Inspection Report As').catch((e) => { toast(e.message, 'error'); return null; });
       if (!r?.path || this.doc !== doc) return;
       try {
-        const done = await api.pdfEdit(doc.id, 'balloon_report', { path: r.path, parts: info.parts, layout: layout.value, footer: footer.value });
+        const printing = { header: headBox.checked, issues: issueBox.checked, photos: photoSel.value || null, logo: logo || null };
+        const done = await api.pdfEdit(doc.id, 'balloon_report', { path: r.path, parts: info.parts, layout: layout.value, footer: footer.value, printing });
         this.ed._saved(`Inspection report saved: ${done.count} characteristic${done.count === 1 ? '' : 's'}, room for ${done.parts} part${done.parts === 1 ? '' : 's'}. The sheet is beside it as a PDF.`, done.path);
       } catch (e) { toast(e.message, 'error'); }
     };
     dlg = modal('Inspection report', h('div', { class: 'pe-fprops bl-props' },
       h('div', { class: 'bl-two' }, ...inputs.map(([, label, el]) => row(label, el)), row('Parts to inspect', parts)),
       row('Layout', layout), row('Footer', footer),
+      h('div', { class: 'pe-frow' }, h('span', { text: 'The PDF' }), h('div', { class: 'bl-print' }, headEl, issueEl, photoSel, logoRow)),
       h('p', { class: 'bl-hint', text: 'An Excel workbook: each balloon with its description, gage, nominal and limits, and a column for each part. What the parts measured (the Results tab) is written in under each part; a result outside its limits is red. The first article layout adds AS9102 Forms 1, 2 and 3. The inspection sheet is saved as a PDF too, beside the workbook under the same name. The job details are kept with the balloons in the print.' }),
       h('div', { class: 'pe-pop-foot' },
         h('span', { class: 'pv-grow' }),
@@ -596,6 +892,7 @@ export class Balloons {
   // a balloon is pressed: it's selected, and a drag moves it
   _down(e, el) {
     if (e.button !== 0 || this.adding) return;
+    if (this.fixed) { e.stopPropagation(); this.select(el.char.id, { toRow: true }); return; }
     e.preventDefault();
     e.stopPropagation();
     const c = el.char, p = this.v.pages[c.page], at0 = [...c.at];
@@ -650,26 +947,31 @@ export class Balloons {
   _row() {
     if (!this.on) return;
     const n = this.data.chars.length, st = this.ed.state || {}, sel = this.sel === null ? null : this.char(this.sel);
-    const b = (text, tip, run, o = {}) => h('button', { class: `pv-btn bl-tb${o.cls ? ` ${o.cls}` : ''}`, text, title: tip, disabled: !!o.off, onclick: run });
-    const more = b('▾', 'Auto Balloon again, or remove all the balloons', () => this._autoMenu(more), { cls: 'bl-more' });
-    const mult = b('Multiply ▾', 'A characteristic that applies in several places (4X) is inspected in each one:\nMultiply gives it a row for each place (3.1 to 3.4) in the list and the report, under its one balloon.\nDetach makes each place a balloon of its own. Reset puts it back to one row.', () => this._multMenu(mult), { off: !n });
-    const renumber = b('Renumber ▾', 'Number the balloons 1, 2, 3…, closing the gaps: in list order, by rows, by columns, or clockwise.\nWith views, view by view. Those sharing a number stay together.', () => this._renumberMenu(renumber), { off: !n });
-    this.viewBtn = b(`Views${(this.data.views || []).length ? ` (${this.data.views.length})` : ''} ▾`, "Boxes round the drawing's views: their balloons take the view's color,\nand Renumber goes view by view, each from its own start number", () => this._viewsMenu(this.viewBtn), { cls: this.adding === 'view' ? 'on' : '' });
-    this.addBtn = b('Add', 'Balloon something by hand: drag a box around a callout on the print (its text is read),\nor click a spot for an empty balloon to fill in. Esc cancels.', () => this._adding(this.adding === 'balloon' ? false : 'balloon'), { cls: this.adding === 'balloon' ? 'on' : '' });
+    const b = (text, tip, run, o = {}) => h('button', { class: `pv-btn bl-tb${o.cls ? ` ${o.cls}` : ''}`, text, title: tip, disabled: !!o.off || (o.edits && this.fixed), onclick: run });
+    const more = b('▾', 'Auto Balloon again, or remove all the balloons', () => this._autoMenu(more), { cls: 'bl-more', edits: true });
+    const mult = b('Multiply ▾', 'A characteristic that applies in several places (4X) is inspected in each one:\nMultiply gives it a row for each place (3.1 to 3.4) in the list and the report, under its one balloon.\nDetach makes each place a balloon of its own. Reset puts it back to one row.', () => this._multMenu(mult), { off: !n, edits: true });
+    const renumber = b('Renumber ▾', 'Number the balloons 1, 2, 3…, closing the gaps: in list order, by rows, by columns, or clockwise.\nWith views, view by view. Those sharing a number stay together.', () => this._renumberMenu(renumber), { off: !n, edits: true });
+    this.viewBtn = b(`Views${(this.data.views || []).length ? ` (${this.data.views.length})` : ''} ▾`, "Boxes round the drawing's views: their balloons take the view's color,\nand Renumber goes view by view, each from its own start number", () => this._viewsMenu(this.viewBtn), { cls: this.adding === 'view' ? 'on' : '', edits: true });
+    this.addBtn = b('Add', 'Balloon something by hand: drag a box around a callout on the print (its text is read),\nor click a spot for an empty balloon to fill in. Esc cancels.', () => this._adding(this.adding === 'balloon' ? false : 'balloon'), { cls: this.adding === 'balloon' ? 'on' : '', edits: true });
     this.row.replaceChildren(
       h('span', { class: 'bl-mode', text: 'Ballooning' }),
+      (() => { const s = this.data.status || 'draft', sb = b(`${STATUS_LABEL[s]} ▾`, 'Draft: being ballooned. Released: its balloons and characteristics are fixed.\nSuperseded: by the next revision, and nothing in it changes.', () => this._statusMenu(sb), { cls: `bl-status s-${s}`, off: !n && s === 'draft' }); return sb; })(),
+      (() => { const lb = b(this._roleText(), this._roleTip(), () => this._rolesMenu(lb), { cls: `bl-role${this.roles?.level ? ' open' : ''}` }); lb.hidden = !this.roles; return lb; })(),
+      this.data.sid ? h('span', { class: 'bl-sid', text: this.data.sid, title: `This sheet's id: it stays the same whatever is edited.${this.data.from ? `\nCarried over from ${this.data.from}.` : ''}` }) : '',
       h('span', { class: 'pv-sep' }),
-      b('Auto Balloon', 'Read the print and balloon what there is to inspect on it: dimensions and their tolerances, angles,\nchamfers, threads, finishes, feature control frames and notes. It asks which pages and what to balloon first.', () => this.auto(), { cls: 'bl-main' }),
+      b('Auto Balloon', 'Read the print and balloon what there is to inspect on it: dimensions and their tolerances, angles,\nchamfers, threads, finishes, feature control frames and notes. It asks which pages and what to balloon first.', () => this.auto(), { cls: 'bl-main', edits: true }),
       more,
       this.addBtn,
-      b('Sub-balloon', "Another thing to check on the selected balloon's callout:\na new balloon under its number (2.1, 2.2…)", () => this.addSub(sel), { off: !sel }),
+      b('Sub-balloon', "Another thing to check on the selected balloon's callout:\na new balloon under its number (2.1, 2.2…)", () => this.addSub(sel), { off: !sel, edits: true }),
       b('Edit…', "All of the selected balloon's details in one place (or double-click the balloon)", () => this.edit(sel), { off: !sel }),
-      b('Delete', 'Remove the selected balloon (Delete)', () => this.remove(sel.id), { off: !sel }),
+      b('Delete', 'Remove the selected balloon (Delete)', () => this.remove(sel.id), { off: !sel, edits: true }),
       h('span', { class: 'pv-sep' }),
       renumber,
       this.viewBtn,
       mult,
       h('span', { class: 'pv-sep' }),
+      b('Search…', 'Find characteristics and production issues by balloon number, dimension, description, gage or earlier fix:\non this print, or on every ballooned print saved on this computer', () => this.search(), {}),
+      b('Job…', "The job's details: part, revision, customer, job number, lot… and what was changed, by whom and why.\nA detail changed once it was filled in needs a change note.", () => this.job(), { off: !n }),
       b('Report…', 'Write the inspection report as an Excel workbook and a PDF: the sheet to print and fill in, five parts to a table,\nor the list with Pass / Fail worked out from the results, with AS9102 Form 3', () => this.report(), { off: !n }),
       h('span', { class: 'pv-grow' }),
       b('Undo', 'Undo (Ctrl+Z)', () => this.ed.undo(), { off: !st.undo }),
@@ -683,13 +985,15 @@ export class Balloons {
   // ================================================================== the Bill of Characteristics
   _shown() {
     const f = this.filter;
+    if (f.startsWith('tag:')) return this.data.chars.filter((c) => (c.tags || []).includes(f.slice(4)));
     return this.data.chars.filter((c) => (f === 'todo' ? !c.reviewed : f === 'done' ? !!c.reviewed : f === 'open' ? open(c) : true));
   }
 
   _head() {
     const d = this.data, n = d.chars.length;
     const show = h('select', { class: 'bl-show', title: 'Which characteristics the list shows' },
-      ...FILTERS.map(([k, label]) => h('option', { value: k, text: label, selected: k === this.filter })));
+      ...FILTERS.map(([k, label]) => h('option', { value: k, text: label, selected: k === this.filter })),
+      ...(d.tags?.length ? [h('optgroup', { label: 'Tagged' }, ...d.tags.map((t) => h('option', { value: `tag:${t}`, text: t, selected: `tag:${t}` === this.filter })))] : []));
     show.addEventListener('change', () => { this.filter = show.value; this._grid(); });
     const tols = h('div', { class: 'bl-tols', title: "The title block's tolerances by the number of decimals. A size with no tolerance of its own gets its limits\nfrom these. Read from the print: correct them here if they were read wrong." },
       h('span', { class: 'bl-tl', text: 'General tolerance ±' }),
@@ -708,7 +1012,21 @@ export class Balloons {
       onclick: () => { if (this.tab !== id) { this.tab = id; this.wrap.scrollTop = 0; this.wrap.scrollLeft = 0; this._head(); this._grid(); } } });
     const tabs = h('div', { class: 'bl-tabs' },
       tab('chars', 'Bill of Characteristics', 'What there is to inspect: every balloon with its requirement and limits'),
-      tab('results', 'Results', 'What each part measured: a column for each part inspected'));
+      tab('results', 'Results', 'What each part measured: a column for each part inspected'),
+      tab('issues', `Production Issues${(d.issues || []).filter(unresolved).length ? ` (${(d.issues || []).filter(unresolved).length} open)` : ''}`,
+        'What has to be dialed in before the part can run, or while it does: each about a balloon,\nfixed by a machinist and resolved by a lead'));
+    if (this.tab === 'issues') {
+      const show = h('select', { class: 'bl-show', title: 'Which issues the list shows' },
+        ...ISSUE_SHOW.map(([k, label]) => h('option', { value: k, text: label, selected: k === this.ishow })));
+      show.addEventListener('change', () => { this.ishow = show.value; this._grid(); });
+      const sel = this.sel === null ? null : this.char(this.sel);
+      this.head.replaceChildren(tabs,
+        h('button', { class: 'btn bl-hbtn', text: sel ? `+ Add issue on ${sel.label}` : '+ Add issue', title: 'Something to dial in: on the selected balloon, or on none', onclick: () => this.editIssue(null) }),
+        h('label', { class: 'bl-showl' }, 'Show', show),
+        h('span', { class: 'pv-grow' }),
+        this._count());
+      return;
+    }
     if (this.tab === 'results') {
       const parts = d.samples || [];
       this.head.replaceChildren(tabs,
@@ -722,7 +1040,7 @@ export class Balloons {
     }
     this.head.replaceChildren(tabs,
       h('label', { class: 'bl-showl' }, 'Show', show),
-      tols,
+      this.fixed ? h('span', { class: 'bl-locked', text: this.data.status === 'superseded' ? 'Superseded: read only' : 'Released: characteristics fixed', title: 'Back to draft (the status beside the sheet id) to change them' }) : tols,
       h('span', { class: 'pv-grow' }),
       this._count());
   }
@@ -741,6 +1059,7 @@ export class Balloons {
       case 'minus': return signed(c.minus, false); // (kept as how far below: .005 is -.005)
       case 'lo': case 'hi': return c[k] == null ? '' : `${c[k] < 0 ? '-' : ''}${num(c[k])}${c.kind === 'angle' ? '°' : ''}`;
       case 'tol': return { default: 'General', ref: 'Reference', basic: 'Basic' }[c.tol] || '';
+      case 'tags': return (c.tags || []).join(', ');
       default: return c[k] || '';
     }
   }
@@ -765,6 +1084,7 @@ export class Balloons {
   _grid() {
     if (!this.on) return;
     if (this.tab === 'results') { this._resultsGrid(); return; }
+    if (this.tab === 'issues') { this._issuesGrid(); return; }
     const d = this.data, rows = this._shown(), top = this.wrap.scrollTop, left = this.wrap.scrollLeft, had = this.dock.contains(document.activeElement);
     // a cell being typed into when the list is drawn again (the edit before it has just landed) is taken up where it was
     const live = this._editing;
@@ -786,7 +1106,7 @@ export class Balloons {
       const tr = h('tr', { 'data-id': c.id, 'data-place': place, class: `${this.sel === c.id ? 'on' : ''}${place > 1 ? ' more' : ''}` });
       for (const col of COLS) {
         if (col.k === 'reviewed') {
-          const box = h('input', { type: 'checkbox', title: 'Checked against the print' });
+          const box = h('input', { type: 'checkbox', title: 'Checked against the print', disabled: this.fixed });
           box.checked = !!c.reviewed;
           box.addEventListener('click', (e) => e.stopPropagation());
           box.addEventListener('dblclick', (e) => e.stopPropagation());
@@ -797,7 +1117,7 @@ export class Balloons {
         const text = !place ? this._cell(c, col.k) : col.k === 'n' ? `${c.label}.${place}` : col.k === 'count' ? `${place} of ${c.count}` : this._cell(c, col.k);
         const general = (c.tol === 'default' && ['plus', 'minus', 'lo', 'hi', 'tol'].includes(col.k)) || (bare(c) && ['nominal', 'tol'].includes(col.k));
         const td = h('td', { 'data-k': col.k, class: `${col.edit ? 'ed' : ''}${col.mono ? ' mono' : ''}${col.edit === 'num' ? ' mono r' : ''}${general ? ' def' : ''}`, title: text.length > 22 ? text : '' },
-          col.k === 'n' ? h('span', { class: 'bl-num', text }) : text);
+          col.k === 'n' ? h('span', { class: 'bl-nwrap' }, h('span', { class: 'bl-num', text }), (d.issues || []).some((i) => i.char === c.id && unresolved(i)) && place < 2 ? h('span', { class: 'bl-flag', text: '⚑', title: 'It has an open production issue' }) : '') : text);
         td.addEventListener('click', () => { this.col = col.k; });
         if (col.edit) td.addEventListener('dblclick', (e) => { e.stopPropagation(); this._editCell(c, col, null, tr); });
         tr.append(td);
@@ -826,6 +1146,10 @@ export class Balloons {
   }
 
   _count() {
+    if (this.tab === 'issues') {
+      const all = (this.data.issues || []).filter((i) => !i.hidden), open = all.filter(unresolved).length, fixed = all.filter((i) => i.status === 'fixed').length;
+      return h('span', { class: `bl-count${open ? ' bad' : ''}`, text: all.length ? `${all.length} issue${all.length === 1 ? '' : 's'} · ${open} open${fixed ? ` · ${fixed} ready for lead` : ''}` : '' });
+    }
     if (this.tab === 'results') {
       const rows = this._rrows(), parts = this.data.samples || [], res = this.data.results || {};
       let filled = 0, failed = 0;
@@ -1147,17 +1471,36 @@ export class Balloons {
       multiplied(c) ? { label: `Detach (${c.count} balloons)`, action: () => this.detach([c.id]) } : null,
       multiplied(c) ? { label: 'Reset to one row', action: () => this.multiply([c.id], false) } : null,
       { label: c.reviewed ? 'Mark as not reviewed' : 'Mark as reviewed', action: () => this.run('balloon_edit', { id: c.id, reviewed: !c.reviewed }) },
+      { label: 'Add production issue…', action: () => this.editIssue(null) },
+      { label: 'Tags', sub: () => (this.data.tags || []).map((t) => ({ label: t, check: (c.tags || []).includes(t), action: () => this.run('balloon_tag', { ids: [c.id], tag: t, on: !(c.tags || []).includes(t) }) })) },
       { sep: true },
       { label: 'Delete', kb: 'Del', action: () => this.remove(c.id) },
     ], { at: { x: e.clientX, y: e.clientY } });
+  }
+
+  // a characteristic's inspection tags, ticked on and off where it's shown (the list stays open to tick several)
+  _tagMenu(c, anchor) {
+    const on = new Set(c.tags || []);
+    const items = (this.data.tags || []).map((t) => {
+      const box = h('input', { type: 'checkbox' });
+      box.checked = on.has(t);
+      box.addEventListener('change', () => {
+        if (box.checked) on.add(t); else on.delete(t);
+        this.run('balloon_tag', { ids: [c.id], tag: t, on: box.checked });
+      });
+      return { el: h('label', { class: 'mi bl-tagi' }, box, h('span', { text: t })) };
+    });
+    menu(anchor, [{ head: `Tags for ${c.label}` }, ...items], { force: true });
   }
 
   // a cell is typed into in place: Enter goes on to the one below, Tab to the next one along, Esc leaves it as it was
   _editCell(c, col, typed = null, tr = null) {
     const td = (tr?.isConnected ? tr : this.wrap).querySelector(`${tr?.isConnected ? '' : `tr[data-id="${c.id}"] `}td[data-k="${col.k}"]`);
     if (!td || !col.edit) return;
+    if (this.fixed) { this._fixedSay(); return; }
     if (this.sel !== c.id) this.select(c.id, { toRow: true });
     this.col = col.k;
+    if (col.edit === 'tags') { this._tagMenu(c, td); return; }
     let el;
     if (col.edit === 'select') {
       const [opts, now] = col.k === 'tol' ? [TOL_TYPES, bare(c) ? c.tol : ''] : [Object.entries(this.data.labels), c.kind];
@@ -1200,7 +1543,7 @@ export class Balloons {
   _step(c, col, dy, dx) {
     const rows = this._shown(), i = rows.findIndex((x) => x.id === c.id);
     if (dy) return rows[i + dy] ? { id: rows[i + dy].id, k: col.k } : null;
-    const cols = COLS.filter((x) => x.edit), j = cols.findIndex((x) => x.k === col.k) + dx;
+    const cols = COLS.filter((x) => x.edit && x.edit !== 'tags'), j = cols.findIndex((x) => x.k === col.k) + dx;
     if (cols[j]) return { id: c.id, k: cols[j].k };
     return rows[i + dx] ? { id: rows[i + dx].id, k: cols[dx > 0 ? 0 : cols.length - 1].k } : null;
   }
@@ -1222,6 +1565,155 @@ export class Balloons {
     this.grip.addEventListener('pointerup', up);
   }
 
+  // ================================================================== Production Issues
+  _ishown() {
+    const f = this.ishow, all = this.data.issues || [];
+    return all.filter((i) => (f === 'hidden' ? i.hidden && !i.delete : f === 'delete' ? !!i.delete : f === 'all' ? !i.hidden : f === 'resolved' ? !i.hidden && i.status === 'resolved' : unresolved(i)));
+  }
+
+  _issuesGrid() {
+    const rows = this._ishown(), top = this.wrap.scrollTop;
+    if (!rows.length) {
+      const none = { open: 'No open issues.', all: 'No issues yet.', resolved: 'None resolved yet.', hidden: 'None hidden.', delete: 'None waiting to be deleted.' }[this.ishow];
+      this.wrap.replaceChildren(h('div', { class: 'bl-empty', text: `${none} + Add issue starts one: on the selected balloon, or on none.` }));
+      return;
+    }
+    const cols = [['#', 44], ['Balloon', 70], ['Title', 230], ['Tags', 200], ['Status', 210], ['Job', 80], ['Added', 190], ['Notes', 300]];
+    const table = h('table', { class: 'bl-grid bl-issues', style: { width: `max(100%, ${cols.reduce((s, c) => s + c[1], 0)}px)` } },
+      h('colgroup', {}, ...cols.map(([, w]) => h('col', { style: { width: `${w}px` } }))),
+      h('thead', {}, h('tr', {}, ...cols.map(([t]) => h('th', { text: t })))),
+      h('tbody', {}, ...rows.map((i) => {
+        const tr = h('tr', { 'data-issue': i.id, class: `${i.status === 'resolved' ? 'done' : ''}${i.status === 'fixed' ? ' ready' : ''}${i.hidden ? ' hid' : ''}` },
+          h('td', { text: `#${i.n}` }),
+          h('td', {}, i.label ? h('span', { class: `bl-num${i.gone ? ' gone' : ''}`, text: i.label, title: i.gone ? 'That balloon has been removed' : '' }) : ''),
+          h('td', { text: `${i.title || '(no title)'}${(() => { const k = (this.data.photos || []).filter((p) => p.on === 'issue' && p.of === i.id).length; return k ? `  · ${k} photo${k === 1 ? '' : 's'}` : ''; })()}` }),
+          h('td', { text: (i.tags || []).join(', ') }),
+          h('td', { class: 'bl-ist', text: issueStatus(i) }),
+          h('td', { text: i.job || '' }),
+          h('td', { text: `${when(i.at)}${i.by ? ` · ${i.by}` : ''}` }),
+          h('td', { text: (i.notes || '').split('\n')[0], title: i.notes || '' }));
+        tr.addEventListener('click', () => { if (i.char && !i.gone) this.select(i.char, { toPage: true }); });
+        tr.addEventListener('dblclick', () => this.editIssue(i));
+        tr.addEventListener('contextmenu', (e) => { e.preventDefault(); menu(null, this._issueActs(i, true), { at: { x: e.clientX, y: e.clientY } }); });
+        return tr;
+      })));
+    this.wrap.replaceChildren(table);
+    this.wrap.scrollTop = top;
+    this.head.querySelector('.bl-count')?.replaceWith(this._count());
+  }
+
+  // a line of text asked for (null: cancelled)
+  _ask(title, label, okText, hint = '', type = 'text') {
+    return new Promise((done) => {
+      const inp = h('input', { type, spellcheck: 'true', autocomplete: 'off' });
+      let dlg = null, answered = false;
+      const answer = (v) => { if (answered) return; answered = true; dlg.close(); done(v); };
+      const ok = () => { const v = inp.value.trim(); if (v) answer(v); else toast(`${label} is needed.`, 'info'); };
+      inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') ok(); });
+      dlg = modal(title, h('div', { class: 'pe-fprops bl-props' },
+        hint ? h('p', { class: 'bl-hint', text: hint }) : '',
+        h('label', { class: 'pe-frow' }, h('span', { text: label }), inp),
+        h('div', { class: 'pe-pop-foot' }, h('span', { class: 'pv-grow' }),
+          h('button', { class: 'btn', text: 'Cancel', onclick: () => answer(null) }),
+          h('button', { class: 'btn primary', text: okText, onclick: ok }))), { width: 520 });
+      const close = dlg.close.bind(dlg);
+      dlg.close = () => { close(); if (!answered) { answered = true; done(null); } };
+      setTimeout(() => inp.focus(), 30);
+    });
+  }
+
+  // what can be done with an issue now, as menu items (or buttons)
+  _issueActs(i, withEdit = false) {
+    const act = (a, o = {}) => this.run('balloon_issue_act', { id: i.id, act: a, ...o });
+    const out = [];
+    if (withEdit) out.push({ label: 'Open…', action: () => this.editIssue(i) });
+    if (!i.hidden) {
+      if (i.status === 'open') out.push({ label: 'Fixed, ready for lead', action: () => act('fixed') });
+      if (i.status !== 'resolved') {
+        out.push({ label: 'Resolve: machinist fix', action: () => this._lead(() => act('resolve', { route: 'machinist' })) });
+        out.push({ label: 'Resolve: move to troubleshooting', action: () => this._lead(() => act('resolve', { route: 'troubleshooting' })) });
+      }
+      if (i.status !== 'open') out.push({ label: 'Reopen', action: () => this._lead(() => act('reopen')) });
+      out.push({ sep: true });
+      out.push({ label: 'Hide', action: () => act('hide') });
+    } else if (!i.delete) out.push({ label: 'Show again', action: () => act('show') });
+    if (i.delete) {
+      out.push({ label: 'Switch to hide', action: () => act('keep') });
+      out.push({ label: 'Delete permanently…', action: async () => {
+        if (await this._asLead() && await this._confirmDelete(i)) this._lead(() => act('purge'));
+      } });
+    } else {
+      out.push({ label: 'Delete…', action: async () => {
+        const reason = await this._ask('Delete issue', 'Reason', 'Delete', "It's hidden now, and waits to be deleted for good. Switch to hide takes the request back.");
+        if (reason) act('delete', { reason });
+      } });
+    }
+    return out;
+  }
+
+  _confirmDelete(i) {
+    return new Promise((done) => {
+      let dlg = null, answered = false;
+      const answer = (v) => { if (answered) return; answered = true; dlg.close(); done(v); };
+      dlg = modal('Delete permanently', h('div', { class: 'pe-fprops bl-props' },
+        h('p', { text: `Issue #${i.n}, "${i.title || 'no title'}", is taken out of the list for good (asked by ${i.delete?.who || 'someone'}: ${i.delete?.reason || ''}). Undo can still bring it back until the print is closed.` }),
+        h('div', { class: 'pe-pop-foot' }, h('span', { class: 'pv-grow' }),
+          h('button', { class: 'btn', text: 'Cancel', onclick: () => answer(false) }),
+          h('button', { class: 'btn primary', text: 'Delete permanently', onclick: () => answer(true) }))), { width: 520 });
+      const close = dlg.close.bind(dlg);
+      dlg.close = () => { close(); if (!answered) { answered = true; done(false); } };
+    });
+  }
+
+  // one issue (or a new one: i null), with what can be done with it and its history
+  editIssue(i) {
+    const d = this.data, sel = this.sel === null ? null : this.char(this.sel);
+    const row = (label, el) => h('label', { class: 'pe-frow' }, h('span', { text: label }), el);
+    const balloon = h('select', {}, h('option', { value: '', text: '(none)' }),
+      ...d.chars.map((c) => h('option', { value: String(c.id), text: `${c.label}  ${c.text || ''}`.slice(0, 60), selected: i ? c.id === i.char : sel?.id === c.id })));
+    const title = h('input', { type: 'text', spellcheck: 'true', value: i?.title || '', placeholder: 'What has to be dialed in' });
+    const job = h('input', { type: 'text', spellcheck: 'false', value: i ? i.job || '' : (d.info?.job || '') });
+    const notes = h('textarea', { rows: 4, spellcheck: 'true' });
+    notes.value = i?.notes || '';
+    const tagBoxes = (d.issueTags || []).map((t) => { const box = h('input', { type: 'checkbox' }); box.checked = (i?.tags || []).includes(t); return [t, box]; });
+    let dlg = null;
+    const fields = () => ({ char: balloon.value === '' ? null : Number(balloon.value), title: title.value.trim(), notes: notes.value.trim(), job: job.value.trim(),
+      tags: tagBoxes.filter(([, b]) => b.checked).map(([t]) => t) });
+    const save = async () => {
+      const o = fields();
+      if (!i && !o.title) { toast('Give the issue a title.', 'info'); return; }
+      dlg.close();
+      if (!i) {
+        const r = await this.run('balloon_issue_add', o);
+        if (r && this.tab !== 'issues') { this.tab = 'issues'; this._head(); this._grid(); }
+        return;
+      }
+      const ch = {};
+      if (o.char !== (i.char ?? null)) ch.char = o.char;
+      for (const k of ['title', 'notes', 'job']) if (o[k] !== (i[k] || '')) ch[k] = o[k];
+      if (o.tags.join('|') !== (i.tags || []).join('|')) ch.tags = o.tags;
+      if (Object.keys(ch).length) await this.run('balloon_issue_edit', { id: i.id, ...ch });
+    };
+    const acts = i ? this._issueActs(i).filter((a) => !a.sep).map((a) => h('button', { class: 'btn', text: a.label, onclick: async () => { await save(); a.action(); } })) : [];
+    dlg = modal(i ? `Production issue #${i.n}` : 'New production issue', h('div', { class: 'pe-fprops bl-props' },
+      i ? h('div', { class: 'bl-sidline' }, h('span', { text: 'Status' }), h('b', { text: issueStatus(i) }), i.hidden && !i.delete ? h('span', { class: 'bl-hint', text: '(hidden)' }) : '') : '',
+      row('Balloon', balloon), row('Title', title),
+      h('div', { class: 'pe-frow' }, h('span', { text: 'Tags' }), h('div', { class: 'bl-tagbox' }, ...tagBoxes.map(([t, box]) => h('label', {}, box, t)))),
+      row('Notes', notes), row('Job number', job),
+      i ? h('div', { class: 'pe-frow' }, h('span', { text: 'Photos' }), photoStrip(this, 'issue', i.id)) : h('p', { class: 'bl-hint', text: 'Photos go on once the issue is added.' }),
+      acts.length ? h('div', { class: 'bl-acts' }, ...acts) : '',
+      i ? h('div', { class: 'bl-hist' }, h('div', { class: 'bl-histh' }, h('b', { text: 'History' })),
+        h('div', { class: 'bl-log' }, ...i.history.slice().reverse().map((x) => h('div', { class: 'bl-logi' },
+          h('div', { class: 'bl-logh', text: x.what }), h('div', { class: 'bl-logw', text: `${when(x.at)}${x.who ? ` · ${x.who}` : ''}` }))))) : '',
+      h('div', { class: 'pe-pop-foot' },
+        h('span', { class: 'pv-grow' }),
+        h('button', { class: 'btn', text: 'Cancel', onclick: () => dlg.close() }),
+        h('button', { class: 'btn primary', text: i ? 'Save' : 'Add issue', onclick: save }))), { width: 700 });
+    for (const el of [title, job]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); e.stopPropagation(); });
+    notes.addEventListener('keydown', (e) => e.stopPropagation());
+    setTimeout(() => title.focus(), 30);
+  }
+
   // ================================================================== one characteristic's dialog
   edit(c) {
     const d = this.data;
@@ -1235,6 +1727,7 @@ export class Balloons {
     const type = h('select', { title: 'Reference and Basic sizes have no limits' }, ...TOL_TYPES.map(([k, label]) => h('option', { value: k, text: label, selected: k === (bare(c) ? c.tol : '') })));
     const f = { nominal: num(c.nominal), plus: num(c.plus), minus: num(c.minus), lo: num(c.lo), hi: num(c.hi) };
     const was = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]));
+    const tagBoxes = (d.tags || []).map((t) => { const box = h('input', { type: 'checkbox' }); box.checked = (c.tags || []).includes(t); return [t, box]; });
     let dlg = null;
     const ok = () => {
       dlg.close();
@@ -1254,6 +1747,8 @@ export class Balloons {
       const to = n.value.trim().replace(',', '.');
       if (/^\d+(\.\d+)?$/.test(to) && to !== String(c.label)) o.n = to;
       if (type.value !== (bare(c) ? c.tol : '')) o.tol = type.value || 'auto';
+      const tags = tagBoxes.filter(([, box]) => box.checked).map(([t]) => t);
+      if (tags.join('|') !== (c.tags || []).join('|')) o.tags = tags;
       if (Object.keys(o).length > 1) this.run('balloon_edit', o);
     };
     dlg = modal(`Balloon ${c.label}`, h('div', { class: 'pe-fprops bl-props' },
@@ -1261,6 +1756,8 @@ export class Balloons {
       h('div', { class: 'bl-nums' }, row('Nominal', f.nominal), row('+ Tolerance', f.plus), row('− Tolerance', f.minus), row('Lower limit', f.lo), row('Upper limit', f.hi),
         row('Tolerance type', type)),
       row('Note', note),
+      h('div', { class: 'pe-frow' }, h('span', { text: 'Photos' }), photoStrip(this, 'char', c.id)),
+      h('div', { class: 'pe-frow' }, h('span', { text: 'Tags' }), h('div', { class: 'bl-tagbox' }, ...tagBoxes.map(([t, box]) => h('label', {}, box, t)))),
       h('p', { class: 'bl-hint', text: 'Limits follow the nominal and its tolerance. With no tolerance here, they come from the title block\'s. Type the limits themselves for a size given as limits.' }),
       h('div', { class: 'pe-pop-foot' },
         h('button', { class: 'btn', text: 'Delete balloon', onclick: () => { dlg.close(); this.remove(c.id); } }),

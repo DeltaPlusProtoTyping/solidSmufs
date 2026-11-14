@@ -146,6 +146,7 @@ class PdfEditor(BalloonOps):
         fn = getattr(self, f"op_{op}", None)
         if fn is None:
             raise ValueError(f"Unknown PDF edit: {op}")
+        self._balloon_guard(op, args)
         return fn(**args)
 
     # ================================================================== coordinates
@@ -1120,4 +1121,8 @@ class PdfEditor(BalloonOps):
         self._save_doc(self.fz, target)
         self.path = str(target)
         self.saved_gen = self.gen
+        data = self._insp()
+        if data["chars"] or data.get("issues"):  # (searched across jobs: kernel/inspindex.py)
+            from . import inspindex
+            inspindex.record(self.path, data)
         return self._answer([], result={"path": self.path})

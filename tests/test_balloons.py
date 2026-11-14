@@ -916,6 +916,206 @@ class InThePdf(unittest.TestCase):
         again = self.auto()
         self.assertEqual(sorted(c["text"] for c in again["chars"]), sorted(c["text"] for c in before["chars"]))
 
+    def test_tags(self):
+        res = self.auto()
+        a, b = res["chars"][0], res["chars"][1]
+        self.assertIn("100% check", res["tags"])
+        r = self.ed.run("balloon_edit", {"id": a["id"], "tags": ["Custom gage", "Visual", "nonsense"]})["result"]
+        self.assertEqual(next(c for c in r["chars"] if c["id"] == a["id"])["tags"], ["Visual", "Custom gage"])  # (in their order)
+        r = self.ed.run("balloon_tag", {"ids": [a["id"], b["id"]], "tag": "Spot check"})["result"]
+        tags = {c["id"]: c["tags"] for c in r["chars"]}
+        self.assertEqual((tags[a["id"]], tags[b["id"]]), (["Visual", "Spot check", "Custom gage"], ["Spot check"]))
+        r = self.ed.run("balloon_tag", {"ids": [b["id"]], "tag": "Spot check", "on": False})["result"]
+        self.assertIsNone(next(c for c in r["chars"] if c["id"] == b["id"])["tags"])
+        with self.assertRaises(ValueError):
+            self.ed.run("balloon_tag", {"ids": [b["id"]], "tag": "Nope"})
+
+    def test_sheet_id_and_change_notes(self):
+        res = self.auto()
+        sid = res["sid"]
+        self.assertRegex(sid, r"^SS-[A-Z2-9]{6}$")
+        self.ed.run("balloon_info", {"info": {"part": "WM-1001", "job": "J-77"}})  # (filled in: no note needed)
+        with self.assertRaises(ValueError):
+            self.ed.run("balloon_info", {"info": {"part": "WM-1001", "job": "J-78"}})
+        r = self.ed.run("balloon_info", {"info": {"part": "WM-1001", "job": "J-78", "lot": "7"}, "note": "Rerun on a new job"})["result"]
+        self.assertEqual([(x["field"], x["old"], x["new"], x["note"]) for x in r["log"]], [("job", "J-77", "J-78", "Rerun on a new job")])
+        self.assertTrue(r["log"][0]["at"] and r["log"][0]["who"] is not None)
+        self.assertEqual(r["info"]["lot"], "7")
+        # the id stays whatever's edited, and through saving and opening again
+        self.ed.run("balloon_edit", {"id": r["chars"][0]["id"], "desc": "Length"})
+        path = os.path.join(self.dir.name, "kept.pdf")
+        self.ed.run("save", {"path": path})
+        from solidsmufs.kernel.pdfedit import PdfEditor
+        from solidsmufs.kernel.pdfdoc import PdfFile
+        pdf = PdfFile(path)
+        try:
+            res2 = PdfEditor(pdf, path).run("balloons", {})
+        finally:
+            pdf.close()
+        self.assertEqual((res2["sid"], len(res2["log"])), (sid, 1))
+
+    def test_production_issues(self):
+        res = self.auto()
+        c = res["chars"][2]
+        self.ed.run("balloon_info", {"info": {"job": "J-77"}})
+        r = self.ed.run("balloon_issue_add", {"char": c["id"], "title": "Burr on the bore", "tags": ["Deburring", "Improve", "x"]})["result"]
+        i = r["issues"][0]
+        self.assertEqual((r["issue"], i["n"], i["label"], i["job"], i["status"], i["tags"]), (i["id"], 1, c["label"], "J-77", "open", ["Improve", "Deburring"]))
+        self.assertIn("issueTags", r)
+        act = lambda a, **o: self.ed.run("balloon_issue_act", {"id": i["id"], "act": a, **o})["result"]["issues"]  # noqa: E731
+        self.assertEqual(act("fixed")[0]["status"], "fixed")
+        with self.assertRaises(ValueError):
+            act("resolve")  # (how?)
+        got = act("resolve", route="troubleshooting")[0]
+        self.assertEqual((got["status"], got["route"]), ("resolved", "troubleshooting"))
+        self.assertEqual(act("reopen")[0]["status"], "open")
+        r = self.ed.run("balloon_issue_edit", {"id": i["id"], "title": "Burr on the cross hole", "job": "J-78", "char": None})["result"]
+        got = r["issues"][0]
+        self.assertEqual((got["title"], got["job"], got["label"]), ("Burr on the cross hole", "J-78", None))
+        # hide, and delete: only one asked to be deleted goes for good
+        self.assertTrue(act("hide")[0]["hidden"])
+        with self.assertRaises(ValueError):
+            act("purge")
+        with self.assertRaises(ValueError):
+            act("delete")  # (why?)
+        got = act("delete", reason="Entered twice")[0]
+        self.assertEqual((got["hidden"], got["delete"]["reason"]), (True, "Entered twice"))
+        got = act("keep")[0]
+        self.assertEqual((got["hidden"], got["delete"]), (True, None))
+        act("delete", reason="Entered twice")
+        self.assertEqual(act("purge"), [])
+        self.ed.run("undo", {})
+        r = self.ed.run("balloons", {})
+        self.assertEqual(len(r["issues"]), 1)
+        self.assertEqual([h["what"] for h in r["issues"][0]["history"]][:3], ["Added", "Fixed, ready for lead", "Resolved: moved to troubleshooting"])
+        # a second one is numbered on; the balloon's gone: it says what it was
+        r = self.ed.run("balloon_issue_add", {"char": c["id"], "title": "Finish"})["result"]
+        self.assertEqual(r["issues"][1]["n"], 2)
+        r = self.ed.run("balloon_delete", {"ids": [c["id"]]})["result"]
+        self.assertEqual((r["issues"][1]["label"], r["issues"][1]["gone"]), (c["label"], True))
+
+    def test_draft_released_superseded(self):
+        res = self.auto()
+        c = res["chars"][0]
+        self.assertEqual(res["status"], "draft")
+        r = self.ed.run("balloon_status", {"status": "released"})["result"]
+        self.assertEqual(r["status"], "released")
+        # released: the characteristics are fixed, the work on them goes on
+        for op, args in (("balloon_edit", {"id": c["id"], "desc": "x"}), ("balloon_delete", {"ids": [c["id"]]}),
+                         ("balloon_auto", {}), ("balloon_tag", {"ids": [c["id"]], "tag": "Visual"})):
+            with self.assertRaises(ValueError, msg=op):
+                self.ed.run(op, args)
+        part = self.ed.run("balloon_part_add", {})["result"]["part"]
+        self.ed.run("balloon_result", {"key": str(c["id"]), "part": part, "value": "5.001"})
+        self.ed.run("balloon_issue_add", {"title": "Chatter"})
+        # superseded: nothing changes
+        self.ed.run("balloon_status", {"status": "superseded"})
+        for op, args in (("balloon_part_add", {}), ("balloon_issue_add", {"title": "x"}), ("balloon_info", {"info": {"job": "1"}})):
+            with self.assertRaises(ValueError, msg=op):
+                self.ed.run(op, args)
+        self.assertEqual(len(self.ed.run("balloons", {})["chars"]), len(res["chars"]))  # (still read)
+        # back to draft, with a reason
+        with self.assertRaises(ValueError):
+            self.ed.run("balloon_status", {"status": "draft"})
+        r = self.ed.run("balloon_status", {"status": "draft", "note": "Customer asked for a change"})["result"]
+        self.assertEqual([(x["field"], x["old"], x["new"]) for x in r["log"]], [("status", "draft", "released"), ("status", "released", "superseded"), ("status", "superseded", "draft")])
+        self.ed.run("balloon_edit", {"id": c["id"], "desc": "Length"})
+
+    def test_photos_with_marks_beside_them(self):
+        import base64
+        import pymupdf
+        res = self.auto()
+        c = res["chars"][0]
+        big = pymupdf.Pixmap(pymupdf.csRGB, (0, 0, 3000, 1500), True)  # (with transparency, and too big)
+        big.clear_with(200)
+        url = "data:image/png;base64," + base64.b64encode(big.tobytes("png")).decode()
+        r = self.ed.run("balloon_photo_add", {"on": "char", "of": c["id"], "image": url, "name": "bore.png"})["result"]
+        p = r["photos"][0]
+        self.assertEqual((r["photo"], p["on"], p["of"], p["w"], p["h"], p["marks"]), (p["id"], "char", c["id"], 1920, 960, []))
+        got = self.ed.run("balloon_photo", {"id": p["id"]})
+        self.assertTrue(got["url"].startswith("data:image/jpeg;base64,"))
+        marks = [{"t": "arrow", "a": [10, 10], "b": [200, 300], "c": "#FF5F05", "w": 6}, {"t": "text", "at": [50, 60], "s": "Burr here"},
+                 {"t": "pen", "pts": [[1, 2], [3, 4], [5, 6]]}, {"t": "nonsense"}]
+        r = self.ed.run("balloon_photo_marks", {"id": p["id"], "marks": marks})["result"]
+        self.assertEqual([m["t"] for m in r["photos"][0]["marks"]], ["arrow", "text", "pen"])
+        self.assertEqual(self.ed.run("balloon_photo", {"id": p["id"]})["url"], got["url"])  # (the picture itself unchanged)
+        # on an issue: deleted for good with it
+        i = self.ed.run("balloon_issue_add", {"title": "Burr"})["result"]["issue"]
+        self.ed.run("balloon_photo_add", {"on": "issue", "of": i, "image": url})
+        self.assertEqual(self.ed.fz.embfile_count(), 2)
+        self.ed.run("balloon_issue_act", {"id": i, "act": "delete", "reason": "test"})
+        r = self.ed.run("balloon_issue_act", {"id": i, "act": "purge"})["result"]
+        self.assertEqual(([x["id"] for x in r["photos"]], self.ed.fz.embfile_count()), ([p["id"]], 1))
+        with self.assertRaises(ValueError):
+            self.ed.run("balloon_photo_add", {"on": "char", "of": c["id"], "image": "data:image/png;base64,bm90IGEgcGljdHVyZQ=="})
+        self.ed.run("balloon_photo_delete", {"id": p["id"]})
+        self.assertEqual((self.ed.run("balloons", {})["photos"], self.ed.fz.embfile_count()), ([], 0))
+
+    def test_report_prints_issues_photos_and_a_header(self):
+        import base64
+        import pymupdf
+        res = self.auto()
+        c = res["chars"][0]
+        self.ed.run("balloon_info", {"info": {"part": "WM-1001", "rev": "B", "job": "J-77"}})
+        pic = pymupdf.Pixmap(pymupdf.csRGB, (0, 0, 400, 300), False)
+        pic.clear_with(120)
+        url = "data:image/png;base64," + base64.b64encode(pic.tobytes("png")).decode()
+        i = self.ed.run("balloon_issue_add", {"char": c["id"], "title": "Burr on the bore", "notes": "two lines\nof notes"})["result"]["issue"]
+        hid = self.ed.run("balloon_issue_add", {"title": "Not this one"})["result"]["issue"]
+        self.ed.run("balloon_issue_act", {"id": hid, "act": "hide"})
+        p = self.ed.run("balloon_photo_add", {"on": "issue", "of": i, "image": url})["result"]["photo"]
+        self.ed.run("balloon_photo_marks", {"id": p, "marks": [{"t": "arrow", "a": [10, 10], "b": [200, 150], "c": "#FF5F05"}, {"t": "text", "at": [20, 280], "s": "here"}]})
+        self.ed.run("balloon_photo_add", {"on": "char", "of": c["id"], "image": url})
+        out = os.path.join(self.dir.name, "printed.xlsx")
+        plain = self.ed.run("balloon_report", {"path": out})["pages"]
+        done = self.ed.run("balloon_report", {"path": out, "printing": {"issues": True, "photos": "medium", "logo": url}})
+        self.assertEqual(done["pages"], plain + 2)  # (a page of issues, a page of photos)
+        d = pymupdf.open(done["pdf"])
+        try:
+            text = "".join(pg.get_text() for pg in d)
+            sid = self.ed.run("balloons", {})["sid"]
+            self.assertIn(f"Part WM-1001  ·  Rev B  ·  Job J-77  ·  {sid}  ·  Draft", text)
+            self.assertIn("Printed ", text)
+            self.assertIn("Burr on the bore", text)
+            self.assertNotIn("Not this one", text)
+            self.assertIn(f"Issue #1: Burr on the bore", text)
+            self.assertIn(f"Balloon {c['label']}:", text)
+            self.assertEqual(len(d[0].get_images()), 1)  # the logo
+            self.assertEqual(len(d[-1].get_images()), 2)  # the photos
+            self.assertTrue(d[-1].get_drawings())  # what's drawn on them
+        finally:
+            d.close()
+        # no header line asked for
+        done = self.ed.run("balloon_report", {"path": out, "printing": {"header": False}})
+        d = pymupdf.open(done["pdf"])
+        try:
+            self.assertNotIn("Printed ", d[0].get_text())
+        finally:
+            d.close()
+
+    def test_search_across_jobs(self):
+        from unittest import mock
+        res = self.auto()
+        self.ed.run("balloon_info", {"info": {"part": "WM-1001", "job": "J-77"}})
+        self.ed.run("balloon_edit", {"id": res["chars"][1]["id"], "desc": "Cross hole diameter", "gage": "Pin gage"})
+        self.ed.run("balloon_issue_add", {"char": res["chars"][1]["id"], "title": "Oversize cross hole", "notes": "Changed the drill to a .3740"})
+        appdata = os.path.join(self.dir.name, "appdata")
+        with mock.patch.dict(os.environ, {"APPDATA": appdata, "SOLIDSMUFS_APP": "1"}):
+            other = os.path.join(self.dir.name, "other job.pdf")
+            self.ed.run("save", {"path": other})  # (another sheet, saved: in the index)
+            self.assertTrue(os.path.exists(os.path.join(appdata, "SolidSmufs", "inspections.json")))
+            self.ed.run("balloon_info", {"info": {"part": "WM-1001", "job": "J-80"}, "note": "next job"})  # (this one as it is now: not saved)
+            hits = self.ed.run("balloon_search", {"query": "cross HOLE"})
+            self.assertEqual({(h["kind"], h["job"], h["here"]) for h in hits}, {("char", "J-80", True), ("issue", "J-80", True)})
+            issue = next(h for h in hits if h["kind"] == "issue")
+            self.assertEqual((issue["label"], issue["text"]), ("#1 on 2", "Oversize cross hole"))
+            self.assertEqual(self.ed.run("balloon_search", {"query": ".3740 drill"})[0]["kind"], "issue")  # (earlier fixes, in the notes)
+            self.assertEqual(self.ed.run("balloon_search", {"query": ""}), [])
+        # tests and scripts leave the computer's own index alone
+        with mock.patch.dict(os.environ, {"APPDATA": os.path.join(self.dir.name, "not"), "SOLIDSMUFS_APP": ""}):
+            self.ed.run("save", {"path": os.path.join(self.dir.name, "third.pdf")})
+            self.assertFalse(os.path.exists(os.path.join(self.dir.name, "not", "SolidSmufs", "inspections.json")))
+
     def test_views(self):
         res = self.auto()
         w = self.ed.fz[0].rect.width

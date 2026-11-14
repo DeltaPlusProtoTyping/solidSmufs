@@ -785,6 +785,71 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .pe-frow input, .pe-frow select, .pe-frow textarea { padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); font: 13px var(--ui); }
 .pe-fticks { display: flex; gap: 18px; padding-left: 140px; font: 13px var(--ui); color: var(--ink); }
 .pe-ftick { display: flex; align-items: center; gap: 6px; }
+/* Ballooning: the sheet id, tags, the job's change history */
+.bl-sid { font: 600 11px/1 ui-monospace, Consolas, monospace; padding: 3px 6px; border: 1px solid var(--border, #ccd); border-radius: 4px; opacity: .8; margin-left: 6px; }
+.bl-tagi { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.bl-tagbox { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.bl-tagbox label { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
+.bl-withmark { display: flex; gap: 4px; align-items: center; }
+.bl-withmark input { flex: 1; min-width: 0; }
+.bl-edmark { border: 0; background: none; cursor: pointer; color: var(--accent, #2858cf); font-size: 14px; padding: 0 3px; }
+.bl-sidline { display: flex; gap: 10px; align-items: baseline; margin-bottom: 8px; }
+.bl-sidline b { font-family: ui-monospace, Consolas, monospace; }
+.bl-hist:empty { display: none; }
+.bl-hist { margin-top: 10px; border-top: 1px solid var(--border, #ccd); padding-top: 8px; }
+.bl-histh { display: flex; gap: 12px; align-items: baseline; margin-bottom: 6px; }
+.bl-log { max-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.bl-logh { font-weight: 600; }
+.bl-logw { font-size: 11px; opacity: .7; }
+.bl-logn { white-space: pre-wrap; }
+.bl-props { max-height: calc(100vh - 110px); overflow: auto; }
+.bl-nwrap { display: inline-flex; gap: 4px; align-items: center; }
+.bl-flag { color: #e02020; font-size: 12px; }
+.bl-issues tr.done td { opacity: .6; }
+.bl-issues tr.hid td { font-style: italic; opacity: .55; }
+.bl-issues tr.ready .bl-ist { color: #b26a00; font-weight: 600; }
+.bl-num.gone { text-decoration: line-through; opacity: .6; }
+.bl-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.bl-status { font-weight: 600; margin-left: 6px; }
+.bl-status.s-draft { color: #6b7280; }
+.bl-status.s-released { color: #1f8a3b; }
+.bl-status.s-superseded { color: #b26a00; }
+.bl-role { margin-left: 4px; }
+.bl-role.open { color: #1f8a3b; font-weight: 600; }
+.bl-locked { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: rgba(31, 138, 59, .12); }
+.bl-warn { color: #b26a00; font-weight: 600; }
+/* Ballooning photos: thumbnails, the viewer, the markup */
+.bl-sbar { display: flex; gap: 8px; }
+.bl-sbar input { flex: 1; }
+.bl-found { display: flex; flex-direction: column; gap: 2px; max-height: 55vh; overflow: auto; margin-top: 8px; }
+.bl-hit { display: grid; grid-template-columns: 56px 70px 1fr 1fr 190px; gap: 8px; align-items: baseline; text-align: left; border: 0; background: none; padding: 5px 6px; border-radius: 4px; cursor: pointer; color: inherit; font: inherit; }
+.bl-hit:hover { background: rgba(127, 127, 127, .14); }
+.bl-hit.gone { opacity: .5; cursor: default; }
+.bl-hk { font-size: 11px; font-weight: 600; }
+.bl-hk.issue { color: #e02020; }
+.bl-hl { font-weight: 600; }
+.bl-ht { font-family: ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bl-hm, .bl-hw { font-size: 12px; opacity: .75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bl-print { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.bl-pcheck { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
+.bl-logo { display: inline-flex; gap: 8px; align-items: center; }
+.bp-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bp-thumb { width: 84px; height: 64px; padding: 0; border: 1px solid var(--border, #ccd); border-radius: 4px; overflow: hidden; cursor: pointer; background: #111; }
+.bp-thumb .bp-pic { width: 100%; height: 100%; }
+.bp-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.bp-thumb .bp-over { display: none; }
+.bp-view { display: flex; flex-direction: column; gap: 8px; }
+.bp-pic { position: relative; align-self: center; line-height: 0; }
+.bp-view .bp-pic img { max-width: 100%; max-height: calc(100vh - 210px); display: block; }
+.bp-over { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.bp-over.editing { pointer-events: auto; cursor: crosshair; }
+.bp-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.bp-tool.on { outline: 2px solid var(--accent, #2858cf); }
+.bp-color { width: 22px; height: 22px; border-radius: 50%; border: 1px solid #888; cursor: pointer; padding: 0; }
+.bp-color.on { outline: 2px solid var(--accent, #2858cf); outline-offset: 2px; }
+.bp-width { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; }
+.bp-type { position: absolute; min-width: 160px; background: rgba(255, 255, 255, .85); border: 1px dashed #888; font-weight: 600; line-height: 1.2; padding: 0 4px; }
+
 /* marking for redaction goes over a form's fields, not into them */
 .pv-scroll[data-tool="redact"] .pe-field, .pv-scroll[data-tool="redactText"] .pe-field { pointer-events: none; }
 

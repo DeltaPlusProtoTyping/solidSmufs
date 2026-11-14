@@ -211,7 +211,7 @@ export function modal(title, body, opts = {}) {
   const back = h('div', { class: 'modal-back' });
   const d = new Dialog({ key: null, title, icon: opts.icon, width: opts.width || 640, body, resizable: false, onClose: () => back.remove() });
   layer().insertBefore(back, d.el);
-  d.el.style.left = `${(innerWidth - d.el.offsetWidth) / 2}px`;
+  d.el.style.left = `${Math.max(8, (innerWidth - d.el.offsetWidth) / 2)}px`;
   d.el.style.top = `${Math.max(30, (innerHeight - d.el.offsetHeight) / 2)}px`;
   back.addEventListener('pointerdown', () => d.close());
   const onKey = (e) => { if (e.key === 'Escape') { d.close(); document.removeEventListener('keydown', onKey, true); } };
