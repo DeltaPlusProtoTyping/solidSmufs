@@ -397,13 +397,38 @@ def drawing_line(info, drawing):
     return f"Drawing: {info['dwg']}{' Rev ' + info['dwgrev'] if info.get('dwgrev') else ''}" if info.get("dwg") else f"Drawing: {drawing}"
 
 
-def build(data, drawing, parts=1, layout=None, footer=""):
+def issues(data):
+    """The production issues not hidden, as a sheet: number, balloon, title, tags, status, job, notes, who added it
+    and when, and its last step."""
+    shown = [i for i in data.get("issues") or [] if not i.get("hidden")]
+    if not shown:
+        return None
+    labels = {c["id"]: balloons.label(c) for c in data["chars"]}
+    said = lambda i: ("Resolved: moved to troubleshooting" if i.get("route") == "troubleshooting" else "Resolved: machinist fix") \
+        if i.get("status") == "resolved" else "Fixed, ready for lead" if i.get("status") == "fixed" else "Open"  # noqa: E731
+    cols = ["#", "Balloon", "Title", "Tags", "Status", "Job", "Notes", "Added by", "Added", "Last step"]
+    rows = [[("Production Issues", "title")], [], [(t, "head") for t in cols]]
+    for i in shown:
+        last = (i.get("history") or [{}])[-1]
+        rows.append([(f"#{i['n']}", "center"), (labels.get(i.get("char"), i.get("label") or ""), "center"), (i.get("title") or "", "box"),
+                     (", ".join(i.get("tags") or []), "box"), (said(i), "box"), (i.get("job") or "", "center"), (i.get("notes") or "", "box"),
+                     (i.get("by") or "", "box"), ((i.get("at") or "")[:16].replace("T", " "), "box"),
+                     (f"{last.get('what', '')} ({(last.get('at') or '')[:10]})" if last else "", "box")])
+    first, k = 4, xlsx.col(4)
+    color = [{"range": f"{k}{first}:{k}{first + len(shown) - 1}", "when": f'LEFT({k}{first},8)="Resolved"', "as": "good"},
+             {"range": f"{k}{first}:{k}{first + len(shown) - 1}", "when": f'{k}{first}="Open"', "as": "bad"}]
+    return {"name": "Production Issues", "rows": rows, "widths": [6, 9, 32, 26, 30, 10, 50, 16, 16, 40], "freeze": 3,
+            "color": color, "landscape": True}
+
+
+def build(data, drawing, parts=1, layout=None, footer="", with_issues=False):
     """The workbook's sheets for an inspection list. layout: "sheet" (the page to fill in), "list" (the first
     article: results with Pass / Fail worked out, and AS9102 Forms 1, 2 and 3), or a list layout of your own like
-    LAYOUT."""
+    LAYOUT. with_issues: a sheet of the production issues too."""
     parts = min(max(int(parts or 1), 1), MAX_PARTS)
+    more = [x for x in [issues(data) if with_issues else None] if x]
     if layout in (None, "sheet"):
-        return [sheet(data, drawing, parts, footer)]
+        return [sheet(data, drawing, parts, footer), *more]
     page, where = inspection(data, drawing, parts, None if layout == "list" else layout)
     spread = statistics(data, page["name"], where) if max(parts, len(data.get("samples") or [])) > 1 else None
-    return [page, *([spread] if spread else []), form1(data, drawing), form2(data, drawing), form3(data, drawing, page["name"], where)]
+    return [page, *([spread] if spread else []), form1(data, drawing), form2(data, drawing), form3(data, drawing, page["name"], where), *more]

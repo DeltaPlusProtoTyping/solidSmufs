@@ -484,6 +484,19 @@ class InThePdf(unittest.TestCase):
         five = next(c for c in res["chars"] if c["text"] == "5.000 ±.005")
         self.ed.run("balloon_edit", {"id": five["id"], "desc": "Overall Length", "gage": "Calipers", "reviewed": True})
         self.ed.run("balloon_info", {"info": {"part": "WM-1001", "customer": "ACME"}})
+        # issues: open on 5.000 (with a photo), resolved, and open on 3.750, which is gone on the next revision
+        import base64
+        pic = pymupdf.Pixmap(pymupdf.csRGB, (0, 0, 60, 40), False)
+        url = "data:image/png;base64," + base64.b64encode(pic.tobytes("png")).decode()
+        three = next(c for c in res["chars"] if c["text"] == "3.750")
+        a = self.ed.run("balloon_issue_add", {"char": five["id"], "title": "Long by .002"})["result"]["issue"]
+        b = self.ed.run("balloon_issue_add", {"title": "Done with"})["result"]["issue"]
+        self.ed.run("balloon_issue_act", {"id": b, "act": "resolve", "route": "machinist"})
+        self.ed.run("balloon_issue_add", {"char": three["id"], "title": "Chatter on 3.750"})
+        self.ed.run("balloon_photo_add", {"on": "issue", "of": a, "image": url})
+        self.ed.run("balloon_photo_add", {"on": "char", "of": five["id"], "image": url})
+        self.ed.run("balloon_photo_add", {"on": "char", "of": three["id"], "image": url})  # (its balloon's gone: stays behind)
+        sid = self.ed.run("balloons", {})["sid"]
         old = os.path.join(self.dir.name, "rev-a.pdf")
         self.ed.run("save", {"path": old})
         # the next revision: 2.500's tolerance opened up, 3.750 gone, a 4.250 added, 5.000 moved a little
@@ -515,6 +528,14 @@ class InThePdf(unittest.TestCase):
             self.assertEqual((mine["2.500 +.010/-.000"]["reviewed"], mine["2.500 +.010/-.000"]["note"]), (None, "Was 2.500 +.005/-.000 on the last revision"))
             self.assertEqual((mine["4.250 ±.010"]["note"], mine["4.250 ±.010"]["lo"]), ("New on this revision", 4.24))
             self.assertEqual(res["info"]["part"], "WM-1001")
+            # the open issues came, on the balloon that's the same now (or saying which it was), with their photos
+            self.assertEqual((got["issues"], res["from"]), (2, sid))
+            self.assertEqual([(i["n"], i["title"], i["label"], i["status"]) for i in res["issues"]],
+                             [(1, "Long by .002", num["5.000 ±.005"], "open"), (2, "Chatter on 3.750", f"was {num['3.750']}", "open")])
+            self.assertIn("Carried over from", res["issues"][0]["history"][-1]["what"])
+            self.assertEqual(sorted((p["on"], p["of"]) for p in res["photos"]),
+                             sorted([("issue", res["issues"][0]["id"]), ("char", mine["5.000 ±.005"]["id"])]))
+            self.assertTrue(ed.run("balloon_photo", {"id": res["photos"][0]["id"]})["url"])
             labels = [c["label"] for c in res["chars"]]
             self.assertEqual(len(labels), len(set(labels)))
             self.assertNotIn(num["3.750"], labels)  # (a gap where the one that's gone was)
@@ -1064,12 +1085,24 @@ class InThePdf(unittest.TestCase):
         hid = self.ed.run("balloon_issue_add", {"title": "Not this one"})["result"]["issue"]
         self.ed.run("balloon_issue_act", {"id": hid, "act": "hide"})
         p = self.ed.run("balloon_photo_add", {"on": "issue", "of": i, "image": url})["result"]["photo"]
-        self.ed.run("balloon_photo_marks", {"id": p, "marks": [{"t": "arrow", "a": [10, 10], "b": [200, 150], "c": "#FF5F05"}, {"t": "text", "at": [20, 280], "s": "here"}]})
+        marks = [{"t": "arrow", "a": [10, 10], "b": [200, 150], "c": "#FF5F05"}, {"t": "text", "at": [20, 280], "s": "here"},
+                 {"t": "rect", "a": [250, 20], "b": [380, 120], "fill": "blur"}, {"t": "lasso", "pts": [[20, 20], [80, 30], [50, 90]], "fill": "solid"},
+                 {"t": "stamp", "at": [200, 250], "s": "Burr", "size": 30}, {"t": "oval", "a": [1, 1], "b": [5, 5], "fill": "nonsense"}]
+        kept = self.ed.run("balloon_photo_marks", {"id": p, "marks": marks})["result"]["photos"][0]["marks"]
+        self.assertEqual([(m["t"], m.get("fill")) for m in kept],
+                         [("arrow", None), ("text", None), ("rect", "blur"), ("lasso", "solid"), ("stamp", None), ("oval", None)])
         self.ed.run("balloon_photo_add", {"on": "char", "of": c["id"], "image": url})
         out = os.path.join(self.dir.name, "printed.xlsx")
         plain = self.ed.run("balloon_report", {"path": out})["pages"]
         done = self.ed.run("balloon_report", {"path": out, "printing": {"issues": True, "photos": "medium", "logo": url}})
         self.assertEqual(done["pages"], plain + 2)  # (a page of issues, a page of photos)
+        prev = self.ed.run("balloon_report_preview", {"printing": {"issues": True, "photos": "medium"}, "most": 2, "info": {"part": "TYPED-1"}})
+        self.assertEqual((prev["count"], len(prev["pages"])), (plain + 2, 2))
+        self.assertTrue(prev["pages"][0].startswith("data:image/png;base64,"))
+        self.assertEqual(self.ed.run("balloons", {})["info"]["part"], "WM-1001")  # (typed for the preview: not saved)
+        with zipfile.ZipFile(out) as z:  # the workbook has them too
+            self.assertIn('name="Production Issues"', z.read("xl/workbook.xml").decode())
+            self.assertIn("Burr on the bore", "".join(z.read(n).decode("utf-8", "ignore") for n in z.namelist() if n.startswith("xl/")))
         d = pymupdf.open(done["pdf"])
         try:
             text = "".join(pg.get_text() for pg in d)
@@ -1081,7 +1114,7 @@ class InThePdf(unittest.TestCase):
             self.assertIn(f"Issue #1: Burr on the bore", text)
             self.assertIn(f"Balloon {c['label']}:", text)
             self.assertEqual(len(d[0].get_images()), 1)  # the logo
-            self.assertEqual(len(d[-1].get_images()), 2)  # the photos
+            self.assertEqual(len(d[-1].get_images()), 3)  # the photos, and the blurred part of one
             self.assertTrue(d[-1].get_drawings())  # what's drawn on them
         finally:
             d.close()

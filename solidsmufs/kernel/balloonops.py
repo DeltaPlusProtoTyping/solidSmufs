@@ -89,7 +89,8 @@ FIXED_RELEASED = {"auto", "add", "move", "edit", "sub", "multiply", "detach", "c
 FIXED_SUPERSEDED = FIXED_RELEASED | {"part_add", "sample", "part_edit", "part_delete", "result", "import", "results_clear",
                                      "issue_add", "issue_edit", "issue_act", "info", "photo_add", "photo_marks", "photo_delete"}
 PHOTO_MOST = 1920  # pixels along a photo's longer side
-MARK_KINDS = ("pen", "line", "arrow", "oval", "rect", "text")
+MARK_KINDS = ("pen", "line", "arrow", "oval", "rect", "lasso", "text", "stamp")
+MARK_FILLS = ("none", "solid", "blur")  # (a box, an oval or a lasso shape: filled with its color, or the photo blurred)
 STATUSES = ("draft", "released", "superseded")
 ISSUE_TAGS = ("OK / watch", "Improve", "Out of tolerance", "Dimension", "Finish", "Deburring")
 ISSUE_ACTS = ("fixed", "resolve", "reopen", "hide", "show", "delete", "keep", "purge")
@@ -899,7 +900,8 @@ class BalloonOps:
     # ================================================================== a new revision of the print
     def _other_list(self, path):
         """The inspection list kept in another PDF (the print's last revision, ballooned): its characteristics, each
-        with "page" and "at": where its callout's middle is, as a share of the sheet as it's shown (0 to 1)."""
+        with "page" and "at": where its callout's middle is, as a share of the sheet as it's shown (0 to 1); its sheet
+        id, production issues and photos ("pictures": {photo id: the picture's bytes})."""
         import pymupdf
         if Path(path).resolve() == Path(self.path).resolve():
             raise ValueError("That's this print. Choose the last revision's ballooned PDF.")
@@ -933,7 +935,15 @@ class BalloonOps:
                 pg = doc[page]
                 x, y, w, h = self._out(pg, c["box"])
                 out.append({**c, "page": page, "at": ((x + w / 2) / pg.rect.width, (y + h / 2) / pg.rect.height)})
-            return {"chars": out, "info": data.get("info") or {}, "views": data.get("views") or []}
+            pictures = {}
+            for p in data.get("photos") or []:
+                try:
+                    pictures[p["id"]] = doc.embfile_get(f"ssp-{p['id']}")
+                except Exception:
+                    pass
+            return {"chars": out, "info": data.get("info") or {}, "views": data.get("views") or [], "sid": data.get("sid"),
+                    "issues": data.get("issues") or [], "photos": [p for p in data.get("photos") or [] if p["id"] in pictures],
+                    "pictures": pictures}
         finally:
             doc.close()
 
@@ -1004,12 +1014,47 @@ class BalloonOps:
         data["info"] = info
         if old.get("sid") and not data.get("from"):
             data["from"] = old["sid"]
+        carried = self._carry_issues(data, old, {o["id"]: n for o, n, _ in pairs}, Path(path).name)
         label = lambda c: balloons.label(c)  # noqa: E731
         report = {"from": Path(path).name, "kept": len(kept),
                   "changed": [{"n": label(n), "was": o["text"], "now": n["text"]} for o, n in changed],
                   "added": [{"n": label(n), "now": n["text"]} for n in added],
-                  "removed": [{"n": label(o), "was": o["text"]} for o in removed]}
+                  "removed": [{"n": label(o), "was": o["text"]} for o in removed], "issues": carried}
         return self._balloon_done(data, {c["page"] for c in data["chars"]}, {"carried": report})
+
+    def _carry_issues(self, data, old, same, name):
+        """The last revision's production issues not yet resolved (nor hidden) come over, on the balloon that's the
+        same one now (or on none, saying which it was), with their photos; and the photos of the characteristics that
+        are the same. Returns how many issues came."""
+        me, at = who(), _stamp()
+        issues, photos = data.setdefault("issues", []), data.setdefault("photos", [])
+        nid = max([i["id"] for i in issues], default=0)
+        nn = max([i["n"] for i in issues], default=0)
+        pid = max([p["id"] for p in photos], default=0)
+        moved = {}
+        count = 0
+        for i in old.get("issues") or []:
+            if i.get("hidden") or i.get("status") == "resolved":
+                continue
+            nid, nn = nid + 1, nn + 1
+            now = same.get(i.get("char"))
+            moved[i["id"]] = nid
+            history = list(i.get("history") or []) + [{"at": at, "who": me, "what": f"Carried over from {old.get('sid') or name} (#{i['n']} there)"}]
+            issues.append({**i, "id": nid, "n": nn, "char": now["id"] if now else None,
+                           "label": balloons.label(now) if now else (f"was {i['label']}" if i.get("label") else None),
+                           "history": history, "delete": None})
+            count += 1
+        for p in old.get("photos") or []:
+            if p["on"] == "issue" and p["of"] in moved:
+                of = moved[p["of"]]
+            elif p["on"] == "char" and p["of"] in same:
+                of = same[p["of"]]["id"]
+            else:
+                continue
+            pid += 1
+            self.fz.embfile_add(f"ssp-{pid}", old["pictures"][p["id"]], filename=f"ssp-{pid}.jpg", desc="SolidSmurfs inspection photo")
+            photos.append({**p, "id": pid, "of": of})
+        return count
 
     def op_balloon_tag(self, ids, tag, on=True):
         """Put an inspection tag on these characteristics, or take it off."""
@@ -1381,9 +1426,11 @@ class BalloonOps:
                 continue
             keep = {"t": m["t"], "c": str(m.get("c") or "#e02020")[:9], "w": max(min(float(m.get("w") or 4), 60), 1)}
             num = lambda q: [round(float(q[0]), 1), round(float(q[1]), 1)]  # noqa: E731
-            if m["t"] == "pen":
+            if m["t"] in ("oval", "rect", "lasso") and m.get("fill") in MARK_FILLS[1:]:
+                keep["fill"] = m["fill"]
+            if m["t"] in ("pen", "lasso"):
                 keep["pts"] = [num(q) for q in (m.get("pts") or [])[:4000]]
-            elif m["t"] == "text":
+            elif m["t"] in ("text", "stamp"):
                 keep.update(at=num(m["at"]), s=str(m.get("s") or "")[:300], size=max(min(float(m.get("size") or 48), 400), 6))
             else:
                 keep.update(a=num(m["a"]), b=num(m["b"]))
@@ -1417,6 +1464,55 @@ class BalloonOps:
                                                  for k, o, n in changed]
         return self._balloon_done(data, [])
 
+    def _printing(self, data, printing):
+        """The report PDF's settings from the window's, with the photos' and the logo's pictures."""
+        o = dict(printing or {})
+        if o.get("photos") in ("small", "medium", "large"):
+            o["pictures"] = {}
+            for p in data.get("photos") or []:
+                try:
+                    o["pictures"][p["id"]] = self.fz.embfile_get(f"ssp-{p['id']}")
+                except Exception:
+                    pass
+        if o.get("logo"):
+            try:
+                o["logo"] = base64.b64decode(str(o["logo"]).split(",", 1)[-1])
+            except Exception:
+                o["logo"] = None
+        o["who"] = who()
+        return o
+
+    def op_balloon_report_preview(self, parts=None, footer="", printing=None, most=8, info=None):
+        """The report's PDF as it would be printed, as pictures of its pages to look at (no more than `most`):
+        {"pages": [data URLs], "count": how many pages in all}. info: the job's details as typed, not saved yet."""
+        import os
+        import tempfile
+        import pymupdf
+        from . import reportpdf
+        data = self._insp()
+        if not data["chars"]:
+            raise ValueError("There are no balloons to report yet.")
+        if info:
+            from . import report
+            data["info"] = report.clean_info(info)
+        parts = parts or (data.get("info") or {}).get("parts") or 1
+        fd, tmp = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        try:
+            count = reportpdf.write(tmp, data, Path(self.path).name, parts, footer, self._printing(data, printing))
+            doc = pymupdf.open(tmp)
+            try:
+                pages = ["data:image/png;base64," + base64.b64encode(doc[i].get_pixmap(dpi=60).tobytes("png")).decode("ascii")
+                         for i in range(min(count, int(most)))]
+            finally:
+                doc.close()
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        return {"pages": pages, "count": count}
+
     def op_balloon_report(self, path, parts=None, layout=None, footer="", printing=None):
         """Write the inspection report as an Excel workbook (kernel/report.py). layout: "sheet", the page to print
         and fill in (five parts to a table), or "list", the list with its limits, a column for each part's results
@@ -1431,7 +1527,8 @@ class BalloonOps:
             raise ValueError("There are no balloons to report yet.")
         parts = parts or (data.get("info") or {}).get("parts") or 1
         try:
-            xlsx.write(path, report.build(data, Path(self.path).name, parts, layout if layout in ("sheet", "list") else None, footer))
+            xlsx.write(path, report.build(data, Path(self.path).name, parts, layout if layout in ("sheet", "list") else None, footer,
+                                          with_issues=bool((printing or {}).get("issues"))))
         except PermissionError:
             raise ValueError(f"{Path(path).name} can't be written: it's open in Excel, or the folder is read-only.") from None
         from . import reportpdf
@@ -1439,21 +1536,7 @@ class BalloonOps:
         if pdf.resolve() == Path(self.path).resolve():
             raise ValueError(f"The report's PDF would take the print's own name, {pdf.name}. Save the report under another name.")
         try:
-            o = dict(printing or {})
-            if o.get("photos") in ("small", "medium", "large"):
-                o["pictures"] = {}
-                for p in data.get("photos") or []:
-                    try:
-                        o["pictures"][p["id"]] = self.fz.embfile_get(f"ssp-{p['id']}")
-                    except Exception:
-                        pass
-            if o.get("logo"):
-                try:
-                    o["logo"] = base64.b64decode(str(o["logo"]).split(",", 1)[-1])
-                except Exception:
-                    o["logo"] = None
-            o["who"] = who()
-            pages = reportpdf.write(str(pdf), data, Path(self.path).name, parts, footer, o)
+            pages = reportpdf.write(str(pdf), data, Path(self.path).name, parts, footer, self._printing(data, printing))
         except (PermissionError, OSError) as e:
             if not isinstance(e, PermissionError) and "ermission" not in str(e) and "open" not in str(e):
                 raise

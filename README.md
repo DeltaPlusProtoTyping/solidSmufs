@@ -236,8 +236,8 @@ SolidSmurfs.exe --difficulty print.pdf --out result.json     (the built app has 
 ## Ballooning a print and its inspection report
 
 **Balloon** (the PDF toolbar, beside TP on hover) turns the PDF view into **Ballooning mode**, and back. Nothing else
-of the app changes. In the mode, the PDF editor's toolbar gives way to the mode's own (Auto Balloon, Add, Sub-balloon,
-Edit, Delete, Renumber, Multiply, Report, with Undo, Redo and Save), and the **Bill of Characteristics** is docked under the
+of the app changes. In the mode, the PDF editor's toolbar gives way to the mode's own (Auto Balloon, Add,
+Edit, Delete, More for sub-balloons, renumbering, views and multiplying, Search, Job, Report, with Undo, Redo and Save), and the **Bill of Characteristics** is docked under the
 pages. **Exit Ballooning** puts the view back as it was; the balloons stay on the print.
 
 **Auto Balloon** reads the print and numbers everything on it there is to inspect: dimensions with their tolerances,
@@ -286,11 +286,11 @@ It asks first what to read, and remembers the answers:
   Delete removes it; **Renumber** closes the gaps. **Add** balloons something by hand: drag a box around a callout and its text is read
   or click a spot for an empty balloon. Everything is undone with Ctrl+Z.
 - **Sub-numbers:** one callout with several things to check gets one number and sub-numbers: 2.1, 2.2, 2.3.
-  **Sub-balloon** puts a new one under the selected balloon's number, and typing `2.2` as another balloon's Dim #
+  **More ▾ → Add sub-balloon** puts a new one under the selected balloon's number, and typing `2.2` as another balloon's Dim #
   moves it to be the second under 2. A plain number takes it out again. Renumber keeps them together.
-- **Views:** **Views ▾ → Add view** and drag a box round one of the drawing's views. Its balloons are drawn in its
+- **Views:** **More ▾ → Views → Add view** and drag a box round one of the drawing's views. Its balloons are drawn in its
   color (on the print and in the saved PDF); click its name tag to rename it, change its color, give it a start
-  number or delete it. **Renumber ▾** numbers the balloons in list order, by rows (across the sheet), by columns (down
+  number or delete it. **More ▾ → Renumber** numbers the balloons in list order, by rows (across the sheet), by columns (down
   it) or clockwise round from twelve o'clock; with views, view by view in their order, each from its start number.
 - **A new revision:** open the new revision's PDF, then **Auto Balloon ▾ → Carry over from the last revision…** and
   choose the last revision's ballooned PDF. This print is read again, and each characteristic found that the last
@@ -317,7 +317,7 @@ It asks first what to read, and remembers the answers:
     max, standard deviation and Cp on hover. The first article workbook gets a **Statistics** sheet that works them
     out from the measurements on its Inspection sheet, so it follows what's typed there.
 - **Multiply:** a characteristic that applies in several places (`4X`, a count under Mult) is one balloon and one
-  row. **Multiply** makes it a row for each place, 3.1 to 3.4, in the list and in the report, so each one is
+  row. **More ▾ → Multiply** makes it a row for each place, 3.1 to 3.4, in the list and in the report, so each one is
   inspected; it stays one balloon, and the rows all say the same. **Detach** makes each place a balloon of its own,
   put around the callout to drag to its own feature, with its own description, gage and note. **Reset** puts a
   multiplied one back to one row. Each is for the selected balloon or for all of them.
@@ -348,7 +348,7 @@ It asks first what to read, and remembers the answers:
 - **Inspection tags:** each characteristic can be tagged Visual, Measured, Dimension, Finish, Deburring, Spot check,
   100% check or Custom gage (as many as apply, or none): the **Tags** column, the Edit dialog, or a row's right-click
   menu. **Show** filters the list by tag. Tags aren't printed.
-- **Sheet ID and job details:** a list gets a sheet ID (SS-XXXXXX) when it's first saved, shown beside the mode's name;
+- **Sheet ID and job details:** a list gets a sheet ID (SS-XXXXXX) when it's first saved, shown in the status button's tip and under **Job…**;
   it never changes, and a revision carried over says which sheet it came from. **Job…** holds the job's details (part,
   revision, customer, job number, lot…). Changing one that was filled in asks for a **change note**, kept with the old
   and new value, who and when: ✎ beside the field shows its changes.
@@ -361,23 +361,35 @@ It asks first what to read, and remembers the answers:
 - **Draft, Released, Superseded:** the status beside the sheet ID. Released, the balloons and characteristics are fixed,
   while results, issues and job details are still filled in; superseded by the next revision, nothing changes. **Back
   to draft** (with a change note) changes it again. Every change of status is logged.
-- **Roles (lead password):** the lock beside the status. With no password set there are no roles. Set a **lead
+- **Roles (lead password):** with no password set there are no roles. **Set a lead password…** is in the status menu; after that a lock sits beside the status. Set a **lead
   password** and releasing, back to draft, marking superseded, resolving or reopening an issue and deleting one for
   good ask for it; it then stays unlocked for four hours, and each lead action starts the four hours again (**Lock
   now** locks it). Anyone may do the rest: balloon, type results, add issues, mark them fixed, hide them, ask for them
   to be deleted. An optional **admin password** does what the lead's does and changes either password. They're kept
   hashed on this PC (`%APPDATA%\SolidSmufs\roles.json`), for whoever uses it: enough to keep the wrong button from
   being pressed, not a lock against someone who edits the files.
-- **Photos** on a characteristic (its Edit dialog) or an issue: **+ Photo…**, or paste one. A photo opens nearly full
-  screen; **Edit markup** draws arrows, lines, ovals, boxes, sketches and text (Illini orange among the colors), with
-  undo and redo. The marks are kept beside the photo, never in it, so **Hide markup** shows it as taken. Photos are
+- **Photos** on a characteristic (its Edit dialog) or an issue: **+ Photo…**, or paste one. **From phone…** shows an
+  address and a QR code to scan for a phone on the same network: its page takes
+  or chooses photos, and they arrive on that balloon or issue while the box is open. Only that page is open to the
+  network, on a port of its own, for 15 minutes or until **Done**; the photos travel unencrypted over the shop's own
+  network. The first time, Windows may ask whether SolidSmurfs may use the network: allow it on private networks. A photo opens nearly full
+  screen; **Edit markup** draws arrows, lines, ovals, boxes, freeform **lasso** shapes, sketches, text and **stamps**
+  (✔, ✖, OK, NG, Burr, Rework, Scrap…; **New stamp…** adds your own, kept on this PC, and asks for the lead password
+  when there is one), in any of seven colors, Illini orange among them, with undo and redo. A box, oval or lasso shape
+  can be **filled**, or **blur** what's under it. **Select** picks marks by drawing a box round them (Shift adds more):
+  drag them to move them, or Delete them. The marks are kept beside the photo, never in it, so **Hide markup** shows
+  it as taken (a blur is only markup: it isn't for hiding what mustn't be seen). Photos are
   kept in the PDF (no more than 1920 pixels along). *Remove hidden info* in the PDF editor takes them out.
 - **Search…:** characteristics and issues by balloon number, dimension, description, gage, tags or an earlier fix's
   notes, on this print or on every ballooned print saved on this computer (kept in
   `%APPDATA%\SolidSmufs\inspections.json`, nothing sent anywhere). A hit on another print opens it.
 - **The report's PDF** can also have a header line on every page (part, revision, job, sheet ID, status) and when it
   was printed, by whom and with what version; the production issues; the photos with their markup (small, medium or
-  large); and a logo, chosen once and remembered on this computer.
+  large); and a logo, chosen once and remembered on this computer. The workbook gets a **Production Issues** sheet
+  when they're asked for. The dialog shows a **preview** of the PDF as it will print, drawn again as the settings change.
+- **A new revision** carried over from the last one brings its production issues not yet resolved, on the balloon
+  that's the same now (or saying which it was), with their photos, and the photos of the characteristics that carried
+  over; the new sheet says which sheet it came from.
 
 It's a first pass by rules, to check against the print, not a finished inspection plan. What it doesn't do yet: read an ISO fit class into limits, read a CMM program's own report format (export it as
 CSV or Excel), balloon a 3D model's PMI, let a report be laid out by hand, or balloon a picture (print it to a PDF first). A

@@ -252,13 +252,34 @@ def _issues(sh, data):
     sh.box(X[0], head, X[-1], y)
 
 
-def _marks(page, rect, p):
+def _blurred(page, rect, k, picture, m):
+    """A blur mark: the part of the photo under it, made coarse, over its box (the photo itself isn't changed)."""
+    import pymupdf
+    xs = [q[0] for q in (m.get("pts") or [m["a"], m["b"]])]
+    ys = [q[1] for q in (m.get("pts") or [m["a"], m["b"]])]
+    box = pymupdf.IRect(int(min(xs)), int(min(ys)), int(max(xs)) + 1, int(max(ys)) + 1)
+    src = pymupdf.Pixmap(picture)
+    box &= src.irect
+    if box.is_empty:
+        return
+    part = pymupdf.Pixmap(src.colorspace, box, src.alpha)  # (just that part)
+    part.copy(src, box)
+    coarse = pymupdf.Pixmap(part, max(part.width // 24, 1), max(part.height // 24, 1), None)
+    page.insert_image(pymupdf.Rect(rect.x0 + box.x0 * k, rect.y0 + box.y0 * k, rect.x0 + box.x1 * k, rect.y0 + box.y1 * k), pixmap=coarse)
+
+
+def _marks(page, rect, p, picture=None):
     """What's drawn on a photo, drawn over it where it's placed (rect), in the photo's own pixels scaled."""
     import math
     import pymupdf
     k = rect.width / p["w"]
     pt = lambda q: pymupdf.Point(rect.x0 + q[0] * k, rect.y0 + q[1] * k)  # noqa: E731
     for m in p.get("marks") or []:
+        if m.get("fill") == "blur" and picture:
+            try:
+                _blurred(page, rect, k, picture, m)
+            except Exception:
+                pass
         c = m.get("c", "#e02020").lstrip("#")
         color = tuple(int(c[i:i + 2], 16) / 255 for i in (0, 2, 4)) if len(c) == 6 else (1, 0, 0)
         w = max(m.get("w", 4) * k, 0.5)
@@ -276,12 +297,24 @@ def _marks(page, rect, p):
             s.draw_oval(pymupdf.Rect(pt(m["a"]), pt(m["b"])).normalize())
         elif m["t"] == "rect":
             s.draw_rect(pymupdf.Rect(pt(m["a"]), pt(m["b"])).normalize())
+        elif m["t"] == "lasso" and len(m.get("pts") or []) > 2:
+            s.draw_polyline([pt(q) for q in m["pts"]] + [pt(m["pts"][0])])
+        elif m["t"] == "stamp":
+            size = max((m.get("size") or 48) * k, 4)
+            a = pt(m["at"])
+            box = pymupdf.Rect(a.x - size * 0.25, a.y - size * 0.95, a.x - size * 0.25 + (len(m.get("s", "")) * 0.62 + 0.5) * size, a.y + size * 0.3)
+            s.draw_rect(box, radius=0.15)
+            s.finish(color=color, fill=(1, 1, 1), fill_opacity=0.7, width=max(size / 12, 0.5))
+            s.commit()
+            page.insert_text(a, m.get("s", ""), fontsize=size, color=color, fontname="hebo")
+            continue
         elif m["t"] == "text":
             size = max((m.get("size") or 48) * k, 4)
             page.insert_text(pt(m["at"]), m.get("s", ""), fontsize=size, color=color, fontname="hebo",
                              render_mode=2, border_width=0.04 if color != (1, 1, 1) else 0.08)
             continue
-        s.finish(color=color, width=w, lineCap=1, lineJoin=1)
+        s.finish(color=color, width=w, lineCap=1, lineJoin=1, fill=color if m.get("fill") == "solid" and m["t"] in ("oval", "rect", "lasso") else None,
+                 stroke_opacity=0.35 if m.get("fill") == "blur" else 1)
         s.commit()
 
 
@@ -309,7 +342,7 @@ def _photos(sh, data, size, pictures):
         k = min(width / p["w"], tall / p["h"])
         r = pymupdf.Rect(x, y, x + p["w"] * k, y + p["h"] * k)
         sh.page.insert_image(r, stream=pictures[p["id"]])
-        _marks(sh.page, r, p)
+        _marks(sh.page, r, p, pictures[p["id"]])
         if p["on"] == "char":
             c = chars[p["of"]]
             say = f"Balloon {balloons.label(c)}: {c.get('text') or ''}"

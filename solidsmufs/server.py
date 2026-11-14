@@ -81,6 +81,8 @@ class App:
         self.native = native or Native()
         self.upload_dir = Path(tempfile.mkdtemp(prefix="solidsmufs-up-"))
         self.httpd = None
+        from .phonelink import PhoneLink
+        self.phone = PhoneLink()  # photos from a phone, over the shop's network (phonelink.py)
         self.browse_first = None  # a zip given at launch that holds several files: the page shows them
 
     def start(self, port=0):
@@ -116,6 +118,7 @@ class App:
     def stop(self):
         if self.httpd:
             self.httpd.shutdown()
+        self.phone.close()
         self.docs.close_all()
         shutil.rmtree(self.upload_dir, ignore_errors=True)
 
@@ -234,6 +237,18 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"app": "SolidSmufs", "version": __version__, "native": self.ctx.native.available,
                                    "recent": s["recent"], "ui": s["ui"], "formats": sorted(ALL_FORMATS),
                                    "docs": [d.status() for d in self.ctx.docs.all()], "browse": browse})
+            if parts[:1] == ["phone"] and method == "POST" and len(parts) == 2:  # photos from a phone (phonelink.py)
+                b = self._jbody()
+                if parts[1] == "start":
+                    return self._json(self.ctx.phone.start(b.get("label")))
+                if parts[1] == "take":
+                    import base64
+                    got = self.ctx.phone.take(str(b.get("code", "")))
+                    return self._json({"live": got["live"], "photos": [{"name": p["name"], "image": f"data:{p['type']};base64," + base64.b64encode(p["data"]).decode("ascii")}
+                                                                       for p in got["photos"]]})
+                if parts[1] == "stop":
+                    self.ctx.phone.stop(str(b.get("code", "")))
+                    return self._json({"ok": True})
             if parts == ["open"] and method == "POST":
                 b = self._jbody()
                 try:

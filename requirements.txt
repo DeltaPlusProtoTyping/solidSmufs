@@ -3,3 +3,4 @@ gmsh>=4.13
 numpy>=2.0
 olefile>=0.46
 pymupdf>=1.26
+segno>=1.6

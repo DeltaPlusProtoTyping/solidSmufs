@@ -154,6 +154,8 @@ export class Balloons {
         const note = await this._ask('Back to draft', 'Why', 'Back to draft', s === 'superseded' ? 'It becomes a draft to change. The change note is kept with who and when.' : 'Its balloons and characteristics can be changed again. The change note is kept with who and when.');
         if (note) this._lead(() => this.run('balloon_status', { status: 'draft', note }));
       } } : null,
+      this.roles && !this.roles.on ? { sep: true } : null,
+      this.roles && !this.roles.on ? { label: 'Set a lead password…', action: () => this._setPassword('lead') } : null,
     ]);
   }
 
@@ -161,7 +163,7 @@ export class Balloons {
   _roleText() {
     const r = this.roles;
     if (!r?.on) return 'Roles off ▾';
-    return r.level ? `🔓 ${r.level === 'admin' ? 'Admin' : 'Lead'} ▾` : '🔒 Operator ▾';
+    return r.level ? `🔓 ${r.level === 'admin' ? 'Admin' : 'Lead'}` : '🔒';
   }
 
   _roleTip() {
@@ -432,10 +434,10 @@ export class Balloons {
     ]);
   }
 
-  _multMenu(anchor) {
+  _multItems(anchor) {
     const chars = this.data.chars, sel = this.sel === null ? null : this.char(this.sel);
     const can = (c) => c.count > 1 && !c.mult, any = chars.some(can), some = chars.some(multiplied);
-    menu(anchor, [
+    return [
       { label: sel && can(sel) ? `Multiply ${sel.label} (${sel.count} rows)` : 'Multiply', disabled: !(sel && can(sel)), action: () => this.multiply([sel.id], true) },
       { label: 'Multiply All', disabled: !any, action: () => this.multiply(null, true) },
       { sep: true },
@@ -444,8 +446,10 @@ export class Balloons {
       { sep: true },
       { label: sel && multiplied(sel) ? `Reset ${sel.label}` : 'Reset', disabled: !(sel && multiplied(sel)), action: () => this.multiply([sel.id], false) },
       { label: 'Reset All Multiplied', disabled: !some, action: () => this.multiply(null, false) },
-    ]);
+    ];
   }
+
+  _multMenu(anchor) { menu(anchor, this._multItems(anchor)); }
 
   /** A row for each place a characteristic applies in (on), or back to its one row. ids: which ones (null: all). */
   async multiply(ids, on) {
@@ -512,6 +516,17 @@ export class Balloons {
       const mark = n ? h('button', { class: 'bl-edmark', type: 'button', text: '✎', title: `Changed ${n} time${n === 1 ? '' : 's'}: click to see when, by whom and why`, onclick: (e) => { e.preventDefault(); showLog(k); } }) : null;
       return [k, label, el, mark];
     });
+  }
+
+  // the job's details laid out: the ones every job has, then the rest folded under More details (open when any is filled in)
+  _infoRows(inputs, was, extra = []) {
+    const row = (label, el, mark) => h('label', { class: 'pe-frow' }, h('span', { text: label }), mark ? h('span', { class: 'bl-withmark' }, el, mark) : el);
+    const main = new Set(['part', 'name', 'rev', 'customer', 'job', 'lot', 'inspector']);
+    const rest = inputs.filter(([k]) => !main.has(k));
+    const more = h('details', { class: 'bl-moreinfo' }, h('summary', { text: 'More details' }),
+      h('div', { class: 'bl-two' }, ...rest.map(([, label, el, mark]) => row(label, el, mark))));
+    more.open = rest.some(([k]) => !['org', 'supplier'].includes(k) && (was[k] ?? '') !== '');
+    return [h('div', { class: 'bl-two' }, ...inputs.filter(([k]) => main.has(k)).map(([, label, el, mark]) => row(label, el, mark)), ...extra), more];
   }
 
   // the job's details as typed, saved: a detail changed once it was filled in asks for a change note first
@@ -625,9 +640,9 @@ export class Balloons {
     };
     dlg = modal('Job details', h('div', { class: 'pe-fprops bl-props' },
       h('div', { class: 'bl-sidline' }, h('span', { text: 'Sheet ID' }), h('b', { text: this.data.sid || '(given when first saved)' }), this.data.from ? h('span', { class: 'bl-hint', text: `carried over from ${this.data.from}` }) : ''),
-      h('div', { class: 'bl-two' }, ...inputs.map(([, label, el, mark]) => row(label, el, mark))),
+      ...this._infoRows(inputs, was),
       hist,
-      h('p', { class: 'bl-hint', text: 'Kept with the balloons in the print, and written on the report. A detail changed once it was filled in needs a change note: ✎ beside it shows what it was, who changed it, when and why.' }),
+      h('p', { class: 'bl-hint', text: 'Changing a detail that was filled in asks for a change note. ✎ shows its changes.' }),
       h('div', { class: 'pe-pop-foot' },
         h('span', { class: 'pv-grow' }),
         h('button', { class: 'btn', text: 'Cancel', onclick: () => dlg.close() }),
@@ -668,7 +683,28 @@ export class Balloons {
       r.readAsDataURL(f);
     });
     const logoRow = h('span', { class: 'bl-logo' }, h('button', { class: 'btn', type: 'button', text: 'Logo…', title: "A picture for the top left of the PDF's first page. Remembered on this computer.", onclick: () => logoFile.click() }),
-      h('button', { class: 'bl-link', type: 'button', text: 'None', onclick: () => { logo = ''; keep('bl:logo', ''); logoName.textContent = 'No logo'; } }), logoName, logoFile);
+      h('button', { class: 'bl-link', type: 'button', text: 'None', onclick: () => { logo = ''; keep('bl:logo', ''); logoName.textContent = 'No logo'; redraw(); } }), logoName, logoFile);
+    // the PDF as it will print, drawn again as the settings change
+    const preview = h('div', { class: 'bl-preview' }), prevSay = h('span', { class: 'bl-hint', text: '' });
+    let prevSeq = 0, prevTimer = null;
+    const typedInfo = () => { const o = {}; for (const [k, , el] of inputs) if (el.value.trim()) o[k] = el.value.trim(); return o; };
+    const redraw = () => {
+      clearTimeout(prevTimer);
+      prevTimer = setTimeout(async () => {
+        const mine = ++prevSeq;
+        prevSay.textContent = 'Drawing…';
+        try {
+          const r = await api.pdfEdit(doc.id, 'balloon_report_preview', { parts: Math.min(Math.max(parseInt(parts.value, 10) || 1, 1), 50), footer: footer.value,
+            printing: { header: headBox.checked, issues: issueBox.checked, photos: photoSel.value || null, logo: logo || null }, info: typedInfo() });
+          if (mine !== prevSeq) return;
+          preview.replaceChildren(...r.pages.map((src, k) => h('img', { src, alt: `Page ${k + 1}`, title: `Page ${k + 1} of ${r.count}` })));
+          prevSay.textContent = `${r.count} page${r.count === 1 ? '' : 's'}${r.count > r.pages.length ? ` (the first ${r.pages.length} shown)` : ''}`;
+        } catch (e) { if (mine === prevSeq) prevSay.textContent = e.message; }
+      }, 350);
+    };
+    for (const el of [headBox, issueBox, photoSel, parts]) el.addEventListener('change', redraw);
+    for (const el of [footer, parts, ...inputs.map((i) => i[2])]) el.addEventListener('input', redraw);
+    logoFile.addEventListener('change', () => setTimeout(redraw, 200));
     let dlg = null;
     const ok = async () => {
       dlg.close();
@@ -688,14 +724,16 @@ export class Balloons {
       } catch (e) { toast(e.message, 'error'); }
     };
     dlg = modal('Inspection report', h('div', { class: 'pe-fprops bl-props' },
-      h('div', { class: 'bl-two' }, ...inputs.map(([, label, el]) => row(label, el)), row('Parts to inspect', parts)),
+      ...this._infoRows(inputs, was, [row('Parts to inspect', parts)]),
       row('Layout', layout), row('Footer', footer),
       h('div', { class: 'pe-frow' }, h('span', { text: 'The PDF' }), h('div', { class: 'bl-print' }, headEl, issueEl, photoSel, logoRow)),
-      h('p', { class: 'bl-hint', text: 'An Excel workbook: each balloon with its description, gage, nominal and limits, and a column for each part. What the parts measured (the Results tab) is written in under each part; a result outside its limits is red. The first article layout adds AS9102 Forms 1, 2 and 3. The inspection sheet is saved as a PDF too, beside the workbook under the same name. The job details are kept with the balloons in the print.' }),
+      h('div', { class: 'bl-prevhead' }, h('b', { text: 'Preview' }), prevSay), preview,
+      h('p', { class: 'bl-hint', text: 'Saves an Excel workbook, and the inspection sheet as a PDF beside it under the same name.' }),
       h('div', { class: 'pe-pop-foot' },
         h('span', { class: 'pv-grow' }),
         h('button', { class: 'btn', text: 'Cancel', onclick: () => dlg.close() }),
-        h('button', { class: 'btn primary', text: 'Save report…', onclick: ok }))), { width: 780 });
+        h('button', { class: 'btn primary', text: 'Save report…', onclick: ok }))), { width: 900 });
+    redraw();
     footer.addEventListener('keydown', (e) => e.stopPropagation());
     for (const el of [parts, ...inputs.map((i) => i[2])]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); e.stopPropagation(); });
     setTimeout(() => inputs[0]?.[2].focus(), 30);
@@ -840,24 +878,28 @@ export class Balloons {
   }
 
   // ================================================================== views
-  _viewsMenu(anchor) {
+  _viewsItems(anchor) {
     const views = this.data.views || [];
-    menu(anchor, [
+    return [
       { label: 'Add view (drag a box round it)', action: () => this._adding('view') },
       views.length ? { sep: true } : null,
       ...views.map((vw) => ({ label: `${vw.name} (${vw.count})${vw.start ? `, from ${vw.start}` : ''}`, glyph: null, action: () => this.editView(vw) })),
       views.length ? { sep: true } : null,
       views.length ? { label: 'Renumber view by view…', action: () => this._renumberMenu(anchor) } : null,
-    ]);
+    ];
   }
 
-  _renumberMenu(anchor) {
+  _viewsMenu(anchor) { menu(anchor, this._viewsItems(anchor)); }
+
+  _renumberItems(anchor) {
     const views = (this.data.views || []).length;
-    menu(anchor, [
+    return [
       { head: views ? 'Renumber, view by view' : 'Renumber' },
       ...ORDERS.map(([order, label, tip]) => ({ label: `${label}: ${tip.toLowerCase()}`, action: () => this.run('balloon_renumber', { order }) })),
-    ]);
+    ];
   }
+
+  _renumberMenu(anchor) { menu(anchor, this._renumberItems(anchor)); }
 
   editView(vw) {
     const row = (label, el) => h('label', { class: 'pe-frow' }, h('span', { text: label }), el);
@@ -949,26 +991,26 @@ export class Balloons {
     const n = this.data.chars.length, st = this.ed.state || {}, sel = this.sel === null ? null : this.char(this.sel);
     const b = (text, tip, run, o = {}) => h('button', { class: `pv-btn bl-tb${o.cls ? ` ${o.cls}` : ''}`, text, title: tip, disabled: !!o.off || (o.edits && this.fixed), onclick: run });
     const more = b('▾', 'Auto Balloon again, or remove all the balloons', () => this._autoMenu(more), { cls: 'bl-more', edits: true });
-    const mult = b('Multiply ▾', 'A characteristic that applies in several places (4X) is inspected in each one:\nMultiply gives it a row for each place (3.1 to 3.4) in the list and the report, under its one balloon.\nDetach makes each place a balloon of its own. Reset puts it back to one row.', () => this._multMenu(mult), { off: !n, edits: true });
-    const renumber = b('Renumber ▾', 'Number the balloons 1, 2, 3…, closing the gaps: in list order, by rows, by columns, or clockwise.\nWith views, view by view. Those sharing a number stay together.', () => this._renumberMenu(renumber), { off: !n, edits: true });
-    this.viewBtn = b(`Views${(this.data.views || []).length ? ` (${this.data.views.length})` : ''} ▾`, "Boxes round the drawing's views: their balloons take the view's color,\nand Renumber goes view by view, each from its own start number", () => this._viewsMenu(this.viewBtn), { cls: this.adding === 'view' ? 'on' : '', edits: true });
+    // the tools used now and then, in one menu: (this.viewBtn: lit while a view's box is being drawn)
+    this.viewBtn = b('More ▾', 'Sub-balloon: another thing to check under the selected balloon (2.1, 2.2…).\nRenumber: 1, 2, 3… closing the gaps, by rows, columns or clockwise.\nViews: boxes round the drawing views, numbered view by view.\nMultiply: a row for each place of a 4X characteristic.', () => menu(this.viewBtn, [
+      { label: sel ? `Add sub-balloon under ${sel.label}` : 'Add sub-balloon', disabled: !sel, action: () => this.addSub(sel) },
+      { sep: true },
+      { label: 'Renumber', disabled: !n, sub: () => this._renumberItems(this.viewBtn) },
+      { label: `Views${(this.data.views || []).length ? ` (${this.data.views.length})` : ''}`, sub: () => this._viewsItems(this.viewBtn) },
+      { label: 'Multiply', disabled: !n, sub: () => this._multItems(this.viewBtn) },
+    ]), { cls: this.adding === 'view' ? 'on' : '', edits: true });
     this.addBtn = b('Add', 'Balloon something by hand: drag a box around a callout on the print (its text is read),\nor click a spot for an empty balloon to fill in. Esc cancels.', () => this._adding(this.adding === 'balloon' ? false : 'balloon'), { cls: this.adding === 'balloon' ? 'on' : '', edits: true });
     this.row.replaceChildren(
       h('span', { class: 'bl-mode', text: 'Ballooning' }),
-      (() => { const s = this.data.status || 'draft', sb = b(`${STATUS_LABEL[s]} ▾`, 'Draft: being ballooned. Released: its balloons and characteristics are fixed.\nSuperseded: by the next revision, and nothing in it changes.', () => this._statusMenu(sb), { cls: `bl-status s-${s}`, off: !n && s === 'draft' }); return sb; })(),
-      (() => { const lb = b(this._roleText(), this._roleTip(), () => this._rolesMenu(lb), { cls: `bl-role${this.roles?.level ? ' open' : ''}` }); lb.hidden = !this.roles; return lb; })(),
-      this.data.sid ? h('span', { class: 'bl-sid', text: this.data.sid, title: `This sheet's id: it stays the same whatever is edited.${this.data.from ? `\nCarried over from ${this.data.from}.` : ''}` }) : '',
+      (() => { const s = this.data.status || 'draft', sb = b(`${STATUS_LABEL[s]} ▾`, `Draft: being ballooned. Released: its balloons and characteristics are fixed.\nSuperseded: by the next revision, and nothing in it changes.${this.data.sid ? `\nSheet ${this.data.sid}` : ''}`, () => this._statusMenu(sb), { cls: `bl-status s-${s}`, off: !n && s === 'draft' }); return sb; })(),
+      (() => { const lb = b(this._roleText(), this._roleTip(), () => this._rolesMenu(lb), { cls: `bl-role${this.roles?.level ? ' open' : ''}` }); lb.hidden = !this.roles?.on; return lb; })(),
       h('span', { class: 'pv-sep' }),
       b('Auto Balloon', 'Read the print and balloon what there is to inspect on it: dimensions and their tolerances, angles,\nchamfers, threads, finishes, feature control frames and notes. It asks which pages and what to balloon first.', () => this.auto(), { cls: 'bl-main', edits: true }),
       more,
       this.addBtn,
-      b('Sub-balloon', "Another thing to check on the selected balloon's callout:\na new balloon under its number (2.1, 2.2…)", () => this.addSub(sel), { off: !sel, edits: true }),
       b('Edit…', "All of the selected balloon's details in one place (or double-click the balloon)", () => this.edit(sel), { off: !sel }),
       b('Delete', 'Remove the selected balloon (Delete)', () => this.remove(sel.id), { off: !sel, edits: true }),
-      h('span', { class: 'pv-sep' }),
-      renumber,
       this.viewBtn,
-      mult,
       h('span', { class: 'pv-sep' }),
       b('Search…', 'Find characteristics and production issues by balloon number, dimension, description, gage or earlier fix:\non this print, or on every ballooned print saved on this computer', () => this.search(), {}),
       b('Job…', "The job's details: part, revision, customer, job number, lot… and what was changed, by whom and why.\nA detail changed once it was filled in needs a change note.", () => this.job(), { off: !n }),

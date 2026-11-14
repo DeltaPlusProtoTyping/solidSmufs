@@ -57,4 +57,7 @@ export const api = {
   fsRoots: () => call('GET', '/api/fs/roots'),
   fsList: (path) => call('POST', '/api/fs/list', { path }),
   dwgSetup: () => call('POST', '/api/dwg-setup', {}),
+  phoneStart: (label) => call('POST', '/api/phone/start', { label }),
+  phoneTake: (code) => call('POST', '/api/phone/take', { code }),
+  phoneStop: (code) => call('POST', '/api/phone/stop', { code }),
 };
