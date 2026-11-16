@@ -672,6 +672,14 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .pe-pop { position: fixed; z-index: 200; width: 280px; padding: 8px; border-radius: 8px; background: var(--panel); color: var(--ink); border: 1px solid var(--line-2); box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .25)); font: 12px var(--ui); }
 .pe-pop-head { font-weight: 600; margin-bottom: 6px; }
 .pe-pop-text { width: 100%; height: 110px; box-sizing: border-box; padding: 6px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--panel-2); color: inherit; font: 13px var(--ui); resize: vertical; }
+.pe-enh-opts { display: flex; gap: 28px; flex-wrap: wrap; margin: 4px 0 10px; }
+.pe-enh-col { display: flex; flex-direction: column; gap: 6px; font: 13px var(--ui); color: var(--ink); }
+.pe-enh-col .pe-frow { grid-template-columns: 80px 1fr; }
+.pe-enh-note { color: var(--muted, #667); font-size: 12.5px; }
+.pe-enh-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pe-enh-pair figure { margin: 0; min-width: 0; }
+.pe-enh-pair figcaption { font: 600 12px var(--ui); color: var(--ink); margin-bottom: 4px; }
+.pe-enh-img { width: 100%; max-height: 52vh; object-fit: contain; border: 1px solid var(--line); background: #fff; }
 .pe-pop-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .pe-pop-foot .pv-of { margin-right: auto; }
 .pe-sign p, .pe-confirm p { margin: 0 0 10px; line-height: 1.45; }

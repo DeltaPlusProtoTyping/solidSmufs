@@ -106,8 +106,8 @@ const TOOLS = {
   redactText: { label: 'Mark text', tip: 'Drag across text to mark it for redaction' },
   redact: { label: 'Mark area', tip: 'Drag a box to mark it for redaction' },
   redactFind: { label: 'Mark found', tip: 'Mark every place the Find box finds', action: true, icon: 'redactText' },
-  strikeText: { label: 'Strike through', tip: 'Click a dimension, tolerance or note to put a single line through it, or drag across any text (the words stay readable)', icon: 'strikeout' },
-  redactApply: { label: 'Apply', tip: 'Take everything marked out of the pages for good, and make strike-throughs part of the page', action: true, text: true },
+  strikeText: { label: 'Strike through', tip: 'Click a line of text or a symbol to put a single line through it (one of two stacked limits, a tolerance, a GD&T symbol);\nShift+click for the whole dimension with its tolerance; or drag across any text. The words stay readable.', icon: 'strikeout' },
+  redactApply: { label: 'Apply', tip: 'Take everything marked for redaction out of the pages for good. Strike-throughs need no Apply: they stay marks you can select and delete later', action: true, text: true },
   scrub: { label: 'Remove hidden info', tip: "Take out the document's details, attachments, scripts, hidden text and comments", action: true, text: true },
 };
 // tools that place one thing, then hand back to Select (the rest stay on, for marking up a run of things)
@@ -125,7 +125,7 @@ const KIND_LABEL = { note: 'Note', text: 'Text', highlight: 'Highlight', underli
 const STAMP_LABEL = { Approved: 'Approved', NotApproved: 'Not Approved', Draft: 'Draft', Final: 'Final', ForComment: 'For Comment',
   Confidential: 'Confidential', Experimental: 'Experimental', AsIs: 'As Is', Expired: 'Expired', Departmental: 'Departmental',
   ForPublicRelease: 'For Public Release', NotForPublicRelease: 'Not For Public Release', Sold: 'Sold', TopSecret: 'Top Secret' };
-const DEFAULT_STYLE = { colors: { highlight: '#ffd400', underline: '#2bb24c', strikeout: '#e02020', squiggly: '#e02020', note: '#ffd400',
+const DEFAULT_STYLE = { colors: { strikeText: '#000000', highlight: '#ffd400', underline: '#2bb24c', strikeout: '#e02020', squiggly: '#e02020', note: '#ffd400',
   text: '#000000', typewriter: '#000000', pen: '#e02020', rect: '#e02020', ellipse: '#e02020', cloud: '#e02020', line: '#e02020',
   arrow: '#e02020', check: '#000000', cross: '#000000', dot: '#000000', date: '#000000', addText: '#000000' },
 width: 1.5, opacity: 1, fontsize: 12 };
@@ -356,7 +356,7 @@ export class PdfEditor {
       b.addEventListener('click', () => menu(b, [8, 9, 10, 11, 12, 14, 16, 18, 24, 32, 48].map((x) => ({ label: `${x} pt`, check: x === fs, action: () => this._setStyle(sel, kind, { fontsize: x }) }))));
       out.push(b);
     }
-    if (sel || !['typewriter', 'date', 'addText', 'check', 'cross', 'dot'].includes(this.tool)) {
+    if (sel ? !(sel.kind === 'strikeout' && sel.subject === 'Strike through') : !['typewriter', 'date', 'addText', 'check', 'cross', 'dot', 'strikeText'].includes(this.tool)) {
       const op = sel ? sel.opacity : this.style.opacity;
       const b = h('button', { class: 'pv-btn', title: 'Opacity', text: `${Math.round(op * 100)}% ▾` });
       b.addEventListener('click', () => menu(b, [1, 0.8, 0.6, 0.4, 0.2].map((x) => ({ label: `${x * 100}%`, check: Math.abs(x - op) < 0.01, action: () => this._setStyle(sel, kind, { opacity: x }) }))));
@@ -565,12 +565,12 @@ export class PdfEditor {
         if (tool === 'strikeText' && !moved) {
           this.v.selection = null;
           this.v._showSelection();
-          await this.run('strike_at', { page: p.i, at: pt });
+          await this.run('strike_at', { page: p.i, at: pt, whole: e.shiftKey, color: this.style.colors.strikeText || '#000000' });
           return;
         }
         if (!s?.rects?.length || s.page !== p.i) return;
         if (tool === 'redactText') await this.run('annot_add', { page: p.i, kind: 'redact', rects: s.rects });
-        else if (tool === 'strikeText') await this.run('annot_add', { page: p.i, kind: 'strike', rects: s.rects, text: s.text });
+        else if (tool === 'strikeText') await this.run('annot_add', { page: p.i, kind: 'strike', rects: s.rects, text: s.text, color: this.style.colors.strikeText || '#000000' });
         else await this.run('annot_add', { page: p.i, kind: tool, rects: s.rects, text: s.text, color: this.style.colors[tool], opacity: this.style.opacity });
         this.v.selection = null;
         this.v._showSelection();
@@ -1481,15 +1481,17 @@ export class PdfEditor {
 
   async _redactApply() {
     const n = this.annots.filter((a) => a.kind === 'redact').length;
-    const k = this.annots.filter((a) => a.kind === 'strikeout' && a.subject === 'Strike through').length;
-    if (!n && !k) { toast('Mark something first: Mark text, Mark area, Mark found or Strike through.', 'info'); return; }
+    if (!n) {
+      const k = this.annots.some((a) => a.kind === 'strikeout' && a.subject === 'Strike through');
+      toast(k ? 'Strike-throughs need no Apply: they show and print as they are, and stay marks you can select and delete, even after saving.'
+        : 'Mark something first: Mark text, Mark area or Mark found.', 'info', 6000);
+      return;
+    }
     const s = (x) => (x === 1 ? '' : 's');
-    const says = [n ? `Take everything under the ${n} redaction mark${s(n)} out of the pages for good: words, the parts of pictures and drawing they cover, and form fields with what's filled into them.` : '',
-      k ? `Make the ${k} strike-through${s(k)} part of the page${n ? ` (the words under ${k === 1 ? 'it' : 'them'} stay)` : `, the words under ${k === 1 ? 'it' : 'them'} left readable`}.` : '',
-      "It can't be undone in the saved file."].filter(Boolean).join(' ');
-    if (!await this._confirm(n ? 'Apply redactions' : 'Apply strike-throughs', says, 'Apply')) return;
-    const r = await this.run('redact_apply', { fill: load('pe:redact', 'black') }, n ? 'Redacting…' : 'Applying…');
-    if (r) toast(`${n ? 'Redacted' : 'Struck through'}. Save to keep it (Save As keeps the original as it was).`);
+    const says = `Take everything under the ${n} redaction mark${s(n)} out of the pages for good: words, the parts of pictures and drawing they cover, and form fields with what's filled into them. Strike-throughs stay as they are. It can't be undone in the saved file.`;
+    if (!await this._confirm('Apply redactions', says, 'Apply')) return;
+    const r = await this.run('redact_apply', { fill: load('pe:redact', 'black') }, 'Redacting…');
+    if (r) toast('Redacted. Save to keep it (Save As keeps the original as it was).');
   }
 
   async _scrub() {
@@ -1532,7 +1534,80 @@ export class PdfEditor {
       h('span', { class: 'pv-sep' }),
       this._btn('crop'),
       b('Uncrop', 'Show the whole of the pages again', () => this.run('pages_uncrop', { pages: this._which() })),
+      h('span', { class: 'pv-sep' }),
+      b('Enhance scan…', 'Clean up scanned pages: white paper, solid black lines, specks taken off, straightened,\nwith hidden text from OCR to search, select and balloon. What is printed is never retyped.', () => this._enhance()),
     ];
+  }
+
+  // ================================================================== cleaning up a scan
+  _enhance() {
+    const cur = this.v.current || 0, picked = this.picked.size > 1 ? this._which() : null;
+    const o = { specks: 1, straighten: true, text: true, ...load('pe:enhance', {}) };
+    const radio = (value, label, on) => {
+      const r = h('input', { type: 'radio', name: 'pe-enh-scope', value });
+      r.checked = on;
+      return [r, h('label', { class: 'pe-line' }, r, ` ${label}`)];
+    };
+    const [rAll, lAll] = radio('all', 'Every scanned page', !picked);
+    const [rThis, lThis] = radio('this', `This page (${cur + 1})`, false);
+    const [rPicked, lPicked] = picked ? radio('picked', `The ${picked.length} picked pages`, true) : [null, null];
+    const specks = h('select', {}, ...[[0, 'Off'], [1, 'Light: the smallest specks'], [2, 'Strong: a hair bigger (check decimal points)']]
+      .map(([v, t]) => h('option', { value: v, text: t, selected: +o.specks === v })));
+    const straight = h('input', { type: 'checkbox' });
+    straight.checked = !!o.straighten;
+    const text = h('input', { type: 'checkbox' });
+    text.checked = !!o.text;
+    const before = h('img', { class: 'pe-enh-img', alt: 'Before' }), after = h('img', { class: 'pe-enh-img', alt: 'After' });
+    const note = h('p', { class: 'pe-enh-note', text: 'Reading this page…' });
+    const shots = h('div', { class: 'pe-enh-pair' },
+      h('figure', {}, h('figcaption', { text: 'Before' }), before), h('figure', {}, h('figcaption', { text: 'After' }), after));
+    const go = h('button', { class: 'btn primary', text: 'Enhance' });
+    let ask = 0;
+    const preview = async () => {
+      const n = ++ask;
+      note.textContent = 'Cleaning this page to show you…';
+      try {
+        const r = await this._ask('enhance_preview', { page: cur, specks: +specks.value, straighten: straight.checked });
+        if (n !== ask) return;
+        if (!r.scan) {
+          shots.hidden = true;
+          note.textContent = `Page ${cur + 1} isn't a scan: it's lines and text already (a print from CAD), sharp at any size. Pick a scanned page to see it cleaned.`;
+          return;
+        }
+        shots.hidden = false;
+        before.src = r.before;
+        after.src = r.after;
+        note.textContent = `Page ${cur + 1}${r.angle ? `, straightened by ${Math.abs(r.angle).toFixed(2)}°` : ''}. Check the decimal points and thin lines in the After picture are all there; Undo puts the pages back.`;
+      } catch (e) { if (n === ask) note.textContent = e.message; }
+    };
+    specks.addEventListener('change', preview);
+    straight.addEventListener('change', preview);
+    const d = modal('Enhance scan', h('div', { class: 'pe-confirm pe-enh' },
+      h('p', { text: 'Cleans up scanned pages: the paper made white and shadows taken out, the lines made solid black and broken ones joined, specks taken off, and the page straightened. Pages that are already lines and text are left alone.' }),
+      h('div', { class: 'pe-enh-opts' },
+        h('div', { class: 'pe-enh-col' }, h('b', { text: 'Pages' }), lAll, lThis, ...(lPicked ? [lPicked] : [])),
+        h('div', { class: 'pe-enh-col' },
+          h('label', { class: 'pe-frow' }, h('span', { text: 'Despeckle' }), specks),
+          h('label', { class: 'pe-line' }, straight, ' Straighten the page'),
+          h('label', { class: 'pe-line', title: 'Windows OCR reads the cleaned page, and what it reads goes under the picture as invisible text.\nThe print you see is the cleaned scan itself: nothing on it is retyped, so a misread cannot change a requirement.' },
+            text, ' Make the text searchable (hidden OCR text)'))),
+      note, shots,
+      h('div', { class: 'pe-pop-foot' },
+        h('button', { class: 'btn', text: 'Cancel', onclick: () => d.close() }), go)), { width: 860 });
+    go.addEventListener('click', async () => {
+      const scope = rThis.checked ? 'this' : rPicked?.checked ? 'picked' : 'all';
+      const args = { pages: scope === 'this' ? [cur] : scope === 'picked' ? picked : null, specks: +specks.value, straighten: straight.checked, text: text.checked };
+      keep('pe:enhance', { specks: args.specks, straighten: args.straighten, text: args.text });
+      d.close();
+      const r = await this.run('enhance', args, 'Cleaning up the scan…');
+      if (!r) return;
+      const x = r.result, n = x.enhanced.length;
+      let msg = `Cleaned up ${n} scanned page${n === 1 ? '' : 's'}`;
+      if (x.read) msg += `, with ${x.lines} line${x.lines === 1 ? '' : 's'} of searchable text`;
+      if (x.skipped.length) msg += `. ${x.skipped.length} page${x.skipped.length === 1 ? ' was' : 's were'} already sharp and left alone`;
+      toast(`${msg}.${args.text && !x.read ? ` ${x.error ? `OCR couldn't read it (${x.error})` : 'Searchable text needs Windows OCR, which isn\'t on this computer'}.` : ''} Undo puts it back.`, 'ok', 8000);
+    });
+    preview();
   }
 
   _which() { return this.picked.size ? [...this.picked].sort((a, b) => a - b) : [this.v.current || 0]; }

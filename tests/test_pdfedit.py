@@ -43,6 +43,21 @@ def _make(path, pages=3, rotate_second=False, form=False):
     d.close()
 
 
+def _struck(pg):
+    """The lines strike-through comments draw on a page: [(start, end, width, color)] in page points."""
+    import re
+    doc, out = pg.parent, []
+    for a in pg.annots():
+        if a.type[1] != "StrikeOut":
+            continue
+        ap = doc.xref_stream(int(doc.xref_get_key(a.xref, "AP/N")[1].split()[0])).decode()
+        rgb = [float(v) for v in re.search(r"([\d.]+) ([\d.]+) ([\d.]+) RG", ap).groups()]
+        for w, x0, y0, x1, y1 in re.findall(r"([\d.]+) w ([\d.-]+) ([\d.-]+) m ([\d.-]+) ([\d.-]+) l S", ap):
+            m = pg.transformation_matrix
+            out.append((pymupdf.Point(float(x0), float(y0)) * m, pymupdf.Point(float(x1), float(y1)) * m, float(w), rgb))
+    return out
+
+
 class Editing(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="ss-edit-"))
@@ -282,23 +297,89 @@ class Editing(unittest.TestCase):
         marks = e.run("annots", {})
         self.assertEqual([(a["kind"], a["subject"]) for a in marks], [("strikeout", "Strike through")])
         e.run("annot_add", {"page": 0, "kind": "redact", "rects": gone})
-        e.run("redact_apply", {})
+        e.run("redact_apply", {})  # (Apply redacts: the strike-through stays a comment)
         d = self.reopen()
         self.assertIn("SECRET", d[0].get_text())  # struck, still there and readable
         self.assertNotIn("555-1234", d[0].get_text())
-        self.assertEqual(list(d[0].annots()), [])
+        self.assertEqual([(a.type[1], a.info["subject"]) for a in d[0].annots()], [("StrikeOut", "Strike through")])
         x, y, w, h = word[0]
-        lines = [p for p in d[0].get_drawings() if any(it[0] == "l" for it in p["items"])]
-        self.assertTrue(any(abs(p["rect"].y0 - (y + h / 2)) < 2 and p["rect"].x0 <= x + 1 and p["rect"].x1 >= x + w - 1 for p in lines))
-        self.assertEqual(e.run("annots", {}), [])
+        (a, b, width, color), = _struck(d[0])
+        self.assertTrue(abs(a.y - (y + h / 2)) < 2 and a.x <= x + 1 and b.x >= x + w - 1, (a, b, word))
+        self.assertEqual(len(e.run("annots", {})), 1)
 
-    def test_strike_through_on_its_own(self):
+    def test_strike_throughs_stay_editable_after_saving(self):
+        from solidsmufs.kernel.pdfedit import PdfEditor as Ed
         e = self.ed
         e.run("annot_add", {"page": 0, "kind": "strike", "rects": self.pdf.find("SECRET")[0]["rects"]})
-        self.assertEqual(e.run("redact_apply", {})["result"]["struck"], 1)
-        self.assertIn("SECRET", self.reopen()[0].get_text())
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError):  # nothing to redact: Apply has nothing to do with strike-throughs
             e.run("redact_apply", {})
+        e.run("save", {})
+        self.pdf.close()
+        self.pdf = PdfFile(str(self.path))  # opened again, as after closing the app
+        e = self.ed = Ed(self.pdf, self.path)
+        (mark,) = e.run("annots", {})
+        self.assertEqual((mark["kind"], mark["subject"]), ("strikeout", "Strike through"))
+        e.run("annot_set", {"page": 0, "id": mark["id"], "color": "#e02020"})  # recolored: the line keeps its place
+        (a, b, width, color), = _struck(self.pdf.fz[0])
+        self.assertTrue(all(abs(c - w) < 0.01 for c, w in zip(color, [0.878, 0.125, 0.125])), color)
+        e.run("annot_delete", {"page": 0, "ids": [mark["id"]]})
+        e.run("save", {})
+        self.assertEqual(list(self.reopen()[0].annots()), [])
+        self.assertIn("SECRET", self.reopen()[0].get_text())
+
+    def test_strike_goes_through_the_middle_of_the_figures(self):
+        pg = self.pdf.fz[0]
+        pg.insert_text((300, 400), ".436", fontsize=20, fontname="helv")
+        r = pg.search_for(".436")[0]
+        pix = pg.get_pixmap(dpi=288, clip=r)
+        a = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)[:, :, 0]
+        rows = np.where((a < 128).any(axis=1))[0]
+        mid = r.y0 + (rows.min() + rows.max()) / 2 / 4
+        self.assertGreater(mid - (r.y0 + r.y1) / 2, 0.4)  # (the text's box is middled lower than its figures)
+        self.ed.run("strike_at", {"page": 0, "at": [(r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2], "color": "#2060e0"})
+        mark = next(a for a in pg.annots() if a.type[1] == "StrikeOut")
+        self.assertEqual(self.ed.run("annots", {})[0]["color"], "#2060e0")
+        self.assertTrue(mark)
+        drawn = _struck(pg)
+        self.assertEqual(len(drawn), 1)
+        self.assertLess(abs(drawn[0][0].y - mid), 0.5, (drawn, mid))
+        self.assertTrue(all(abs(c - w) < 0.01 for c, w in zip(drawn[0][3], [0.125, 0.376, 0.878])), drawn[0][3])
+        # and as it shows: the comment's line through the figures' middle
+        pix = pg.get_pixmap(dpi=576, clip=r)
+        b = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)
+        blue = np.nonzero(((b[:, :, 2] > 180) & (b[:, :, 0] < 90)).sum(axis=1) > 10)[0]
+        self.assertLess(abs(r.y0 + (blue.min() + blue.max() + 1) / 2 / 8 - mid), 0.4)
+
+    def test_strike_one_limit_or_a_drawn_symbol(self):
+        path = self.dir / "frame.pdf"
+        d = pymupdf.open()
+        pg = d.new_page(width=600, height=400)
+        pg.insert_text((250, 200), ".436", fontsize=20)
+        pg.insert_text((250, 222), ".434", fontsize=20)
+        pg.draw_circle((225, 198), 8, width=1.2)  # a Ø drawn as linework
+        pg.draw_line((219, 212), (231, 184), width=1.2)
+        pg.draw_rect(pymupdf.Rect(200, 230, 340, 262), width=1.2)  # a feature control frame: runout, .001, A
+        pg.draw_line((236, 230), (236, 262), width=1.2)
+        pg.draw_line((310, 230), (310, 262), width=1.2)
+        pg.draw_line((206, 256), (226, 238), width=1.2)
+        pg.draw_polyline([(226, 238), (217, 241), (223, 247), (226, 238)], fill=(0, 0, 0), width=0.5)
+        pg.insert_text((245, 254), "0.001", fontsize=18)
+        pg.insert_text((316, 254), "A", fontsize=18)
+        d.save(path)
+        d.close()
+        f = PdfFile(str(path))
+        self.addCleanup(f.close)
+        e = PdfEditor(f, path)
+        got = lambda at, **o: e.run("strike_at", {"page": 0, "at": at, **o})["result"]  # noqa: E731
+        self.assertEqual(got([270, 194])["contents"], ".436")  # one of two limits
+        self.assertEqual(got([270, 216], whole=True)["contents"], ".436 / .434")  # both
+        x, y, w, h = got([225, 198])["rect"]  # the drawn Ø, clicked inside its circle
+        self.assertTrue(x < 218 and x + w > 232 and y < 186 and y + h > 210, (x, y, w, h))
+        x, y, w, h = got([216, 247])["rect"]  # the arrow, not the frame round it
+        self.assertTrue(200 < x < 207 and x + w < 236 and y > 231 and y + h < 261, (x, y, w, h))
+        self.assertEqual(got([321, 248])["contents"], "A")
+        with self.assertRaises(ValueError):  # the frame's border is no symbol
+            e.run("strike_at", {"page": 0, "at": [200, 246]})
 
     def test_strike_a_dimension_with_a_click(self):
         path = self.dir / "print.pdf"
@@ -313,14 +394,13 @@ class Editing(unittest.TestCase):
         f = PdfFile(str(path))
         self.addCleanup(f.close)
         e = PdfEditor(f, path)
-        r = e.run("strike_at", {"page": 0, "at": [335, 200]})  # on the tolerance: the size goes with it
+        r = e.run("strike_at", {"page": 0, "at": [335, 200], "whole": True})  # Shift+click on the tolerance: the size goes with it
         self.assertEqual((r["result"]["kind"], r["result"]["subject"]), ("strikeout", "Strike through"))
         self.assertIn("1.000", r["result"]["contents"])
         e.run("strike_at", {"page": 0, "at": [496, 290]})  # reads bottom to top: struck along it
         with self.assertRaises(ValueError):
             e.run("strike_at", {"page": 0, "at": [700, 550]})
-        e.run("redact_apply", {})
-        lines = [(a.x, a.y, b.x, b.y) for dr in f.fz[0].get_drawings() for k, a, b, *_ in dr["items"] if k == "l"]
+        lines = [(a.x, a.y, b.x, b.y) for a, b, w, c in _struck(f.fz[0])]
         self.assertEqual(len(lines), 4)  # the size, both tolerances, the vertical one
         self.assertTrue(any(abs(x0 - x1) < 0.5 and abs(y0 - y1) > 20 for x0, y0, x1, y1 in lines))
         self.assertEqual(f.fz[0].get_text().split(), ["1.000", "+.002", "-.000", "1.250"])

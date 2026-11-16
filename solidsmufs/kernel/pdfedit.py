@@ -70,6 +70,33 @@ def _is_strike(a):
     return a.type[1] == "StrikeOut" and a.info.get("subject") == STRIKE
 
 
+CAP = 0.7  # how tall a figure or capital stands over its baseline, for a font of size 1: most fonts' are 0.7 to 0.74
+
+
+def _through_middle(pg, quads):
+    """Each quad brought to the figures it covers: from their baseline up to the height of a figure, so the line
+    through its middle goes through the middle of the figures. (A line of text's box runs from the font's highest
+    reach to its lowest, and most fonts reach further below than a figure does: its middle is low.)"""
+    import pymupdf
+    spans = [s for b in pg.get_text("dict", flags=0)["blocks"] for ln in b.get("lines", []) for s in ln["spans"]
+             if s["text"].strip() for s in [{**s, "dir": ln["dir"]}]]
+    out = []
+    for q in quads:
+        r = q.rect
+        best = max(spans, key=lambda s: (pymupdf.Rect(s["bbox"]) & r).get_area(), default=None)
+        if best is None or (pymupdf.Rect(best["bbox"]) & r).get_area() < 0.25 * min(r.get_area(), pymupdf.Rect(best["bbox"]).get_area()):
+            out.append(q)
+            continue
+        o, size = pymupdf.Point(best["origin"]), best["size"]
+        u = pymupdf.Point(best["dir"])
+        up = pymupdf.Point(u.y, -u.x)  # (y runs down the page)
+        along = [(p - o).x * u.x + (p - o).y * u.y for p in (q.ul, q.ur, q.ll, q.lr)]
+        a0, a1 = min(along), max(along)
+        top = up * (CAP * size)
+        out.append(pymupdf.Quad(o + u * a0 + top, o + u * a1 + top, o + u * a0, o + u * a1))
+    return out
+
+
 class PdfEditor(BalloonOps):
     def __init__(self, pdf, path):
         self.pdf = pdf
@@ -249,7 +276,32 @@ class PdfEditor(BalloonOps):
         if o.get("opacity") is not None:
             a.set_opacity(float(o["opacity"]))
         a.update()
+        self._strike_look(pg, a)
         return a
+
+    @staticmethod
+    def _strike_look(pg, a):
+        """A strike-through's look, in place of MuPDF's (a thin line a little below the middle): through the middle of
+        each run of figures it covers, a tenth of their height thick. It stays a comment, to select, recolor or
+        delete after saving; any PDF reader shows and prints it as drawn here."""
+        import pymupdf
+        if not _is_strike(a):
+            return
+        doc = pg.parent
+        kind, val = doc.xref_get_key(a.xref, "AP/N")
+        if kind != "xref":
+            return
+        ap = int(val.split()[0])
+        to_pdf = ~pg.transformation_matrix  # (an appearance is drawn in the PDF's own space, y up)
+        r, g, b = ((a.colors or {}).get("stroke") or (0, 0, 0))[:3]
+        v = [pymupdf.Point(p) for p in (a.vertices or [])]
+        out = [f"q {r:.3f} {g:.3f} {b:.3f} RG 0 J"]
+        for k in range(0, len(v) - 3, 4):  # each quad: upper left, upper right, lower left, lower right
+            ul, ur, ll, lr = v[k:k + 4]
+            p, q = ((ul + ll) / 2) * to_pdf, ((ur + lr) / 2) * to_pdf
+            out.append(f"{max(0.5, abs(ll - ul) * 0.1):.3f} w {p.x:.3f} {p.y:.3f} m {q.x:.3f} {q.y:.3f} l S")
+        out.append("Q")
+        doc.update_stream(ap, "\n".join(out).encode("ascii"))
 
     def op_annot_add(self, page, kind, **o):
         """A new comment or markup. Rectangles, points and paths as shown; colors as "#rrggbb"."""
@@ -260,7 +312,7 @@ class PdfEditor(BalloonOps):
         fill = _color(o.get("fill"))
         width = float(o.get("width", 1.5))
         rot = pg.rotation
-        if kind == "strike":  # a single line through the words, which stay readable: Apply makes it part of the page
+        if kind == "strike":  # a single line through the words, which stay readable: a comment, to delete any time
             kind = "strikeout"
             color = color or (0, 0, 0)
             o["subject"] = STRIKE
@@ -270,6 +322,8 @@ class PdfEditor(BalloonOps):
                 quads.append(pymupdf.Quad(*[self._pt(pg, v) for v in q]))
             if not quads:
                 raise ValueError("Select some text to mark first.")
+            if o.get("subject") == STRIKE:
+                quads = _through_middle(pg, quads)
             add = {"highlight": pg.add_highlight_annot, "underline": pg.add_underline_annot,
                    "strikeout": pg.add_strikeout_annot, "squiggly": pg.add_squiggly_annot}[kind]
             a = add(quads=quads)
@@ -406,6 +460,7 @@ class PdfEditor(BalloonOps):
                 upd["text_color"] = _color(o["textColor"])
         a.set_info(modDate=_now())
         a.update(**upd)
+        self._strike_look(pg, a)
         if boxed:
             self._place(a, target)
         if kind == "text" and ({"text", "contents", "fontsize", "rect"} & set(o)):
@@ -478,6 +533,7 @@ class PdfEditor(BalloonOps):
         if opacity is not None and opacity >= 0:
             b.set_opacity(opacity)
         b.update()
+        self._strike_look(pg, b)
         if keep:
             return b
         if irt:
@@ -524,6 +580,7 @@ class PdfEditor(BalloonOps):
         if opacity is not None and 0 <= opacity < 1:
             b.set_opacity(opacity)
         b.update()
+        self._strike_look(pg, b)
         if t in ("Square", "Circle"):
             self._place(b, new)
         return self._answer([to], result={"page": to, **self._annot_info(pg, b)})
@@ -928,10 +985,11 @@ class PdfEditor(BalloonOps):
                 "bold": bold, "italic": italic, "serif": serif, "mono": mono,
                 "origin": self._pt_out(pg, line["spans"][0]["origin"]), "dir": list(line["dir"])}
 
-    def op_strike_at(self, page, at):
-        """Strike through the dimension, tolerance or note under a click, read as Ballooning reads the print: a size
-        with its tolerance (stacked or not) is struck whole, each of its lines along its own direction. Where nothing
-        there is a callout, the line of words under the click."""
+    def op_strike_at(self, page, at, color=None, whole=False):
+        """Strike through what's under a click: its line of text (one of two stacked limits, a frame's tolerance or
+        datum, a note's line), or else the symbol drawn there (a GD&T symbol, a Ø drawn as lines). whole (Shift+click):
+        the dimension it's part of, read as Ballooning reads the print: a size with its tolerance or limits, stacked or
+        not, each of its lines along its own direction."""
         from . import balloons
         pg = self._page(page)
         x, y = float(at[0]), float(at[1])
@@ -940,11 +998,13 @@ class PdfEditor(BalloonOps):
         def near(b, slack):
             return b[0] - slack <= x <= b[2] + slack and b[1] - slack <= y <= b[3] + slack
 
-        data = self._insp()
-        tols = data.get("tols") or balloons.defaults([ln["text"] for ln in lines])
-        items = balloons.read(lines, [], data.get("unit"), tols, (pg.rect.width, pg.rect.height), notes=False)
-        boxes = [(it, [it["box"][0], it["box"][1], it["box"][0] + it["box"][2], it["box"][1] + it["box"][3]]) for it in items]
-        hits = [(it, b) for it, b in boxes if near(b, 2)]
+        hits = []
+        if whole:
+            data = self._insp()
+            tols = data.get("tols") or balloons.defaults([ln["text"] for ln in lines])
+            items = balloons.read(lines, [], data.get("unit"), tols, (pg.rect.width, pg.rect.height), notes=False)
+            boxes = [(it, [it["box"][0], it["box"][1], it["box"][0] + it["box"][2], it["box"][1] + it["box"][3]]) for it in items]
+            hits = [(it, b) for it, b in boxes if near(b, 2)]
         if hits:
             it, b = min(hits, key=lambda h: (h[1][2] - h[1][0]) * (h[1][3] - h[1][1]))
             pieces = []
@@ -955,13 +1015,17 @@ class PdfEditor(BalloonOps):
                     pieces.append({**ln, "box": clip if clip[2] > clip[0] and clip[3] > clip[1] else lb})
             text = it.get("text") or " ".join(p["text"] for p in pieces)
         else:
-            under = [ln for ln in lines if near(ln["box"], 2)]
-            if not under:
-                raise ValueError("Click on a dimension, tolerance or note to strike it through.")
-            pieces = [min(under, key=lambda ln: (ln["box"][2] - ln["box"][0]) * (ln["box"][3] - ln["box"][1]))]
-            text = pieces[0]["text"]
+            under = [ln for ln in lines if near(ln["box"], 1.5)]
+            if under:
+                pieces = [min(under, key=lambda ln: (ln["box"][2] - ln["box"][0]) * (ln["box"][3] - ln["box"][1]))]
+                text = pieces[0]["text"]
+            else:
+                sym = self._symbol_at(pg, x, y)
+                if sym is None:
+                    raise ValueError("Click on a dimension, tolerance, note or symbol to strike it through.")
+                pieces, text = [{"box": sym}], "Symbol"
         if not pieces:
-            raise ValueError("Click on a dimension, tolerance or note to strike it through.")
+            raise ValueError("Click on a dimension, tolerance, note or symbol to strike it through.")
         quads = []
         for ln in pieces:
             x0, y0, x1, y1 = ln["box"]
@@ -972,7 +1036,56 @@ class PdfEditor(BalloonOps):
             else:  # reads bottom to top
                 q = [[x0, y1], [x0, y0], [x1, y1], [x1, y0]]
             quads.append(q)
-        return self.op_annot_add(page, "strike", quads=quads, text=balloons.clean(text) if text else "")
+        return self.op_annot_add(page, "strike", quads=quads, text=balloons.clean(text) if text else "", color=color)
+
+    @staticmethod
+    def _symbol_at(pg, x, y, reach=40.0, most=30.0):
+        """[x0, y0, x1, y1] as shown around the drawing under (or just beside) a point: the linework touching there,
+        all of a piece (a Ø's circle and its stroke, an arrow and its head). None when there's none, or it runs on
+        further than a symbol does (a frame's border, the part's outline)."""
+        import numpy as np
+        import pymupdf
+        k = 4.0
+        turn, back, rot = pg.derotation_matrix, pg.rotation_matrix, pg.rotation
+        at = pymupdf.Point(x, y) * turn  # (worked out on the page unturned: a clip on a turned page is read unturned)
+        if rot:
+            pg.set_rotation(0)
+        try:
+            near = pymupdf.Rect(at.x - reach, at.y - reach, at.x + reach, at.y + reach) & pg.rect
+            if near.is_empty:
+                return None
+            pix = pg.get_pixmap(matrix=pymupdf.Matrix(k, k), clip=near, annots=False, colorspace=pymupdf.csGRAY, alpha=False)
+        finally:
+            if rot:
+                pg.set_rotation(rot)
+        ink = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.stride)[:, :pix.w] < 160
+        h, w = ink.shape
+        cx, cy = int((at.x - near.x0) * k), int((at.y - near.y0) * k)
+        if not (0 <= cx < w and 0 <= cy < h):
+            return None
+        if not ink[cy, cx]:  # (inside a circle, or a hair beside the stroke): the nearest ink, close by
+            ys, xs = np.nonzero(ink[max(cy - 16, 0):cy + 17, max(cx - 16, 0):cx + 17])
+            if not len(ys):
+                return None
+            d = (ys + max(cy - 16, 0) - cy) ** 2 + (xs + max(cx - 16, 0) - cx) ** 2
+            j = int(np.argmin(d))
+            cy, cx = int(ys[j] + max(cy - 16, 0)), int(xs[j] + max(cx - 16, 0))
+        part = np.zeros_like(ink)
+        part[cy, cx] = True
+        for _ in range(int(4 * reach * k)):  # grown a pixel at a time through the ink it touches
+            p = np.pad(part, 1)
+            grown = (p[:-2, 1:-1] | p[2:, 1:-1] | p[1:-1, :-2] | p[1:-1, 2:] | p[:-2, :-2] | p[:-2, 2:] | p[2:, :-2] | p[2:, 2:] | part) & ink
+            if (grown == part).all():
+                break
+            part = grown
+        if part[0].any() or part[-1].any() or part[:, 0].any() or part[:, -1].any():
+            return None
+        ys, xs = np.nonzero(part)
+        box = pymupdf.Rect(near.x0 + xs.min() / k, near.y0 + ys.min() / k, near.x0 + (xs.max() + 1) / k, near.y0 + (ys.max() + 1) / k) * back
+        box.normalize()
+        if max(box.width, box.height) > most:
+            return None
+        return [box.x0 - 0.5, box.y0, box.x1 + 0.5, box.y1]
 
     def _fontname(self, o):
         if o.get("mono"):
@@ -1101,27 +1214,12 @@ class PdfEditor(BalloonOps):
         """Take everything under the redaction marks out of the pages for good: words, the parts of pictures,
         and drawing they cover, and form fields the marks touch (with what's filled into them). The marks become
         black boxes, or white ones (fill "white": blank paper, for a print that shouldn't show what was hidden).
-        Strike-through marks become lines drawn into the page, the words under them left as they are."""
+        Strike-throughs aren't touched: they stay comments, to delete later (Flatten makes them part of the page)."""
         import pymupdf
-        strikes = [i for i in range(self.fz.page_count) if any(_is_strike(a) for a in self.fz[i].annots())]
         pages = [i for i in range(self.fz.page_count) if any(a.type[1] == "Redact" for a in self.fz[i].annots())]
-        if not pages and not strikes:
-            raise ValueError("Mark something to redact or strike through first.")
+        if not pages:
+            raise ValueError("Mark something to redact first.")
         self._snapshot()
-        for i in strikes:
-            pg = self.fz[i]
-            marks = [a for a in pg.annots() if _is_strike(a)]
-            lines = []
-            for a in marks:
-                v = [pymupdf.Point(p) for p in (a.vertices or [])]
-                stroke = (a.colors or {}).get("stroke") or (0, 0, 0)
-                for k in range(0, len(v) - 3, 4):  # each quad: upper left, upper right, lower left, lower right
-                    ul, ur, ll, lr = v[k:k + 4]
-                    lines.append(((ul + ll) / 2, (ur + lr) / 2, max(0.5, abs(ll - ul) * 0.07), stroke))
-            for a in marks:
-                pg.delete_annot(a)
-            for a, b, width, stroke in lines:
-                pg.draw_line(a, b, color=stroke, width=width, lineCap=0)
         color = (1, 1, 1) if fill == "white" else (0, 0, 0)
         for i in pages:
             pg = self.fz[i]
@@ -1136,7 +1234,108 @@ class PdfEditor(BalloonOps):
             self.fz[i].apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_PIXELS,
                                         graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED,
                                         text=pymupdf.PDF_REDACT_TEXT_REMOVE)
-        return self._answer(None, text=True, result={"pages": len(set(pages) | set(strikes)), "struck": len(strikes)})
+        return self._answer(None, text=True, result={"pages": len(pages)})
+
+    # ================================================================== cleaning up a scan (kernel/enhance.py)
+    def _unturned_gray(self, pg, dpi):
+        """The page's own content in gray, as it is unturned (its rotation set aside), without its comments."""
+        import pymupdf
+        from . import enhance
+        rot = pg.rotation
+        if rot:
+            pg.set_rotation(0)
+        try:
+            return enhance.gray(pg.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY, annots=False, alpha=False)), rot
+        finally:
+            if rot:
+                pg.set_rotation(rot)
+
+    @staticmethod
+    def _shown(a, rot):
+        """A picture of the page unturned, turned the way the page is shown."""
+        import numpy as np
+        return np.rot90(a, -(rot // 90) % 4) if rot else a
+
+    def op_enhance_preview(self, page, specks=1, straighten=True, width=900):
+        """Before and after for one page, to look at before cleaning it up: {"scan", "angle", "before", "after"} (PNG
+        data URLs about `width` pixels wide, the page as shown). Nothing changes."""
+        import base64
+        from . import enhance
+        pg = self._page(page)
+        if not enhance.scanned(pg):
+            return {"scan": False}
+        w_in = max(pg.rect.width, pg.rect.height) / 72
+        dpi = max(60, min(200, int(width / w_in * 1.6)))  # (sharp enough to judge a speck, quick enough to wait for)
+        g, rot = self._unturned_gray(pg, dpi)
+        out, angle = enhance.clean(g, dpi, specks, straighten)
+        url = lambda a: "data:image/png;base64," + base64.b64encode(enhance.png(self._shown(a, rot))).decode()  # noqa: E731
+        return {"scan": True, "angle": angle, "before": url(g), "after": url(out)}
+
+    def op_enhance(self, pages=None, specks=1, straighten=True, text=True):
+        """Clean up scanned pages (kernel/enhance.py): each scanned page's picture swapped for its cleaned copy, black
+        on white, straightened; and, with `text` (Windows only), what Windows OCR reads on it laid under it as hidden
+        text, to search, select and balloon, in place of any hidden text it had. Comments, balloons and form fields
+        stay. Pages that aren't scans (sharp already) are left as they are. Undo puts them back."""
+        import pymupdf
+        from . import enhance, printmarks
+        want = list(range(self.fz.page_count)) if pages is None else sorted({int(i) for i in pages if 0 <= int(i) < self.fz.page_count})
+        todo = [i for i in want if enhance.scanned(self.fz[i])]
+        if not todo:
+            raise ValueError("No scanned pages there: these pages are already sharp lines and text (a print from CAD),"
+                             " which cleaning can't improve.")
+        reading = bool(text) and printmarks.ocr_available()
+        self._snapshot()
+        angles, lines_in, failed = {}, 0, None
+        for i in todo:
+            pg = self.fz[i]
+            dpi = enhance.dpi_for(*(lambda r: (r.width, r.height))(pymupdf.Rect(pg.rect) * pg.derotation_matrix))
+            g, rot = self._unturned_gray(pg, dpi)
+            out, angle = enhance.clean(g, dpi, specks, straighten)
+            angles[i] = angle
+            if rot:
+                pg.set_rotation(0)
+            try:
+                # the old picture and any hidden text out, the cleaned picture in: comments and fields are no part of it
+                pg.add_redact_annot(pg.rect)
+                pg.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_REMOVE, graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED,
+                                    text=pymupdf.PDF_REDACT_TEXT_REMOVE)
+                pg.insert_image(pg.rect, stream=enhance.png(out, dpi))
+                if reading:
+                    try:
+                        lines_in += self._hidden_text(pg, out, dpi)
+                    except Exception as e:  # (the page is still cleaned: only the reading failed)
+                        failed = str(e)
+            finally:
+                if rot:
+                    pg.set_rotation(rot)
+        return self._answer(None, text=True, result={"enhanced": todo, "skipped": [i for i in want if i not in todo],
+                                                     "angles": angles, "lines": lines_in, "read": reading and not failed,
+                                                     "error": failed})
+
+    @staticmethod
+    def _hidden_text(pg, out, dpi):
+        """What Windows OCR reads on the cleaned picture, written under it as invisible text, each line stretched over
+        the words it was read from. The page is unturned while this runs. How many lines were laid down."""
+        import pymupdf
+        from . import enhance, printmarks
+        lines = []
+        printmarks.ocr_marks(enhance.qimage(out), 72.0 / dpi, lines)
+        n = 0
+        for text, x0, y0, x1, y1 in lines:
+            text = " ".join(str(text).split())
+            w, h = x1 - x0, y1 - y0
+            if not text or w <= 0 or h <= 0:
+                continue
+            if h > 1.5 * w and len(text) > 1:  # read up the page
+                size = 0.85 * w
+                pg.insert_text(pymupdf.Point(x0 + 0.78 * w, y1), text, fontsize=size, fontname="helv", render_mode=3, rotate=90)
+            else:
+                size = 0.85 * h
+                at = pymupdf.Point(x0, y1 - 0.22 * h)
+                long = pymupdf.get_text_length(text, "helv", size) or 1.0
+                pg.insert_text(at, text, fontsize=size, fontname="helv", render_mode=3, morph=(at, pymupdf.Matrix(w / long, 1)))
+            n += 1
+        return n
 
     def op_scrub(self):
         """Remove hidden information: the document's details, attached files, scripts, hidden text and comments."""

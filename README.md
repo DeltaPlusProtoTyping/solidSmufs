@@ -453,12 +453,24 @@ readers show it, and comments stay comments they can change.
 - **Pages:** in the side bar, Ctrl+click or Shift+click to pick pages and drag them to reorder; right-click or use the
   toolbar to turn, delete, duplicate, insert blank pages, insert other PDFs or pictures (combining files), replace,
   extract to a new PDF, split into several PDFs, and crop (drag the part to keep) or uncrop.
+- **Enhance scan…** (Pages): cleans up scanned prints. The paper goes white with shadows and gray backgrounds taken
+  out, the lines go solid black with one-pixel breaks joined, specks come off, and the page is straightened. With
+  **Make the text searchable**, Windows OCR reads the cleaned page and what it reads goes under it as hidden text, to
+  search, select and balloon. Nothing on the page is retyped, so an OCR misread can't change a requirement, and a
+  smudge right over a figure stays for whoever reads it to judge. **Despeckle** Light or Strong takes small marks
+  with clear paper round them; a mark with a line or a figure close by stays, so decimal points are kept even in small
+  or typewriter print. A before and after of the current page shows first; comments, balloons and form fields stay;
+  pages that are already lines and text (prints from CAD) are left alone; Undo puts it all back.
 - **Redact:** mark words, areas, or everything the Find box finds, then **Apply**: what's under the marks is taken out
   of the file for good (words, the covered parts of pictures and drawing, and form fields with what's filled into
   them: click a field with Mark text to mark all of it). **Fill** chooses what's left behind: black, or white for
   blank paper. **Strike through** puts a single line through words that should stay readable (a superseded
-  note, an old revision): drag across any words, or click a dimension, tolerance or note to strike it whole (a
-  size with its tolerance, stacked or not, and vertical ones along their length); **Apply** draws it into the page too. **Remove hidden info** takes out the
+  note, an old revision): drag across any words, or click a line of text or a drawn symbol (one of two stacked
+  limits, a tolerance, a datum, a GD&T symbol or a Ø drawn as lines). Shift+click strikes the whole dimension (a size
+  with its tolerance, stacked or not, and vertical ones along their length). The line runs through the middle of
+  the figures, in black or the color picked beside the tool. A strike-through is a mark of its own, not part of the
+  drawing: it needs no Apply, and after saving and opening the file again it can still be selected, recolored or
+  deleted (here or in any PDF reader). Flatten (Fill & Sign) makes it part of the page. **Remove hidden info** takes out the
   document's details, attachments, scripts and hidden text.
 
 It works as Acrobat does, with some of the rough edges taken off:
