@@ -638,6 +638,7 @@ export class Tools {
       else if (!pick && Number.isFinite(v) && v > 0) pick = { name: 'Custom', density: v };
       app.active.material = pick;
       app.manager.refresh();
+      app.status(); // (the weight on the status bar)
       if (this.dialogs.mass && !this.dialogs.mass.closed) this._computeMass();
       d.close();
       if (pick) toast(`Material: ${pick.name}`);
@@ -646,7 +647,7 @@ export class Tools {
     const d = this._dialog('material', {
       title: 'Material', icon: 'material', width: 420, body: h('div', { class: 'stack' }, list,
         h('div', { class: 'row' }, h('span', { text: 'Density (g/cm³)' }), dens, h('span', { class: 'grow' }),
-          h('button', { class: 'btn', onclick: () => { app.active.material = null; app.manager.refresh(); if (this.dialogs.mass && !this.dialogs.mass.closed) this._computeMass(); d.close(); } }, 'Remove'),
+          h('button', { class: 'btn', onclick: () => { app.active.material = null; app.manager.refresh(); app.status(); if (this.dialogs.mass && !this.dialogs.mass.closed) this._computeMass(); d.close(); } }, 'Remove'),
           h('button', { class: 'btn primary', onclick: apply }, 'Apply'))),
     });
   }

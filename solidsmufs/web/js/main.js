@@ -499,24 +499,28 @@ class App {
     this.quickMeasure();
   }
 
-  // the visible bodies' best-fit size and volumes, shown in the status bar whenever nothing is selected
-  // (for stock); worked out again when bodies are hidden or shown, like Bounding Box and Stock Size
+  // the visible bodies' best-fit size, volumes, surface area and weight, shown in the status bar whenever nothing is
+  // selected (for stock); worked out again when bodies are hidden or shown, like Bounding Box and Stock Size, or the
+  // material changes
   visibleKey(doc = this.active) {
     if (!doc?.meta || this.active !== doc) return '';
-    return doc.meta.bodies.map((_, i) => (this.viewer.bodies[i]?.visible === false ? 0 : 1)).join('');
+    const m = doc.material;
+    return doc.meta.bodies.map((_, i) => (this.viewer.bodies[i]?.visible === false ? 0 : 1)).join('')
+      + (m ? `|${m.perBody ? 'own' : m.density}` : '');
   }
 
   async envelope(doc) {
     const key = this.visibleKey(doc);
     if (!doc.meta || doc.envelopeKey === key) return;
     doc.envelopeKey = key;
-    const shown = doc.meta.bodies.map((_, i) => i).filter((i) => key[i] !== '0');
+    const shown = doc.meta.bodies.map((_, i) => i).filter((i) => key.split('|')[0][i] !== '0');
+    const mat = doc.material, density = mat ? (mat.perBody ? null : mat.density) : 1.0; // (null: each body's own)
     if (!shown.length) { doc.envelope = null; this.status(); return; }
     try {
-      const [box, mass] = await Promise.all([api.bbox(doc.id, shown, 'oriented'), api.massprops(doc.id, shown, 1.0)]);
+      const [box, mass] = await Promise.all([api.bbox(doc.id, shown, 'oriented'), api.massprops(doc.id, shown, density)]);
       if (!box || doc.envelopeKey !== key) return;
       const size = [...box.size].sort((a, b) => b - a);
-      doc.envelope = { size, box: size[0] * size[1] * size[2], part: mass?.volume, partial: shown.length < doc.meta.bodies.length };
+      doc.envelope = { size, box: size[0] * size[1] * size[2], part: mass?.volume, area: mass?.area, weight: mat ? mass?.mass : null, partial: shown.length < doc.meta.bodies.length };
     } catch { doc.envelopeKey = null; return; }
     if (this.active === doc) this.status();
   }
@@ -813,6 +817,9 @@ class App {
       if (this.active.exact && this.active.envelopeKey !== this.visibleKey()) setTimeout(() => this.envelope(this.active), 0);
       html = `${e.partial ? 'Shown bodies — size' : 'Size'}: <b>${e.size.map((x) => u.len(x, false)).join(' × ')} ${u.label}</b><span class="sep">|</span>Box volume: <b>${u.vol(e.box)}</b>`;
       if (e.part > 0) html += `<span class="sep">|</span>Part volume: <b>${u.vol(e.part)}</b> (${Math.round((100 * e.part) / e.box)}% of box)`;
+      if (e.area > 0) html += `<span class="sep">|</span>Surface area: <b>${u.area(e.area)}</b>`;
+      html += e.weight > 0 ? `<span class="sep">|</span>Weight: <b>${u.mass(e.weight)}</b>`
+        : '<span class="sep">|</span>Weight: <a href="#" class="sb-link" data-act="material">Select material</a>';
     } else if (this.meta) html = this.prefs.mouse === 'sw'
       ? 'Middle-drag to rotate · Ctrl+middle to pan · Wheel to zoom · Right-drag for gestures'
       : 'Drag to rotate · Right-drag to pan · Wheel to zoom';
@@ -820,6 +827,7 @@ class App {
     else html = 'Open a part to begin.';
     if (this.active && this.active.state === 'ready' && this.active.exact === false) html += '<span class="sep">|</span>Loading exact geometry for measuring…';
     el.innerHTML = html;
+    el.querySelector('[data-act="material"]')?.addEventListener('click', (ev) => { ev.preventDefault(); this.tools.material(); });
     this.$('sb-mode').textContent = this.meta ? (this.isAssembly ? 'Editing Assembly' : 'Editing Part') : '';
     this.$('sb-units').textContent = this.units.system === 'Custom' ? 'Custom' : this.units.system;
   }

@@ -961,6 +961,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .bl-cl { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
 .bl-cl li { display: flex; align-items: center; gap: 8px; font: 12px var(--mono); }
 .bl-cl s { color: var(--muted); }
+.sb-link { color: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
 .bl-moreinfo { margin-top: 10px; }
 .bl-moreinfo summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 8px; user-select: none; }
 .bl-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 22px; }

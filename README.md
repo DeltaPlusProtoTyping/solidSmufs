@@ -152,8 +152,8 @@ parts. Meshes can't be saved as STEP.
   selections, **Model / 3D Views** tabs for named views.
 - **Task pane:** Wagner home page and recent files, **File Explorer** for browsing folders of parts,
   Appearances & Scenes, Custom Properties.
-- **Status bar:** with nothing selected, the part's best-fit size (L × W × T), box volume and part
-  volume, for sizing stock at a glance; otherwise a quick measurement of the selection, Editing Part / Assembly, and the unit system
+- **Status bar:** with nothing selected, the part's best-fit size (L × W × T), box volume, part
+  volume, surface area and weight (or **Select material**, to pick one), for sizing stock and quoting at a glance; otherwise a quick measurement of the selection, Editing Part / Assembly, and the unit system
   (MMGS, CGS, MKS, IPS) like SolidWorks.
 
 Mouse buttons default to SolidWorks (middle-drag rotate, Ctrl+middle pan, Shift+middle zoom,
