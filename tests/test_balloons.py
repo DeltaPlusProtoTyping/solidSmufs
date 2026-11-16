@@ -154,7 +154,8 @@ class Read(unittest.TestCase):
         items = balloons.read(lines, frames, "in", None, (1224.0, 792.0))
         self.assertEqual([(i["kind"], i["text"]) for i in items], [
             ("dim", "5.000 ±.005"), ("gdt", "⌖ Position | Ø.002 | A B"),
-            ("note", "1. BREAK ALL SHARP EDGES .005-.015 UNLESS NOTED."), ("note", "2. ANODIZE PER MIL-A-8625 TYPE II, COLOR BLACK.")])
+            ("note", "1. BREAK ALL SHARP EDGES .005-.015 UNLESS NOTED."), ("note", "2. ANODIZE PER MIL-A-8625 TYPE II, COLOR BLACK."),
+            ("note", "MATERIAL: 6061-T6")])  # (the material is ballooned, title block or not)
         self.assertEqual(len(balloons.read(lines, frames, "in", None, (1224.0, 792.0), notes=False)), 2)
 
     def test_balloons_keep_clear_of_text_and_each_other(self):
@@ -166,6 +167,31 @@ class Read(unittest.TestCase):
         for i, b in enumerate(boxes):
             for o in [tuple(ln["box"]) for ln in lines] + boxes[:i]:
                 self.assertFalse(b[0] < o[2] and o[0] < b[2] and b[1] < o[3] and o[1] < b[3], (b, o))
+
+    def test_requirements_in_notes_with_no_number(self):
+        lines = [line("Material: 4140 Alloy Steel", 627, 590, 137, 12), line("All external edges chamfered to", 628, 604, 170, 12),
+                 line('.03" except for the inner two', 627, 619, 150, 12), line("notated at 45deg", 627, 633, 91, 12),
+                 line("Not yet verified", 627, 691, 80, 12), line("UNLESS OTHERWISE SPECIFIED BREAK SHARP EDGES", 900, 600, 200, 9),
+                 line("Vibrator Carrier Distance Bushing", 814, 673, 300, 20), line("2.618±.005", 935, 281, 60, 12)]
+        items = balloons.read(lines, tols={}, size=(1224.0, 792.0))
+        self.assertEqual([(i["kind"], i["text"]) for i in items], [
+            ("dim", "2.618±.005"), ("note", "Material: 4140 Alloy Steel"),
+            ("note", "All external edges chamfered to .03 except for the inner two notated at 45deg")])
+        self.assertEqual(len(balloons.read(lines, tols={}, size=(1224.0, 792.0), want={"plain": False})), 1)
+        self.assertEqual(len(balloons.read(lines, tols={}, size=(1224.0, 792.0), notes=False)), 1)
+
+    def test_a_balloon_is_nearest_its_own_callout(self):
+        # three sizes stacked down the sheet, with the part's edges close on the left: each balloon still reads as its own
+        lines = [line(".393±.005", 721, 410, 54, 12), line("2.859±.005", 754, 425, 60, 12), line("3.38±.005", 776, 443, 54, 12)]
+        segs = [(712, 300, 712, 520), (706, 300, 706, 520), (840, 300, 840, 520), (700, 470, 860, 470)]
+        items = balloons.read(lines, tols={})
+        r = balloons.radius(items)
+        spots = balloons.place(items, [tuple(ln["box"]) for ln in lines], (1224.0, 792.0), r, segs)
+        boxes = [(ln["box"][0], ln["box"][1], ln["box"][2], ln["box"][3]) for ln in lines]
+        for k, (x, y) in enumerate(spots):
+            d = [balloons._box_dist(x, y, b) for b in boxes]
+            self.assertEqual(min(range(3), key=d.__getitem__), k, (k, spots, d))
+            self.assertTrue(all(d[k] < d[j] for j in range(3) if j != k), (k, d))
 
 
 def _print(path, rotate=0):
@@ -200,8 +226,9 @@ class InThePdf(unittest.TestCase):
         self.dir.cleanup()
 
     def auto(self, **more):
-        # (the print's one reference size is left out, but for the tests that are about it)
-        return self.ed.run("balloon_auto", {"extra": {"unit": "in", "pages": {}}, "want": {"ref": False}, **more})["result"]
+        # (the print's one reference size is left out, but for the tests that are about it; its material too)
+        more = {**more, "want": {"plain": False, **more["want"]} if "want" in more else {"ref": False, "plain": False}}
+        return self.ed.run("balloon_auto", {"extra": {"unit": "in", "pages": {}}, **more})["result"]
 
     def test_detect_balloons_the_print(self):
         import pymupdf
@@ -348,6 +375,41 @@ class InThePdf(unittest.TestCase):
         self.auto()
         again = self.auto()
         self.assertEqual([(c["text"], c["at"]) for c in again["chars"]], [(c["text"], c["at"]) for c in first["chars"]])
+
+    def test_ocr_run_together_is_not_read_twice(self):
+        pg = self.pdf.fz[0]
+        pg.insert_text((934, 390), "2.618±.005", fontsize=10)
+        pg.insert_text((1003, 390), "3.116±.005", fontsize=10)
+        a, b = pg.search_for("2.618±.005")[0], pg.search_for("3.116±.005")[0]
+        # Windows OCR reads two neighbors as one line, its middle in the gap between them: already read, it adds nothing
+        ocr = [["2.618±.005 3.116±.005", a.x0, a.y0, b.x1, b.y1], ["ANODIZE BLACK", 1000, 40, 1080, 50]]
+        lines = self.ed._balloon_lines(pg, {"ocr": ocr})
+        self.assertEqual([ln["text"] for ln in lines if ln.get("ocr")], ["ANODIZE BLACK"])
+
+    def test_what_to_look_at_again(self):
+        import pymupdf
+        path = os.path.join(self.dir.name, "twice.pdf")
+        doc = pymupdf.open()
+        pg = doc.new_page(width=1224, height=792)
+        for (x, y), text in [((590, 290), "Ø3.116±.005"), ((1003, 290), "3.116±.005"), ((864, 230), "45°"), ((722, 348), "45°"), ((715, 148), "1.69±.005")]:
+            pg.insert_text((x, y), text, fontsize=10)
+        doc.save(path)
+        doc.close()
+        from solidsmufs.kernel.pdfdoc import PdfFile
+        from solidsmufs.kernel.pdfedit import PdfEditor
+        f = PdfFile(path)
+        self.addCleanup(f.close)
+        res = PdfEditor(f, path).run("balloon_auto", {"extra": {"unit": "in", "pages": {}}})["result"]
+        warn = {c["text"]: c["warn"] for c in res["chars"]}
+        labels = {c["text"]: c["label"] for c in res["chars"]}
+        self.assertEqual(warn["1.69±.005"], [])
+        self.assertIn(f"Same size as {labels['3.116±.005']}", warn["Ø3.116±.005"][0])
+        self.assertIn(f"Same size as {labels['Ø3.116±.005']}", warn["3.116±.005"][0])
+        angles = [c["warn"] for c in res["chars"] if c["text"] == "45°"]
+        self.assertEqual(len(angles), 2)
+        for w in angles:  # two chamfers at 45° are two features: only the missing tolerance is said
+            self.assertEqual(len(w), 1)
+            self.assertIn("No tolerance", w[0])
 
     def test_the_border_grid_is_left_out(self):
         W, H = 842.0, 595.0
@@ -515,7 +577,7 @@ class InThePdf(unittest.TestCase):
         pdf = PdfFile(new)
         try:
             ed = PdfEditor(pdf, new)
-            res = ed.run("balloon_carry", {"path": old, "extra": {"unit": "in", "pages": {}}, "want": {"ref": False}})["result"]
+            res = ed.run("balloon_carry", {"path": old, "extra": {"unit": "in", "pages": {}}, "want": {"ref": False, "plain": False}})["result"]
             got = res["carried"]
             self.assertEqual((got["from"], got["kept"]), ("rev-a.pdf", 4))
             self.assertEqual(got["changed"], [{"n": num["2.500 +.005/-.000"], "was": "2.500 +.005/-.000", "now": "2.500 +.010/-.000"}])

@@ -315,6 +315,24 @@ class BalloonOps:
                 doc.update_stream(ap, b"q\n" + doc.xref_stream(ap) + b"Q" + more.encode("ascii"))
                 doc.xref_set_key(ap, "Resources", f"<</Font<</Helv {font} 0 R>>>>")
 
+    @staticmethod
+    def _warnings(chars, labels):
+        """For each characteristic, what to look at again: a size with nothing to measure it against (no tolerance of
+        its own, and none in the title block for it), and the same length or diameter and tolerance ballooned twice (a diameter
+        dimensioned in two views, or one callout read twice)."""
+        out = []
+        for c in chars:
+            w = []
+            if c.get("kind") in balloons.SIZES and c.get("tol") not in ("ref", "basic") and c.get("lo") is None and c.get("hi") is None:
+                w.append("No tolerance: type one in, or the title block's")
+            if c.get("kind") == "dim" and c.get("nominal") is not None and not c.get("mult"):  # (not angles: 45° twice is usual)
+                same = [labels[o["id"]] for o in chars if o is not c and o.get("kind") == c.get("kind") and o.get("nominal") == c["nominal"]
+                        and (o.get("lo"), o.get("hi")) == (c.get("lo"), c.get("hi")) and o.get("tol") == c.get("tol")]
+                if same:
+                    w.append(f"Same size as {', '.join(same)}: dimensioned twice, or read twice?")
+            out.append(w)
+        return out
+
     def _balloon_out(self, data):
         chars = []
         for c in data["chars"]:
@@ -325,6 +343,8 @@ class BalloonOps:
                           "at": self._pt_out(pg, c["at"]), **{k: c.get(k) for k in FIELDS}})
         from . import report
         labels = {c["id"]: balloons.label(c) for c in data["chars"]}
+        for c, w in zip(chars, self._warnings(data["chars"], labels)):
+            c["warn"] = w
         issues = [{**i, "label": labels.get(i.get("char"), i.get("label")), "gone": i.get("char") is not None and i.get("char") not in labels}
                   for i in data.get("issues") or []]
         return {"sid": data.get("sid"), "from": data.get("from"), "log": data.get("log") or [], "tags": list(TAGS), "who": who(),
@@ -387,9 +407,16 @@ class BalloonOps:
                     else:
                         pieces.append({"text": s["text"], "box": [b.x0, b.y0, b.x1, b.y1], "vert": vert, "down": down})
                 lines += [p for p in pieces if p["text"].strip()]
+        mine = [ln["box"] for ln in lines]
         for text, x0, y0, x1, y1 in (extra or {}).get("ocr", []):
             cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-            if any(ln["box"][0] - 2 <= cx <= ln["box"][2] + 2 and ln["box"][1] - 2 <= cy <= ln["box"][3] + 2 for ln in lines):
+            if any(b[0] - 2 <= cx <= b[2] + 2 and b[1] - 2 <= cy <= b[3] + 2 for b in mine):
+                continue
+            # OCR runs neighbors together ("2.618±.005 3.116±.005" across the gap between them): what the page's own
+            # text mostly covers is already read
+            area = max((x1 - x0) * (y1 - y0), 1e-6)
+            cover = sum(max(0.0, min(x1, b[2]) - max(x0, b[0])) * max(0.0, min(y1, b[3]) - max(y0, b[1])) for b in mine)
+            if cover >= 0.5 * area:
                 continue
             lines.append({"text": text, "box": [x0, y0, x1, y1], "vert": len(text.strip()) > 1 and (y1 - y0) > 1.6 * (x1 - x0), "ocr": True})
         return lines

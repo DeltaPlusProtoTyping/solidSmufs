@@ -241,7 +241,7 @@ Edit, Delete, More for sub-balloons, renumbering, views and multiplying, Search,
 pages. **Exit Ballooning** puts the view back as it was; the balloons stay on the print.
 
 **Auto Balloon** reads the print and numbers everything on it there is to inspect: dimensions with their tolerances,
-angles, chamfers, threads, surface finishes, feature control frames and the numbered notes. Each gets a red balloon
+angles, chamfers, threads, surface finishes, feature control frames, the notes and the material. Each gets a red balloon
 beside it, its callout is marked on the print (orange, then green once reviewed), and it gets a row in the list.
 It asks first what to read, and remembers the answers:
 
@@ -250,7 +250,12 @@ It asks first what to read, and remembers the answers:
 - **Do not balloon Basic / Reference / General Tolerance dimensions:** each left unticked is ballooned. A Reference size
   (in brackets, or with REF or STOCK beside or beneath it) and a Basic one (BSC, or drawn in a box of its own) have no
   limits and say so under Tol Type. A General Tolerance size is one with no tolerance of its own.
-- **Surface finish detection**, **Numbered notes**, **Ignore title block.**
+- **Surface finish detection**, **Ignore title block.**
+- **Notes and material:** the numbered notes, the material (`Material: 4140 Alloy Steel`, in the title block or not),
+  and requirements in notes with no number: finishes, heat treat, edges to break or chamfer. The title block's standard
+  wording (tolerances, scale, third angle) isn't one.
+- Lines Windows OCR runs together (two sizes side by side read as one) aren't read again once the PDF's own text has
+  them, so a size gets one balloon.
 - **Flag note detection:** a note's number drawn in a triangle or flag by a feature is ballooned there as "Flag note
   2", with the note's words when the sheet has that numbered note. A number in a box is a basic size, not a flag.
 - **Split sub-characteristics:** one callout's several characteristics share a number as 2.1, 2.2: what's written on
@@ -264,11 +269,14 @@ It asks first what to read, and remembers the answers:
   - Double-click a cell (or press Enter) to type into it in place. Enter goes on to the cell below, Tab to the next one
     along, Esc leaves it as it was.
   - The box in the Reviewed heading ticks every row shown. **Show** narrows the list to what's not reviewed, reviewed,
-    or still without limits.
+    or still without limits, or what **Needs a look** (⚠ by the number, until it's ticked Reviewed): a size with no
+    tolerance and none in the title block for it, or the same length or diameter and tolerance ballooned twice (a
+    diameter dimensioned in two views, or one callout read twice).
   - Right-click a row for Edit, Add sub-balloon, Mark as reviewed and Delete. Drag the list's top edge to resize it.
 
 - **Where a balloon goes:** the nearest spot beside its callout that is clear of text, of other balloons, of the
-  drawing's lines (part edges, dimension and leader lines) and of its pictures. On a crowded callout it takes the
+  drawing's lines (part edges, dimension and leader lines) and of its pictures, and nearer its own callout than any
+  other, so it can't be read as the one next to it. On a crowded callout it takes the
   least bad spot, to drag where you want it.
 - **Where the limits come from:** the tolerance on the callout (`±.005`, `+.005/-.000`, limits like `.2500-.2505`, a
   tolerance or limits stacked over two lines, `MAX` and `MIN`), or, for a size with none, the title block's table by
@@ -449,7 +457,8 @@ readers show it, and comments stay comments they can change.
   of the file for good (words, the covered parts of pictures and drawing, and form fields with what's filled into
   them: click a field with Mark text to mark all of it). **Fill** chooses what's left behind: black, or white for
   blank paper. **Strike through** puts a single line through words that should stay readable (a superseded
-  note, an old revision); **Apply** draws it into the page too. **Remove hidden info** takes out the
+  note, an old revision): drag across any words, or click a dimension, tolerance or note to strike it whole (a
+  size with its tolerance, stacked or not, and vertical ones along their length); **Apply** draws it into the page too. **Remove hidden info** takes out the
   document's details, attachments, scripts and hidden text.
 
 It works as Acrobat does, with some of the rough edges taken off:

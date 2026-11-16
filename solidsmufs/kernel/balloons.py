@@ -37,6 +37,14 @@ SIGNED2 = re.compile(rf"^\+\s*(?P<up>{NUM})\s*/?\s*[-–]\s*(?P<dn>{NUM})$")
 COUNT = re.compile(r"^(?P<n>\d{1,3})\s*X(?:\s+|(?=[Ø⌴⌵↧R.#M\d]))")
 PLACES = re.compile(r"\(?\b(?P<n>\d{1,3})\s*(?:PLACES|PLCS|PLC|PL|HOLES)\b\.?\)?")
 NOTE = re.compile(r"^\(?(?P<n>\d{1,2})[.)]\s+(?=\S)")
+# a requirement said in a note with no number: the material, a finish or treatment, edges to break or chamfer
+SPEC = re.compile(r"^\s*(?:MAT(?:ERIA)?L|MAT'L|FINISH|HEAT[\s-]*TREAT(?:MENT)?|HARDNESS|HARDEN|COATING|PLATING|PLATE|"
+                  r"ANODIZE|PASSIVATE|PAINT)\b\.?\s*[:\-]\s*\S", re.I)
+REQUIRE = re.compile(r"\b(?:CHAMFER(?:ED|S)?|BREAK|BROKEN|DEBURR(?:ED)?|EDGES?|FILLETS?|ROUNDS?|HEAT[\s-]*TREAT\w*|HARDEN\w*|"
+                     r"ANODIZ\w*|PASSIVAT\w*|PLAT(?:E|ED|ING)|PAINT\w*|POWDER\s*COAT\w*|ENGRAVE\w*|MARK(?:ED|ING)?|"
+                     r"FREE\s+OF|BURRS?|SHARP)\b", re.I)
+NOT_A_REQUIREMENT = re.compile(r"\b(?:UNLESS OTHERWISE|DIMENSIONS ARE|TOLERANCES? ARE|DO NOT SCALE|THIRD ANGLE|FIRST ANGLE|"
+                               r"PROPRIETARY|CONFIDENTIAL|INTERPRET|ASME|ANSI|REPRODUC\w*|PROPERTY OF)\b", re.I)
 NOT_INSPECTED = re.compile(r"\b(?:REF|REFERENCE|BSC|BASIC|STOCK)\b\.?", re.I)  # a size with no limits of its own
 MODIFIER = re.compile(r"^\(?\s*(REF|REFERENCE|BSC|BASIC|STOCK)\.?\s*\)?$", re.I)  # one of those words alone on its line
 SIZES = ("dim", "angle", "chamfer")
@@ -398,9 +406,10 @@ def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True
     the feature control frames found on the page; tols: the title block's table, or None to read it from the lines;
     segs: the page's linework (x0, y0, x1, y1), to tell a basic size by its box; shapes: its closed outlines (x0, y0,
     x1, y1, sides), to find the flag notes. want: what to give, each True unless said: "ref" and "basic" sizes,
-    "general" (sizes with no tolerance of their own), "finish" (surface finishes), "flags" (flag notes), and "title"
-    (leave out what's in the title block)."""
-    want = {"ref": True, "basic": True, "general": True, "finish": True, "title": True, "flags": True, **(want or {})}
+    "general" (sizes with no tolerance of their own), "finish" (surface finishes), "flags" (flag notes), "title"
+    (leave out what's in the title block), and "plain" (with notes: requirements in notes with no number, like the
+    material or edges to break)."""
+    want = {"ref": True, "basic": True, "general": True, "finish": True, "title": True, "flags": True, "plain": True, **(want or {})}
     lines = [{**ln, "text": clean(ln["text"])} for ln in lines if ln["text"].strip()]
     if tols is None:
         tols = defaults([ln["text"] for ln in lines])
@@ -523,9 +532,18 @@ def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True
                           "plus": None, "minus": None, "lo": None, "hi": None, "places": 0, "tol": None, "box": [x0, y0, x1, y1],
                           "vert": (False, False), "flag": n})
     if notes:
-        items += _notes(lines)
-    band = max(size[1] / 14, 1.0)  # rows across the sheet, left to right
-    items.sort(key=lambda it: (it["kind"] == "note", int(it["box"][1] // band), it["box"][0]))
+        numbered = _notes(lines)
+        items += numbered + (_plain_notes(lines, [it["box"] for it in numbered]) if want["plain"] else [])
+    # rows across the sheet, left to right, top to bottom: a row starts where a callout is well below the last row's
+    # first one (not on a fixed grid, which splits callouts a hair apart onto two rows)
+    band = max(size[1] / 14, 1.0)
+    row, top = {}, None
+    for it in sorted((it for it in items if it["kind"] != "note"), key=lambda it: (it["box"][1] + it["box"][3]) / 2):
+        cy = (it["box"][1] + it["box"][3]) / 2
+        if top is None or cy - top > band / 2:
+            top, n = cy, len(set(row.values()))
+        row[id(it)] = n
+    items.sort(key=lambda it: (it["kind"] == "note", row.get(id(it), 0), it["box"][0] if it["kind"] != "note" else it["box"][1]))
     for it in items:
         b = it["box"]
         it["box"] = [round(b[0], 2), round(b[1], 2), round(b[2] - b[0], 2), round(b[3] - b[1], 2)]
@@ -555,6 +573,41 @@ def _notes(lines):
             if NOTE.match(nx["text"]):
                 break  # the next note
             text, box = f"{text} {nx['text']}", _union(box, nx["box"])
+        out.append({"kind": "note", "text": text, "count": 1, "nominal": None, "plus": None, "minus": None, "lo": None,
+                    "hi": None, "places": 0, "tol": None, "box": box, "vert": (False, False)})
+    return out
+
+
+def _plain_notes(lines, taken=()):
+    """Requirements written as notes with no number: "Material: 4140 Alloy Steel", "All external edges chamfered to
+    .03" …", each with the lines that carry it on. Not the title block's standard wording (tolerances, scale, third
+    angle), nor what a numbered note already holds."""
+    rows = sorted((ln for ln in lines if not ln.get("vert") and not ln.get("ocr")), key=lambda ln: ln["box"][1])
+    used, out = set(), []
+
+    def held(b):
+        return any(_inside(b, t, 1.0) for t in taken)
+
+    for i, ln in enumerate(rows):
+        t = ln["text"]
+        if i in used or held(ln["box"]) or NOTE.match(t) or NOT_A_REQUIREMENT.search(t):
+            continue
+        spec = SPEC.match(t)
+        if not spec and not (REQUIRE.search(t) and is_prose(t)):
+            continue
+        text, box, h = t, list(ln["box"]), max(ln["box"][3] - ln["box"][1], 1.0)
+        if not spec:  # a sentence: the lines under it that carry it on, to a full stop or a gap
+            for j in range(i + 1, len(rows)):
+                nx = rows[j]
+                gap, dx = nx["box"][1] - box[3], nx["box"][0] - ln["box"][0]
+                if gap > 0.9 * h or text.rstrip().endswith("."):
+                    break
+                if not (-2 <= dx < 1.5 * h) or nx["box"][1] < box[3] - 0.6 * h:
+                    continue  # another column, or beside it
+                if NOTE.match(nx["text"]) or SPEC.match(nx["text"]) or held(nx["box"]):
+                    break
+                text, box = f"{text} {nx['text']}", _union(box, nx["box"])
+                used.add(j)
         out.append({"kind": "note", "text": text, "count": 1, "nominal": None, "plus": None, "minus": None, "lo": None,
                     "hi": None, "places": 0, "tol": None, "box": box, "vert": (False, False)})
     return out
@@ -754,6 +807,7 @@ def place(items, obstacles, size, r, segs=(), pics=()):
     bad spot."""
     W, H = size
     taken, out = [], []
+    callouts = [(it["box"][0], it["box"][1], it["box"][0] + it["box"][2], it["box"][1] + it["box"][3]) for it in items]
     rings = (0.0, 0.75, 1.5, 2.5, 4.0, 6.0)
     reach = (rings[-1] + 3.5) * r
     for it in items:
@@ -763,6 +817,8 @@ def place(items, obstacles, size, r, segs=(), pics=()):
         text = [o for o in obstacles if o[0] < zone[2] and o[2] > zone[0] and o[1] < zone[3] and o[3] > zone[1]] + [(x, y, x + w, y + h)]
         lines = [s for s in segs if min(s[0], s[2]) < zone[2] and max(s[0], s[2]) > zone[0] and min(s[1], s[3]) < zone[3] and max(s[1], s[3]) > zone[1]]
         others = [t for t in taken if zone[0] - r < t[0] < zone[2] + r and zone[1] - r < t[1] < zone[3] + r]
+        mine = (x, y, x + w, y + h)
+        rivals = [o for o in callouts if o != mine and o[0] < zone[2] and o[2] > zone[0] and o[1] < zone[3] and o[3] > zone[1]]
         spots = []  # (x, y, how far out in r, how much the side is second choice)
         for k in rings:
             e = d + k * r
@@ -783,6 +839,14 @@ def place(items, obstacles, size, r, segs=(), pics=()):
             if not (r + 1 <= sx <= W - r - 1 and r + 1 <= sy <= H - r - 1):
                 continue
             cost = k + side
+            # whose is it? a balloon as near another callout as its own could be read as that one's
+            own = _box_dist(sx, sy, mine)
+            for o in rivals:
+                g = _box_dist(sx, sy, o)
+                if g <= own:
+                    cost += 6
+                elif g < own + 0.6 * r:
+                    cost += 3
             for o in text:
                 g = _box_dist(sx, sy, o) - r
                 if g < 0:

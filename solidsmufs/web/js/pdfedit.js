@@ -106,7 +106,7 @@ const TOOLS = {
   redactText: { label: 'Mark text', tip: 'Drag across text to mark it for redaction' },
   redact: { label: 'Mark area', tip: 'Drag a box to mark it for redaction' },
   redactFind: { label: 'Mark found', tip: 'Mark every place the Find box finds', action: true, icon: 'redactText' },
-  strikeText: { label: 'Strike through', tip: 'Drag across text to put a single line through it (the words stay readable)', icon: 'strikeout' },
+  strikeText: { label: 'Strike through', tip: 'Click a dimension, tolerance or note to put a single line through it, or drag across any text (the words stay readable)', icon: 'strikeout' },
   redactApply: { label: 'Apply', tip: 'Take everything marked out of the pages for good, and make strike-throughs part of the page', action: true, text: true },
   scrub: { label: 'Remove hidden info', tip: "Take out the document's details, attachments, scripts, hidden text and comments", action: true, text: true },
 };
@@ -555,7 +555,19 @@ export class PdfEditor {
     }
     if (FIELD_TOOLS[tool]) { this._fieldDrag(e, p, pt); return true; }
     if (t.markup || tool === 'redactText' || tool === 'strikeText') {
+      let moved = false; // (Strike through: a click, not a drag, strikes the dimension or note under it whole)
+      const x0 = e.clientX, y0 = e.clientY;
+      const watch = (m) => { if (Math.hypot(m.clientX - x0, m.clientY - y0) > 4) { moved = true; window.removeEventListener('pointermove', watch); } };
+      window.addEventListener('pointermove', watch);
+      window.addEventListener('pointerup', () => window.removeEventListener('pointermove', watch), { once: true });
+      if (tool === 'strikeText') this.v.selection = null;
       this.v._selectDrag(p, e, async (s) => {
+        if (tool === 'strikeText' && !moved) {
+          this.v.selection = null;
+          this.v._showSelection();
+          await this.run('strike_at', { page: p.i, at: pt });
+          return;
+        }
         if (!s?.rects?.length || s.page !== p.i) return;
         if (tool === 'redactText') await this.run('annot_add', { page: p.i, kind: 'redact', rects: s.rects });
         else if (tool === 'strikeText') await this.run('annot_add', { page: p.i, kind: 'strike', rects: s.rects, text: s.text });

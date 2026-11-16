@@ -2,5 +2,5 @@ PySide6>=6.10
 gmsh>=4.13
 numpy>=2.0
 olefile>=0.46
-pymupdf>=1.26
+pymupdf>=1.26,<2  # 2.x breaks hand-made form fields (tests/test_pdfform.py): not supported yet
 segno>=1.6

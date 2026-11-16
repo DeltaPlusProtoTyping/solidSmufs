@@ -300,6 +300,31 @@ class Editing(unittest.TestCase):
         with self.assertRaises(ValueError):
             e.run("redact_apply", {})
 
+    def test_strike_a_dimension_with_a_click(self):
+        path = self.dir / "print.pdf"
+        d = pymupdf.open()
+        pg = d.new_page(width=792, height=612)
+        pg.insert_text((300, 200), "1.000", fontsize=10)
+        pg.insert_text((328, 195), "+.002", fontsize=6)
+        pg.insert_text((328, 203), "-.000", fontsize=6)
+        pg.insert_text((500, 300), "1.250", fontsize=10, rotate=90)
+        d.save(path)
+        d.close()
+        f = PdfFile(str(path))
+        self.addCleanup(f.close)
+        e = PdfEditor(f, path)
+        r = e.run("strike_at", {"page": 0, "at": [335, 200]})  # on the tolerance: the size goes with it
+        self.assertEqual((r["result"]["kind"], r["result"]["subject"]), ("strikeout", "Strike through"))
+        self.assertIn("1.000", r["result"]["contents"])
+        e.run("strike_at", {"page": 0, "at": [496, 290]})  # reads bottom to top: struck along it
+        with self.assertRaises(ValueError):
+            e.run("strike_at", {"page": 0, "at": [700, 550]})
+        e.run("redact_apply", {})
+        lines = [(a.x, a.y, b.x, b.y) for dr in f.fz[0].get_drawings() for k, a, b, *_ in dr["items"] if k == "l"]
+        self.assertEqual(len(lines), 4)  # the size, both tolerances, the vertical one
+        self.assertTrue(any(abs(x0 - x1) < 0.5 and abs(y0 - y1) > 20 for x0, y0, x1, y1 in lines))
+        self.assertEqual(f.fz[0].get_text().split(), ["1.000", "+.002", "-.000", "1.250"])
+
     # ------------------------------------------------------------------ undo and saving
     def test_undo_redo_and_save_as(self):
         e = self.ed

@@ -805,6 +805,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .bl-props { max-height: calc(100vh - 110px); overflow: auto; }
 .bl-nwrap { display: inline-flex; gap: 4px; align-items: center; }
 .bl-flag { color: #e02020; font-size: 12px; }
+.bl-warn { color: #d08700; font-size: 12px; margin-left: 2px; cursor: help; }
 .bl-issues tr.done td { opacity: .6; }
 .bl-issues tr.hid td { font-style: italic; opacity: .55; }
 .bl-issues tr.ready .bl-ist { color: #b26a00; font-weight: 600; }

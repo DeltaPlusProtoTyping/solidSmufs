@@ -93,7 +93,7 @@ const COLS = [
   { k: 'tags', head: 'Tags', w: 160, edit: 'tags', tip: 'How it is inspected: Visual, Measured, Spot check, 100% check, Custom gage…\nAs many as apply, or none. Not printed.' },
   { k: 'note', head: 'Note', w: 220, edit: 'text' },
 ];
-const FILTERS = [['all', 'All'], ['todo', 'Not reviewed'], ['done', 'Reviewed'], ['open', 'No limits yet']];
+const FILTERS = [['all', 'All'], ['todo', 'Not reviewed'], ['done', 'Reviewed'], ['open', 'No limits yet'], ['warn', 'Needs a look']];
 
 export class Balloons {
   constructor(view) {
@@ -363,7 +363,7 @@ export class Balloons {
     const right = [
       tick('finish', 'Surface finish detection', 'Balloon surface finishes: 63 RMS, Ra 1.6'),
       tick('flags', 'Flag note detection', "Balloon a note's number drawn in a triangle or flag by a feature, with the note's words"),
-      tick('notes', 'Numbered notes', 'Balloon the numbered notes: 1. BREAK ALL SHARP EDGES…'),
+      tick('notes', 'Notes and material', 'Balloon the numbered notes (1. BREAK ALL SHARP EDGES…), the material, and requirements in notes\nwith no number: finishes, heat treat, edges to break or chamfer'),
       tick('title', 'Ignore title block', "Leave out what's written in the title block"),
       tick('split', 'Split sub-characteristics', "One callout's several characteristics share a number: a hole's diameter and its depth are 2.1 and 2.2,\na size and the feature control frame under it likewise"),
     ];
@@ -1028,7 +1028,7 @@ export class Balloons {
   _shown() {
     const f = this.filter;
     if (f.startsWith('tag:')) return this.data.chars.filter((c) => (c.tags || []).includes(f.slice(4)));
-    return this.data.chars.filter((c) => (f === 'todo' ? !c.reviewed : f === 'done' ? !!c.reviewed : f === 'open' ? open(c) : true));
+    return this.data.chars.filter((c) => (f === 'todo' ? !c.reviewed : f === 'done' ? !!c.reviewed : f === 'open' ? open(c) : f === 'warn' ? !!c.warn?.length : true));
   }
 
   _head() {
@@ -1159,7 +1159,8 @@ export class Balloons {
         const text = !place ? this._cell(c, col.k) : col.k === 'n' ? `${c.label}.${place}` : col.k === 'count' ? `${place} of ${c.count}` : this._cell(c, col.k);
         const general = (c.tol === 'default' && ['plus', 'minus', 'lo', 'hi', 'tol'].includes(col.k)) || (bare(c) && ['nominal', 'tol'].includes(col.k));
         const td = h('td', { 'data-k': col.k, class: `${col.edit ? 'ed' : ''}${col.mono ? ' mono' : ''}${col.edit === 'num' ? ' mono r' : ''}${general ? ' def' : ''}`, title: text.length > 22 ? text : '' },
-          col.k === 'n' ? h('span', { class: 'bl-nwrap' }, h('span', { class: 'bl-num', text }), (d.issues || []).some((i) => i.char === c.id && unresolved(i)) && place < 2 ? h('span', { class: 'bl-flag', text: '⚑', title: 'It has an open production issue' }) : '') : text);
+          col.k === 'n' ? h('span', { class: 'bl-nwrap' }, h('span', { class: 'bl-num', text }), (d.issues || []).some((i) => i.char === c.id && unresolved(i)) && place < 2 ? h('span', { class: 'bl-flag', text: '⚑', title: 'It has an open production issue' }) : '',
+            c.warn?.length && place < 2 && !c.reviewed ? h('span', { class: 'bl-warn', text: '⚠', title: `${c.warn.join('\n')}\n(Gone once it's ticked Reviewed)` }) : '') : text);
         td.addEventListener('click', () => { this.col = col.k; });
         if (col.edit) td.addEventListener('dblclick', (e) => { e.stopPropagation(); this._editCell(c, col, null, tr); });
         tr.append(td);

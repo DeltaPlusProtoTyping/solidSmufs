@@ -265,7 +265,9 @@ class PdfEditor(BalloonOps):
             color = color or (0, 0, 0)
             o["subject"] = STRIKE
         if kind in ("highlight", "underline", "strikeout", "squiggly"):
-            quads = [self._in(pg, r).quad for r in o["rects"]]
+            quads = [self._in(pg, r).quad for r in o.get("rects") or []]
+            for q in o.get("quads") or []:  # [upper left, upper right, lower left, lower right] as shown: text at any angle
+                quads.append(pymupdf.Quad(*[self._pt(pg, v) for v in q]))
             if not quads:
                 raise ValueError("Select some text to mark first.")
             add = {"highlight": pg.add_highlight_annot, "underline": pg.add_underline_annot,
@@ -925,6 +927,52 @@ class PdfEditor(BalloonOps):
                 "font": font.split("+", 1)[-1], "size": round(s["size"], 2), "color": f"#{s['color']:06x}",
                 "bold": bold, "italic": italic, "serif": serif, "mono": mono,
                 "origin": self._pt_out(pg, line["spans"][0]["origin"]), "dir": list(line["dir"])}
+
+    def op_strike_at(self, page, at):
+        """Strike through the dimension, tolerance or note under a click, read as Ballooning reads the print: a size
+        with its tolerance (stacked or not) is struck whole, each of its lines along its own direction. Where nothing
+        there is a callout, the line of words under the click."""
+        from . import balloons
+        pg = self._page(page)
+        x, y = float(at[0]), float(at[1])
+        lines = self._balloon_lines(pg)
+
+        def near(b, slack):
+            return b[0] - slack <= x <= b[2] + slack and b[1] - slack <= y <= b[3] + slack
+
+        data = self._insp()
+        tols = data.get("tols") or balloons.defaults([ln["text"] for ln in lines])
+        items = balloons.read(lines, [], data.get("unit"), tols, (pg.rect.width, pg.rect.height), notes=False)
+        boxes = [(it, [it["box"][0], it["box"][1], it["box"][0] + it["box"][2], it["box"][1] + it["box"][3]]) for it in items]
+        hits = [(it, b) for it, b in boxes if near(b, 2)]
+        if hits:
+            it, b = min(hits, key=lambda h: (h[1][2] - h[1][0]) * (h[1][3] - h[1][1]))
+            pieces = []
+            for ln in lines:
+                lb = ln["box"]
+                if b[0] - 1 <= (lb[0] + lb[2]) / 2 <= b[2] + 1 and b[1] - 1 <= (lb[1] + lb[3]) / 2 <= b[3] + 1:
+                    clip = [max(lb[0], b[0]), max(lb[1], b[1]), min(lb[2], b[2]), min(lb[3], b[3])]
+                    pieces.append({**ln, "box": clip if clip[2] > clip[0] and clip[3] > clip[1] else lb})
+            text = it.get("text") or " ".join(p["text"] for p in pieces)
+        else:
+            under = [ln for ln in lines if near(ln["box"], 2)]
+            if not under:
+                raise ValueError("Click on a dimension, tolerance or note to strike it through.")
+            pieces = [min(under, key=lambda ln: (ln["box"][2] - ln["box"][0]) * (ln["box"][3] - ln["box"][1]))]
+            text = pieces[0]["text"]
+        if not pieces:
+            raise ValueError("Click on a dimension, tolerance or note to strike it through.")
+        quads = []
+        for ln in pieces:
+            x0, y0, x1, y1 = ln["box"]
+            if not ln.get("vert"):
+                q = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]]
+            elif ln.get("down"):  # reads top to bottom
+                q = [[x1, y0], [x1, y1], [x0, y0], [x0, y1]]
+            else:  # reads bottom to top
+                q = [[x0, y1], [x0, y0], [x1, y1], [x1, y0]]
+            quads.append(q)
+        return self.op_annot_add(page, "strike", quads=quads, text=balloons.clean(text) if text else "")
 
     def _fontname(self, o):
         if o.get("mono"):
