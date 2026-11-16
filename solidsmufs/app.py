@@ -98,6 +98,13 @@ def run(argv):
             time.sleep(0.25)
             first = instance_lock.tryLock(0)  # the first window closed before listening
     icon = QIcon(str(WEB / "img" / "solidsmurfs.ico"))
+    if not getattr(sys, "frozen", False):  # run from its scripts: the version on the icon, to tell it from an installed copy
+        try:
+            from . import devicon
+            icon = devicon.icon()
+            devicon.write_ico()  # (the desktop shortcut's icon, kept to this version)
+        except Exception:
+            log.exception("the scripts' icon")
     qapp.setWindowIcon(icon)
 
     class Bridge(QObject):

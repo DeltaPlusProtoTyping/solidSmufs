@@ -55,7 +55,8 @@ comparing two versions, and editing whole paragraphs that reflow.
 
 Double-click the **SolidSmurfs** shortcut on the desktop (drop files on it to open them), or
 `SolidSmufs.cmd` in this folder. To put the shortcut back on a desktop:
-`powershell -ExecutionPolicy Bypass -File tools\make-shortcut.ps1`. To open a file directly:
+`powershell -ExecutionPolicy Bypass -File tools\make-shortcut.ps1`. Run this way, its icon carries the version in a box at
+the bottom right (V0.1.5), so it can be told from an installed copy, whose icon has none. To open a file directly:
 
 ```
 SolidSmufs.cmd "C:\path\to\part.step"
