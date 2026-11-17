@@ -31,6 +31,9 @@ def run(argv):
     if "--difficulty" in argv:  # a print's part difficulty as JSON, with no window: for a quoting system
         from . import difficulty
         return difficulty.main(argv)
+    if "--part" in argv:  # a part's quoting numbers (weight, surface area, size, holes) as JSON, with no window
+        from . import partinfo
+        return partinfo.main(argv)
     browser_mode = "--browser" in argv or "--no-open" in argv
     port = 0
     if "--port" in argv:

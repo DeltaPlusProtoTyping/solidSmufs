@@ -268,6 +268,57 @@ class InThePdf(unittest.TestCase):
         res = self.ed.run("balloons", {})
         self.assertEqual([(c["lo"], c["hi"], c["tol"]) for c in res["chars"] if c["id"] == 5], [(3.74, 3.76, "default")])
 
+    def test_leader_lines(self):
+        import pymupdf
+
+        def leaders(fz=None):
+            pg = (fz or self.pdf.fz)[0]
+            return {a.info["id"]: {"vertices": a.vertices, "colors": a.colors} for a in pg.annots(types=[pymupdf.PDF_ANNOT_LINE])
+                    if a.info["subject"] == "Balloon leader"}
+
+        res = self.auto()
+        first = res["chars"][0]
+        self.assertTrue(res["leaders"])
+        # moved well away from its callout: a leader from the circle's edge to just short of the callout's nearest point
+        res = self.ed.run("balloon_move", {"id": first["id"], "at": [first["at"][0], first["at"][1] - 60]})["result"]
+        c = next(x for x in res["chars"] if x["id"] == first["id"])
+        line = leaders()[f"ssl-{c['id']}"]
+        (ax, ay), (bx, by) = line["vertices"]
+        x0, y0, x1, y1 = c["box"][0], c["box"][1], c["box"][0] + c["box"][2], c["box"][1] + c["box"][3]
+        self.assertAlmostEqual(((ax - c["at"][0]) ** 2 + (ay - c["at"][1]) ** 2) ** 0.5, c["r"], delta=0.05)
+        near = ((max(x0 - bx, 0, bx - x1)) ** 2 + (max(y0 - by, 0, by - y1)) ** 2) ** 0.5  # (how far the end is from the box)
+        self.assertTrue(0.3 < near <= 1.01 and by < y0, (bx, by, c["box"]))
+        self.assertEqual([round(v, 2) for v in line["colors"]["stroke"]], [0.82, 0.07, 0.07])  # (the balloon's red)
+        self.assertEqual(self.ed.run("annots", {}), [])  # (not a comment to the editor, as the balloon isn't)
+        # touching its callout again: none
+        bx0, by0 = c["box"][0], c["box"][1]
+        self.ed.run("balloon_move", {"id": c["id"], "at": [bx0 - c["r"], by0 + c["box"][3] / 2]})
+        self.assertNotIn(f"ssl-{c['id']}", leaders())
+        self.ed.run("balloon_move", {"id": c["id"], "at": [c["at"][0], c["at"][1]]})
+        # kept with the saved print, and turned off and on for the whole sheet
+        out = os.path.join(self.dir.name, "leaders.pdf")
+        self.ed.run("save", {"path": out})
+        saved = pymupdf.open(out)
+        self.assertIn(f"ssl-{c['id']}", leaders(saved))
+        saved.close()
+        res = self.ed.run("balloon_leaders", {"on": False})["result"]
+        self.assertFalse(res["leaders"])
+        self.assertEqual(leaders(), {})
+        self.ed.run("balloon_leaders", {"on": True})
+        self.assertIn(f"ssl-{c['id']}", leaders())
+        # gone with its balloon
+        self.ed.run("balloon_delete", {"ids": [c["id"]]})
+        self.assertNotIn(f"ssl-{c['id']}", leaders())
+
+    def test_leader_rule(self):
+        from solidsmufs.kernel.balloonops import BalloonOps
+        lead = BalloonOps._leader
+        box = [100, 100, 140, 110]
+        self.assertIsNone(lead({"at": [120, 105], "r": 6, "box": box}))  # on its callout
+        self.assertIsNone(lead({"at": [120, 92], "r": 6, "box": box}))  # touching it
+        self.assertEqual(lead({"at": [120, 70], "r": 6, "box": box}), [[120, 76], [120, 99]])  # (stops 1 pt short)
+        self.assertIsNone(lead({"at": [300, 300], "r": 6, "box": [294, 294, 306, 306]}))  # dropped on bare paper
+
     def test_add_by_hand(self):
         self.auto()
         res = self.ed.run("balloon_add", {"page": 0, "rect": [590, 455, 60, 22]})["result"]  # a reference size, asked for

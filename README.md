@@ -234,6 +234,20 @@ SolidSmurfs.exe --difficulty print.pdf --out result.json     (the built app has 
 `{"error": "..."}`. From Python: `solidsmufs.difficulty.read("print.pdf")`. The fields are listed at the top of
 `solidsmufs/difficulty.py`.
 
+**A part's numbers for quoting.** What Quote Summary shows, as JSON with no window: the material, weight, volume,
+**surface area** (for plating, anodizing or paint by area), the size along X/Y/Z, the best-fit envelope (the stock it
+fits in, longest first) and the holes by diameter. Every length is given in both mm and inches.
+
+```
+python -m solidsmufs --part part.step --material "6061-T6 Aluminum"
+SolidSmurfs.exe --part part.sldprt --density 7.85 --out result.json
+```
+
+The weight uses `--density` (g/cm³), else `--material` (a name from the material list, any capitalization), else the
+material the file names; with none, `weight` is null and the rest is still there. The exit code is 0, or 2 with
+`{"error": "..."}`. From Python: `solidsmufs.partinfo.read("part.step", material="304 Stainless")`. The fields are
+listed at the top of `solidsmufs/partinfo.py`.
+
 ## Ballooning a print and its inspection report
 
 **Balloon** (the PDF toolbar, beside TP on hover) turns the PDF view into **Ballooning mode**, and back. Nothing else
@@ -279,6 +293,10 @@ It asks first what to read, and remembers the answers:
   drawing's lines (part edges, dimension and leader lines) and of its pictures, and nearer its own callout than any
   other, so it can't be read as the one next to it. On a crowded callout it takes the
   least bad spot, to drag where you want it.
+- **Leader lines:** a balloon that isn't touching its callout gets a thin line in its color from its edge to the
+  callout's nearest point, on the print and in the saved PDF (where it's a line comment beside the balloon, so it
+  shows and prints in any PDF reader). It follows the balloon as it's dragged. **More ▾ → Leader lines** turns them
+  off, or on again, for the whole sheet.
 - **Where the limits come from:** the tolerance on the callout (`±.005`, `+.005/-.000`, limits like `.2500-.2505`, a
   tolerance or limits stacked over two lines, `MAX` and `MIN`), or, for a size with none, the title block's table by
   the number of decimals (`.XXX ±.005`), or its one tolerance for every size (`Tolerances: ±.5mm unless noted`). The table read from the print shows above the list as **General tolerance**:
@@ -325,6 +343,15 @@ It asks first what to read, and remembers the answers:
   - From two parts on, each row shows its **Mean**, **Range** and **Cpk** (green from 1.33), with the count, min,
     max, standard deviation and Cp on hover. The first article workbook gets a **Statistics** sheet that works them
     out from the measurements on its Inspection sheet, so it follows what's typed there.
+  - **SPC across lots:** **New lot…** keeps the lot just measured, under its name (the job's lot number, or Lot 1,
+    2…), in the PDF. **SPC…** (or click a row's Cpk) then charts a characteristic lot by lot: an **X̄ and R chart**
+    (each lot's mean and range, with control limits from the spread within lots, stepped where lots differ in size),
+    or, with one part a lot, an individuals and moving range chart. It shows **Cpk** and **Cp** (within lots: what the
+    process can do), **Ppk** (over every measurement: what it did), and the **signals**: a lot beyond a control limit,
+    or the seventh of a run on one side of the mean. The print's limits are drawn on the X̄ chart when they're near
+    enough not to squash it flat. Kept lots can be renamed, or deleted (a lead's to do, with roles on). Both report
+    layouts get a **Lots** sheet: each characteristic's Cpk, Ppk and signals over the lots, and each lot's mean.
+    Lots stay with this print; a new revision carried over starts its own.
 - **Multiply:** a characteristic that applies in several places (`4X`, a count under Mult) is one balloon and one
   row. **More ▾ → Multiply** makes it a row for each place, 3.1 to 3.4, in the list and in the report, so each one is
   inspected; it stays one balloon, and the rows all say the same. **Detach** makes each place a balloon of its own,

@@ -877,6 +877,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .bl { --bl: #d11212; position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 1px solid var(--bl); border-radius: 50%;
   background: #fff; color: var(--bl); font: 700 10px/1 Arial, Helvetica, sans-serif; pointer-events: auto; cursor: move; user-select: none; }
 .bl:hover { background: #fff1f1; }
+.bl-lead { --bl: #d11212; position: absolute; height: 0; border-top: 1px solid var(--bl); transform-origin: 0 0; pointer-events: none; }
 .bl.on { box-shadow: 0 0 0 2px #f08a00, 0 1px 5px rgba(0, 0, 0, .35); z-index: 3; }
 .bl-req { position: absolute; border: 1px solid rgba(240, 138, 0, .6); background: rgba(250, 170, 40, .17); border-radius: 2px; pointer-events: none; }
 .bl-req.ok { border-color: rgba(30, 150, 70, .55); background: rgba(40, 170, 90, .14); }
@@ -952,6 +953,31 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .bl-results td.bl-status.ok { color: #0b6b2c; }
 .bl-results td.bl-status.bad { color: #fff; background: #d11212; }
 .bl-results td.bl-cpk.ok { color: #0b6b2c; font-weight: 600; }
+.bl-results td.bl-cpk.link { cursor: pointer; text-decoration: underline dotted; }
+.bl-spc { display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+.bl-spc-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bl-spc-pick { max-width: 420px; font-family: var(--mono, monospace); }
+.bl-spc-tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.bl-spc-tile { display: flex; flex-direction: column; align-items: center; padding: 6px 4px; border: 1px solid var(--line, #d0d5dd); border-radius: 6px; }
+.bl-spc-tile b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.bl-spc-tile span { font-size: 11px; opacity: .75; }
+.bl-spc-tile.ok b { color: #0b6b2c; }
+.bl-spc-tile.bad b { color: #a40d0d; }
+.bl-spc-chart { width: 100%; height: auto; display: block; }
+.bl-spc-chart .bl-spc-title { font-size: 12px; font-weight: 600; fill: currentColor; }
+.bl-spc-chart .bl-spc-ax { font-size: 10px; fill: currentColor; opacity: .75; font-variant-numeric: tabular-nums; }
+.bl-spc-chart .bl-spc-off { fill: #a40d0d; opacity: .85; }
+.bl-spc-chart .bl-spc-spec { stroke: #a40d0d; stroke-width: 1; stroke-dasharray: 2 3; fill: none; }
+.bl-spc-chart .bl-spc-cl { stroke: #5d6d7e; stroke-width: 1; fill: none; }
+.bl-spc-chart .bl-spc-ucl { stroke: #e67e22; stroke-width: 1.2; stroke-dasharray: 6 3; fill: none; }
+.bl-spc-chart .bl-spc-line { stroke: #1f4fc0; stroke-width: 1.5; fill: none; }
+.bl-spc-chart .bl-spc-pt { fill: #1f4fc0; stroke: #fff; stroke-width: 1; }
+.bl-spc-chart .bl-spc-pt.bad { fill: #d11212; }
+.bl-spc-flags { font-size: 12px; color: #a40d0d; }
+.bl-spc-keep { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.bl-spc-lots summary { cursor: pointer; font-size: 12px; }
+.bl-spc-lot { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 12px; }
+.bl-spc-lname { font-weight: 600; }
 .bl-results td.bl-cpk.bad { color: #a40d0d; font-weight: 600; }
 .bl-desc { margin-right: 10px; font: 600 12px var(--ui); }
 .bl-empty .btn { margin-left: 8px; }

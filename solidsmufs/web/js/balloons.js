@@ -938,12 +938,35 @@ export class Balloons {
     e.preventDefault();
     e.stopPropagation();
     const c = el.char, p = this.v.pages[c.page], at0 = [...c.at];
-    let at = at0;
+    let at = at0, line = null;
     this.select(c.id, { toRow: true });
     this.ed._drag(e, p, this.v._pagePoint(p, e), (a, b) => {
       at = [at0[0] + b[0] - a[0], at0[1] + b[1] - a[1]];
       this._put(el, p, c, at);
-    }, (a, b, moved) => { if (moved) this.run('balloon_move', { id: c.id, at }); });
+      if (this.data.leaders !== false) line = this._leaderLine(p, c, at, line);
+    }, (a, b, moved) => {
+      if (moved) this.run('balloon_move', { id: c.id, at }).finally?.(() => line?.remove()); else line?.remove();
+    });
+  }
+
+  // while a balloon is dragged: its leader as it will be (the saved one is drawn into the page when it's let go).
+  // The same rule as balloonops._leader, in the page's points as shown
+  _leaderLine(p, c, at, line) {
+    const [x, y] = at, r = c.r, [bx, by, bw, bh] = c.box;
+    const qx = Math.min(Math.max(x, bx), bx + bw), qy = Math.min(Math.max(y, by), by + bh), d = Math.hypot(qx - x, qy - y);
+    const bare = Math.abs(bw - 2 * r) < 0.01 && Math.abs(bh - 2 * r) < 0.01;
+    if (!line) { line = h('div', { class: 'bl-lead' }); p.edit.prepend(line); }
+    line.hidden = bare || d <= r * 1.5;
+    if (line.hidden) return line;
+    const ux = (qx - x) / d, uy = (qy - y) / d, gap = Math.min(1, (d - r) * 0.2);
+    const [sw] = this.v._size(p), k = p.cssW / sw, t = this.v.state.turns, W = p.info.w, H = p.info.h;
+    // (the page as shown on screen, turned by the view: the same mapping as _rectStyle, for a point)
+    const scr = ([px, py]) => (t === 1 ? [H - py, px] : t === 2 ? [W - px, H - py] : t === 3 ? [py, W - px] : [px, py]);
+    const [ax, ay] = scr([x + ux * r, y + uy * r]), [ex, ey] = scr([qx - ux * gap, qy - uy * gap]);
+    line.style.cssText = `left:${ax * k}px;top:${ay * k}px;width:${Math.hypot(ex - ax, ey - ay) * k}px;`
+      + `transform:rotate(${Math.atan2(ey - ay, ex - ax)}rad);border-top-width:${Math.max(r * 0.08 * k, 1)}px`;
+    line.style.setProperty('--bl', c.color || '#d11212');
+    return line;
   }
 
   // Add is on: a box dragged around a callout balloons what's in it; a click leaves an empty balloon to fill in
@@ -998,6 +1021,9 @@ export class Balloons {
       { label: 'Renumber', disabled: !n, sub: () => this._renumberItems(this.viewBtn) },
       { label: `Views${(this.data.views || []).length ? ` (${this.data.views.length})` : ''}`, sub: () => this._viewsItems(this.viewBtn) },
       { label: 'Multiply', disabled: !n, sub: () => this._multItems(this.viewBtn) },
+      { sep: true },
+      { label: 'Leader lines', check: this.data.leaders !== false, disabled: !n,
+        action: () => this.run('balloon_leaders', { on: this.data.leaders === false }) },
     ]), { cls: this.adding === 'view' ? 'on' : '', edits: true });
     this.addBtn = b('Add', 'Balloon something by hand: drag a box around a callout on the print (its text is read),\nor click a spot for an empty balloon to fill in. Esc cancels.', () => this._adding(this.adding === 'balloon' ? false : 'balloon'), { cls: this.adding === 'balloon' ? 'on' : '', edits: true });
     this.row.replaceChildren(
@@ -1075,7 +1101,8 @@ export class Balloons {
         h('button', { class: 'btn bl-hbtn', text: '+ Add part', title: 'Another part to inspect: a column for what it measures.\nDouble-click its heading to give it its serial number.', disabled: !n, onclick: () => this.addPart() }),
         h('button', { class: 'btn bl-hbtn', text: 'Sampling…', title: 'Which parts of the lot to inspect: every part, the first and last, 1 in N, or a share of them.\nA column is added for each.', disabled: !n, onclick: () => this.sampling() }),
         h('button', { class: 'btn bl-hbtn', text: 'Import…', title: "Results from a CMM's or a gage's export, or a spreadsheet: CSV, text or Excel (.xlsx),\nmatched to the balloons by their numbers", disabled: !n, onclick: () => this.importResults() }),
-        parts.length ? h('button', { class: 'bl-link', text: 'New lot…', title: 'Take out every part and result, to inspect another lot against the same balloons', onclick: () => this.newLot() }) : '',
+        parts.length ? h('button', { class: 'bl-link', text: 'New lot…', title: 'Take out every part and result, to inspect another lot against the same balloons (this lot is kept for SPC)', onclick: () => this.newLot() }) : '',
+        (d.lots || []).length ? h('button', { class: 'btn bl-hbtn', text: 'SPC…', title: `How each characteristic ran from lot to lot: X̄ and R charts, Cpk and Ppk over the ${(d.lots || []).length} kept lot${(d.lots || []).length === 1 ? '' : 's'} and this one`, onclick: () => this.spc() }) : '',
         h('span', { class: 'pv-grow' }),
         this._count());
       return;
@@ -1351,9 +1378,143 @@ export class Balloons {
   }
 
   async newLot() {
-    const parts = (this.data.samples || []).length;
-    if (!await this.ed._confirm('New lot', `Take out the ${parts} part${parts === 1 ? '' : 's'} and everything they measured, to inspect another lot against the same balloons? Write the report first if this lot's is still needed.`, 'Start over')) return;
-    this.run('balloon_results_clear', {});
+    const parts = (this.data.samples || []).length, k = (this.data.lots || []).length;
+    const measured = Object.keys(this.data.results || {}).length > 0;
+    const name = h('input', { type: 'text', spellcheck: 'false', value: String(this.data.info?.lot || '').trim() || `Lot ${k + 1}`, maxlength: 60 });
+    const keep = h('input', { type: 'checkbox', checked: measured, disabled: !measured });
+    let dlg = null;
+    const go = () => {
+      dlg.close();
+      this.run('balloon_results_clear', { keep: keep.checked, name: name.value.trim() });
+    };
+    dlg = modal('New lot', h('div', { class: 'pe-fprops bl-props' },
+      h('p', { class: 'bl-hint', text: `Take out the ${parts} part${parts === 1 ? '' : 's'} and everything they measured, to inspect another lot against the same balloons.` }),
+      h('label', { class: 'bl-spc-keep' }, keep, h('span', { text: measured ? 'Keep this lot for SPC across lots (SPC… on the Results tab), as:' : 'Nothing measured yet: there is nothing to keep' })),
+      h('label', { class: 'pe-frow' }, h('span', { text: 'Lot' }), name),
+      h('div', { class: 'pe-pop-foot' }, h('span', { class: 'pv-grow' }),
+        h('button', { class: 'btn', text: 'Cancel', onclick: () => dlg.close() }),
+        h('button', { class: 'btn primary', text: 'Start the new lot', onclick: go }))), { width: 460 });
+    name.disabled = !measured;
+    keep.addEventListener('change', () => { name.disabled = !keep.checked; });
+    name.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') go(); });
+    setTimeout(() => { name.focus(); name.select(); }, 30);
+  }
+
+  // ================================================================== SPC across lots
+  async spc(key = null) {
+    const body = h('div', { class: 'bl-spc' }, h('span', { class: 'spin' }));
+    const dlg = modal('SPC across lots', body, { width: 760 });
+    const show = async (k) => {
+      let r;
+      try { r = await this.ed._ask('balloon_spc', { key: k }); } catch (e) { body.replaceChildren(h('p', { class: 'bl-hint', text: e.message })); return; }
+      const lots = this.data.lots || [], locked = this.data.status === 'superseded';
+      const manage = h('details', { class: 'bl-spc-lots' }, h('summary', { text: `Kept lots (${lots.length})` }),
+        ...lots.map((x) => h('div', { class: 'bl-spc-lot' },
+          h('span', { class: 'bl-spc-lname', text: x.name }),
+          h('span', { class: 'subtle', text: `${x.parts} part${x.parts === 1 ? '' : 's'} · ${when(x.at)}${x.by ? ` · ${x.by}` : ''}` }),
+          h('span', { class: 'pv-grow' }),
+          h('button', { class: 'bl-link', text: 'Rename', disabled: locked, onclick: async () => {
+            const name = window.prompt('Lot name', x.name);
+            if (name && name.trim() && name.trim() !== x.name) { await this.run('balloon_lot_edit', { id: x.id, name: name.trim() }); show(r.key); }
+          } }),
+          h('button', { class: 'bl-link', text: 'Delete', disabled: locked, onclick: async () => {
+            if (!await this.ed._confirm('Delete lot', `Take ${x.name} and its results out of the history for good? Undo puts it back until the file is closed.`, 'Delete')) return;
+            await this.run('balloon_lot_delete', { id: x.id }); show(r.key);
+          } }))));
+      if (!r.rows.length || !r.chart) {
+        body.replaceChildren(h('p', { class: 'bl-hint', text: r.lots < 2
+          ? 'SPC needs two lots or more. Measure this lot, then New lot… on the Results tab keeps it, and the next lot’s results make the second point.'
+          : 'No characteristic has numbers in two lots or more yet (Pass, Fail and words aren’t charted).' }), lots.length ? manage : '');
+        return;
+      }
+      const ch = r.chart, pl = Math.max((r.places || 0) + 1, 4);
+      const f = (v) => (v == null ? '–' : Number(v).toFixed(pl));
+      const fs = (v) => (v == null ? '–' : Number(v).toFixed(pl + 1));
+      const two = (v) => (v == null ? '–' : v.toFixed(2));
+      const pick = h('select', { class: 'bl-spc-pick' }, ...r.rows.map((x) => h('option', { value: x.key, text: `${x.label}   ${x.text}`, selected: x.key === r.key })));
+      pick.addEventListener('change', () => show(pick.value));
+      const tile = (label, v, tip, good) => h('div', { class: `bl-spc-tile${good == null ? '' : good ? ' ok' : ' bad'}`, title: tip }, h('b', { text: v }), h('span', { text: label }));
+      const flagged = ch.points.filter((p) => p.flags.length);
+      const said = { beyond: 'mean beyond a control limit', range: 'range beyond its control limit', run: 'in a run of 7 on one side of the mean', spec: 'a part outside the print’s limits' };
+      body.replaceChildren(
+        h('div', { class: 'bl-spc-top' }, pick, h('span', { class: 'subtle', text: `${ch.lots} lots · ${ch.n} measurements · ${ch.kind === 'xbar_r' ? 'X̄ and R chart' : 'one a lot: individuals and moving range'}` })),
+        h('div', { class: 'bl-spc-tiles' },
+          tile('Cpk', two(ch.cpk), 'Within lots: what the process can do (σ from the spread inside each lot). 1.33 or more is the usual aim.', ch.cpk == null ? null : ch.cpk >= 1.33),
+          tile('Ppk', two(ch.ppk), 'Over all the lots: what it did (σ of every measurement).', ch.ppk == null ? null : ch.ppk >= 1.33),
+          tile('Cp', two(ch.cp), 'Within lots, wherever the mean sits: the tolerance over 6σ.'),
+          tile('Mean', f(ch.mean), `The print's limits ${f(ch.lo)} – ${f(ch.hi)}`),
+          tile('σ within', fs(ch.sigma), 'From the lots’ ranges (R̄ / d2), or the moving range with one part a lot'),
+          tile('Signals', String(ch.signals), 'Lots beyond a control limit or in a run: the process changed there', ch.signals === 0)),
+        this._spcChart(ch, 'mean', 'ucl', 'lcl', null, 'X̄: each lot’s mean', f, true),
+        this._spcChart(ch, 'range', 'rucl', 'rlcl', 'rcl', ch.kind === 'xbar_r' ? 'R: each lot’s range' : 'Moving range, lot to lot', f, false),
+        flagged.length ? h('div', { class: 'bl-spc-flags' }, ...flagged.map((p) => h('div', {}, h('b', { text: p.name }), `: ${p.flags.map((x) => said[x]).join(', ')}`))) : '',
+        manage);
+    };
+    show(key);
+    return dlg;
+  }
+
+  // one SPC chart as SVG: the lots along, a point each, the center line and control limits (stepped where lots differ
+  // in size), and on the X̄ chart the print's limits
+  _spcChart(ch, val, up, down, mid, title, f, specs) {
+    const NS = 'http://www.w3.org/2000/svg', W = 700, H = 170, L = 70, R = 14, T = 18, B = 26;
+    const pts = ch.points, n = pts.length;
+    const vals = [];
+    for (const p of pts) for (const k of [val, up, down, mid]) if (k && p[k] != null) vals.push(p[k]);
+    if (specs) vals.push(ch.center);
+    if (!vals.length) return '';
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    // the print's limits are drawn when they're near enough not to squash the lots flat; else said at the edge
+    const span = Math.max(hi - lo, 1e-9), near = (s) => s != null && s >= lo - span && s <= hi + span;
+    if (specs) for (const s of [ch.lo, ch.hi]) if (near(s)) { lo = Math.min(lo, s); hi = Math.max(hi, s); }
+    if (hi - lo < 1e-12) { lo -= 1e-3; hi += 1e-3; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    const x = (i) => L + (n === 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (n - 1));
+    const y = (v) => T + ((hi - v) / (hi - lo)) * (H - T - B);
+    const el = (tag, a, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'bl-spc-chart', role: 'img', 'aria-label': title });
+    svg.append(el('text', { x: L, y: 12, class: 'bl-spc-title' }, title));
+    const line = (v, cls, label) => {
+      svg.append(el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: cls }));
+      svg.append(el('text', { x: L - 6, y: y(v) + 3.5, class: 'bl-spc-ax', 'text-anchor': 'end' }, label));
+    };
+    const step = (k, cls) => {
+      const have = pts.map((p, i) => [i, p[k]]).filter(([, v]) => v != null);
+      if (!have.length) return;
+      let d = '';
+      have.forEach(([i, v], j) => {
+        const a = j === 0 ? L : (x(have[j - 1][0]) + x(i)) / 2, b = j === have.length - 1 ? W - R : (x(i) + x(have[j + 1][0])) / 2;
+        d += `${j ? 'L' : 'M'}${a},${y(v)} L${b},${y(v)} `;
+      });
+      svg.append(el('path', { d, class: cls }));
+      svg.append(el('text', { x: L - 6, y: y(have[have.length - 1][1]) + 3.5, class: 'bl-spc-ax', 'text-anchor': 'end' }, f(have[have.length - 1][1])));
+    };
+    if (specs) {
+      for (const [s, edge] of [[ch.hi, 'Upper'], [ch.lo, 'Lower']]) {
+        if (s == null) continue;
+        if (near(s)) line(s, 'bl-spc-spec', f(s));
+        else svg.append(el('text', { x: W - R, y: edge === 'Upper' ? T + 4 : H - B - 4, class: 'bl-spc-ax bl-spc-off', 'text-anchor': 'end' },
+          `${edge} limit ${f(s)} ${edge === 'Upper' ? '↑' : '↓'} (off the chart)`));
+      }
+      line(ch.center, 'bl-spc-cl', f(ch.center));
+    } else if (mid) step(mid, 'bl-spc-cl');
+    step(up, 'bl-spc-ucl');
+    step(down, 'bl-spc-ucl');
+    const shown = pts.map((p, i) => [i, p[val]]).filter(([, v]) => v != null);
+    svg.append(el('polyline', { points: shown.map(([i, v]) => `${x(i)},${y(v)}`).join(' '), class: 'bl-spc-line' }));
+    for (const [i, v] of shown) {
+      const p = pts[i], bad = p.flags.some((k) => (val === 'mean' ? k === 'beyond' || k === 'run' : k === 'range'));
+      const dot = el('circle', { cx: x(i), cy: y(v), r: 4, class: `bl-spc-pt${bad ? ' bad' : ''}` });
+      dot.append(el('title', {}, `${p.name}: ${f(v)}${val === 'mean' ? `  (n ${p.n}, ${f(p.min)} to ${f(p.max)})` : ''}`));
+      svg.append(dot);
+    }
+    pts.forEach((p, i) => {
+      if (n <= 14 || i % Math.ceil(n / 14) === 0 || i === n - 1) {
+        svg.append(el('text', { x: x(i), y: H - 8, class: 'bl-spc-ax', 'text-anchor': n > 1 && i === n - 1 ? 'end' : n > 1 && i === 0 ? 'start' : 'middle' },
+          p.name.length > 12 ? `${p.name.slice(0, 11)}…` : p.name));
+      }
+    });
+    return svg;
   }
 
   _partMenu(e, p, th) {
@@ -1433,7 +1594,7 @@ export class Balloons {
           return td;
         }),
         h('td', { class: `bl-status${status === 'Fail' ? ' bad' : status === 'Pass' ? ' ok' : ''}`, text: status }),
-        ...(spc ? this._statCells(c, said) : []));
+        ...(spc ? this._statCells(c, said, r.key) : []));
       tr.addEventListener('click', () => this.select(c.id, { toPage: true }));
       tr.addEventListener('dblclick', () => this.edit(c));
       return tr;
@@ -1449,13 +1610,16 @@ export class Balloons {
     if (next) this._editResult(next.key, next.part, next.typed ?? null);
   }
 
-  _statCells(c, said) {
+  _statCells(c, said, key) {
     const s = stats(c, said);
     if (!s) return [h('td'), h('td'), h('td')];
+    const lots = (this.data.lots || []).length;
     const f = (v) => this._fmt(v, Math.max((c.places || 0) + 1, 4), c.kind).replace(/\.$/, '');
     const tip = `${s.n} measurements\nMean ${f(s.mean)}   Min ${f(s.min)}   Max ${f(s.max)}\nRange ${f(s.range)}   Std dev ${f(s.sd)}\nCp ${s.cp == null ? '–' : s.cp.toFixed(2)}   Cpk ${s.cpk == null ? '–' : s.cpk.toFixed(2)}`;
     return [h('td', { class: 'mono r', text: f(s.mean), title: tip }), h('td', { class: 'mono r', text: f(s.range), title: tip }),
-      h('td', { class: `mono r bl-cpk${s.cpk == null ? '' : s.cpk >= 1.33 ? ' ok' : ' bad'}`, text: s.cpk == null ? '–' : s.cpk.toFixed(2), title: tip })];
+      h('td', { class: `mono r bl-cpk${s.cpk == null ? '' : s.cpk >= 1.33 ? ' ok' : ' bad'}${lots ? ' link' : ''}`, text: s.cpk == null ? '–' : s.cpk.toFixed(2),
+        title: lots ? `${tip}\n\nClick for SPC across the kept lots and this one` : tip,
+        onclick: lots ? (e) => { e.stopPropagation(); this.spc(key); } : null })];
   }
 
   // a result is typed in: Enter goes on down the part's column (and on to the next part at its foot), Tab along the row

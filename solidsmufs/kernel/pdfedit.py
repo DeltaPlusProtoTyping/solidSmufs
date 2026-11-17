@@ -16,7 +16,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from .balloonops import SUBJECT as BALLOON, VIEW as BALLOON_VIEW, BalloonOps
+from .balloonops import OURS as BALLOON_MARKS, BalloonOps
 
 UNDO_BYTES = 400_000_000  # the most the snapshots for undo hold before the oldest go
 HIGHLIGHT = (1.0, 0.85, 0.1)
@@ -258,8 +258,8 @@ class PdfEditor(BalloonOps):
             pg = self.fz[i]
             for a in pg.annots():
                 kind = KINDS.get(a.type[1], "")
-                if kind in ("popup", "link", "field", "") or a.info.get("subject") in (BALLOON, BALLOON_VIEW):
-                    continue  # (a balloon, or a view's mark, is the inspection list's: kernel/balloonops.py)
+                if kind in ("popup", "link", "field", "") or a.info.get("subject") in BALLOON_MARKS:
+                    continue  # (a balloon, its leader, or a view's mark, is the inspection list's: kernel/balloonops.py)
                 out.append({"page": i, **self._annot_info(pg, a)})
         return out
 

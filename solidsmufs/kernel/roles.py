@@ -23,7 +23,7 @@ from .. import settings
 
 HOURS = 4
 ROLES = ("lead", "admin")
-LEAD_OPS = {"status"}  # (and some of what's done to an issue: see need_for)
+LEAD_OPS = {"status", "lot_delete"}  # (and some of what's done to an issue: see need_for)
 LEAD_ISSUE_ACTS = {"resolve", "reopen", "purge"}
 
 

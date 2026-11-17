@@ -251,6 +251,51 @@ def statistics(data, source, where):
             "color": color, "landscape": True}
 
 
+def lots(data):
+    """How each characteristic ran over the kept lots and this one (kernel/spc.py), when there's more than one lot: its
+    capability within lots (Cp, Cpk) and over all of them (Pp, Ppk), the control signals, and each lot's mean."""
+    from . import spc
+    kept = data.get("lots") or []
+    if not kept:
+        return None
+    groups = [(x["name"], x.get("samples") or [], x.get("results") or {}) for x in kept]
+    if data.get("results"):
+        groups.append((str((data.get("info") or {}).get("lot") or "").strip() or "This lot", data.get("samples") or [], data["results"]))
+    chars = expanded([{**c, "label": balloons.label(c)} for c in data["chars"]])
+    cols = ["Balloon", "Requirement", "Lower limit", "Upper limit", "Lots", "Count", "Mean", "σ within", "Cp", "Cpk",
+            "σ overall", "Pp", "Ppk", "Signals"]
+    rows = [[("Lots", "title")], [(f"{len(groups)} lots, oldest first. Cp and Cpk from the spread within lots (what the process "
+                                   "can do), Pp and Ppk from all the measurements (what it did); 1.33 or more is the usual aim. "
+                                   "Signals: lots beyond a control limit, or in a run of 7 on one side of the mean.", "label")], [],
+            [(t, "head") for t in cols]]
+    means = []
+    for c in chars:
+        key = c.get("key") or str(c["id"])
+        per = [{"name": name, "values": [r.get(key, {}).get(str(s["id"])) for s in samples if str(s["id"]) in r.get(key, {})]}
+               for name, samples, r in groups]
+        ch = spc.chart(c, per)
+        look = "c4" if (c.get("places") or 0) >= 4 else "c3"
+        num = lambda v, look=look: (v, look) if v is not None else ("", "center")  # noqa: E731
+        two = lambda v: (round(v, 2), "center") if v is not None else ("", "center")  # noqa: E731
+        if ch is None:
+            continue
+        rows.append([(_n(c), "center"), (c.get("text") or "", "box"), _num(c, "lo", {}), _num(c, "hi", {}),
+                     (ch["lots"], "center"), (ch["n"], "center"), num(ch["mean"]), num(ch["sigma"]), two(ch["cp"]),
+                     two(ch["cpk"]), num(ch["overall"]), two(ch["pp"]), two(ch["ppk"]), (ch["signals"] or "", "center")])
+        by = {p["name"]: p for p in ch["points"]}
+        means.append([(_n(c), "center")] + [num(by[name]["mean"]) if name in by else ("", "center") for name, _, _ in groups])
+    if len(rows) == 4:
+        return None
+    first, last = 5, len(rows)
+    rows += [[], [("Each lot's mean", "title")], [("Balloon", "head")] + [(name, "head") for name, _, _ in groups], *means]
+    color = []
+    for k in ("J", "M"):  # Cpk and Ppk
+        color += [{"range": f"{k}{first}:{k}{last}", "when": f'AND(ISNUMBER({k}{first}),{k}{first}<1.33)', "as": "bad"},
+                  {"range": f"{k}{first}:{k}{last}", "when": f'AND(ISNUMBER({k}{first}),{k}{first}>=1.33)', "as": "good"}]
+    return {"name": "Lots", "rows": rows, "widths": [9, 30, 12, 12, 7, 8, 11, 11, 7, 7, 11, 7, 7, 8], "freeze": 4,
+            "color": color, "landscape": True}
+
+
 def form3(data, drawing, source=None, where=None):
     """AS9102 Form 3. source: the Inspection sheet's name and where: its rows, for the results to follow the first
     part's there."""
@@ -426,7 +471,7 @@ def build(data, drawing, parts=1, layout=None, footer="", with_issues=False):
     article: results with Pass / Fail worked out, and AS9102 Forms 1, 2 and 3), or a list layout of your own like
     LAYOUT. with_issues: a sheet of the production issues too."""
     parts = min(max(int(parts or 1), 1), MAX_PARTS)
-    more = [x for x in [issues(data) if with_issues else None] if x]
+    more = [x for x in [lots(data), issues(data) if with_issues else None] if x]
     if layout in (None, "sheet"):
         return [sheet(data, drawing, parts, footer), *more]
     page, where = inspection(data, drawing, parts, None if layout == "list" else layout)

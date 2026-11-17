@@ -9,7 +9,9 @@ Several characteristics of one callout share a number and are told apart by a su
 "sub" in the list; a balloon alone under its number has no sub).
 The parts inspected and what each measured are kept with the list too: "samples" ([{"id", "name"}], a part by
 its serial number or what it's called) and "results" ({row: {sample id: result}}, a row being a characteristic's id,
-or id.2 for the second place of a multiplied one; a result as balloons.result() keeps it).
+or id.2 for the second place of a multiplied one; a result as balloons.result() keeps it). Starting a new lot keeps
+the last one's in "lots" ([{"id", "name", "at", "by", "samples", "results"}], oldest first), for SPC across lots
+(kernel/spc.py).
 Views ("views": [{"id", "name", "page", "rect": [x0, y0, x1, y1], "color": "#rrggbb", "start"}]) are boxes drawn
 around the drawing's views, each held to its page by a hidden square comment (/NM ssv-<id>), so it goes where its
 page goes as a balloon does: a balloon whose callout is in one is drawn in its color, and Renumber numbers view by
@@ -53,6 +55,8 @@ from pathlib import Path
 from . import balloons
 
 KEY, FONT_KEY, SUBJECT, VIEW = "SolidSmurfsInspection", "SolidSmurfsBalloonFont", "Balloon", "Balloon view"
+LEADER = "Balloon leader"  # the line from a balloon to its callout (a line comment beside the balloon's circle)
+OURS = (SUBJECT, VIEW, LEADER)
 RED = (0.82, 0.07, 0.07)
 VIEW_COLORS = ["#1f77b4", "#e67e22", "#2a9d48", "#8e44ad", "#00838f", "#b8860b", "#c2185b", "#5d6d7e"]
 ORDERS = ("list", "rows", "columns", "clockwise")
@@ -86,7 +90,7 @@ def who():
 # what's changed by each edit: the characteristics (fixed once released), or the work on them (fixed once superseded)
 FIXED_RELEASED = {"auto", "add", "move", "edit", "sub", "multiply", "detach", "carry", "tag", "reviewed", "delete", "renumber",
                   "view_add", "view_edit", "view_delete", "clear", "tols"}
-FIXED_SUPERSEDED = FIXED_RELEASED | {"part_add", "sample", "part_edit", "part_delete", "result", "import", "results_clear",
+FIXED_SUPERSEDED = FIXED_RELEASED | {"leaders", "lot_edit", "lot_delete", "part_add", "sample", "part_edit", "part_delete", "result", "import", "results_clear",
                                      "issue_add", "issue_edit", "issue_act", "info", "photo_add", "photo_marks", "photo_delete"}
 PHOTO_MOST = 1920  # pixels along a photo's longer side
 MARK_KINDS = ("pen", "line", "arrow", "oval", "rect", "lasso", "text", "stamp")
@@ -233,7 +237,8 @@ class BalloonOps:
         """Take every balloon's and view's comment off the pages (the list stays)."""
         import pymupdf
         for pg in self.fz:
-            for a in [a for a in pg.annots(types=[pymupdf.PDF_ANNOT_CIRCLE, pymupdf.PDF_ANNOT_SQUARE]) if a.info.get("subject") in (SUBJECT, VIEW)]:
+            for a in [a for a in pg.annots(types=[pymupdf.PDF_ANNOT_CIRCLE, pymupdf.PDF_ANNOT_SQUARE, pymupdf.PDF_ANNOT_LINE])
+                      if a.info.get("subject") in OURS]:
                 pg.delete_annot(a)
 
     def _balloon_tidy(self, new=()):
@@ -243,8 +248,8 @@ class BalloonOps:
         seen, new = set(), {int(i) for i in new}
         for i, pg in enumerate(self.fz):
             gone = []
-            for a in pg.annots(types=[pymupdf.PDF_ANNOT_CIRCLE, pymupdf.PDF_ANNOT_SQUARE]):
-                if a.info.get("subject") not in (SUBJECT, VIEW):
+            for a in pg.annots(types=[pymupdf.PDF_ANNOT_CIRCLE, pymupdf.PDF_ANNOT_SQUARE, pymupdf.PDF_ANNOT_LINE]):
+                if a.info.get("subject") not in OURS:
                     continue
                 name = a.info.get("id", "")
                 if i in new or name in seen:
@@ -272,7 +277,8 @@ class BalloonOps:
         doc, font, who = self.fz, self._balloon_font(), author()
         for i in sorted({int(p) for p in pages if 0 <= int(p) < doc.page_count}):
             pg = doc[i]
-            for a in [a for a in pg.annots(types=[pymupdf.PDF_ANNOT_CIRCLE, pymupdf.PDF_ANNOT_SQUARE]) if a.info.get("subject") in (SUBJECT, VIEW)]:
+            for a in [a for a in pg.annots(types=[pymupdf.PDF_ANNOT_CIRCLE, pymupdf.PDF_ANNOT_SQUARE, pymupdf.PDF_ANNOT_LINE])
+                      if a.info.get("subject") in OURS]:
                 pg.delete_annot(a)
             for v in data.get("views") or []:  # each view's hidden mark, that holds it to its page
                 if v["page"] != i:
@@ -288,6 +294,14 @@ class BalloonOps:
                 (x, y), r = c["at"], c["r"]
                 view = self._view_of(data, c)
                 color = _rgb(view["color"]) if view else RED
+                line = self._leader(c) if data.get("leaders", True) else None
+                if line:  # (first, so the circle is drawn over its end)
+                    ln = pg.add_line_annot(pymupdf.Point(line[0]), pymupdf.Point(line[1]))
+                    ln.set_colors(stroke=color)
+                    ln.set_border(width=round(max(r * 0.08, 0.5), 2))
+                    ln.set_info(title=who, subject=LEADER, content=f"{balloons.label(c)}: {c['text']}")
+                    ln.update()
+                    doc.xref_set_key(ln.xref, "NM", f"(ssl-{c['id']})")
                 a = pg.add_circle_annot(pymupdf.Rect(x - r, y - r, x + r, y + r))
                 a.set_colors(stroke=color, fill=(1, 1, 1))
                 a.set_border(width=round(max(r * 0.13, 0.7), 2))
@@ -314,6 +328,23 @@ class BalloonOps:
                         f"{sx:.2f} {sy:.2f} Tm ({text}) Tj ET\n")
                 doc.update_stream(ap, b"q\n" + doc.xref_stream(ap) + b"Q" + more.encode("ascii"))
                 doc.xref_set_key(ap, "Resources", f"<</Font<</Helv {font} 0 R>>>>")
+
+    @staticmethod
+    def _leader(c):
+        """The leader from a balloon to its callout, [[x, y], [x, y]] in the page's points: from the circle's edge to
+        the callout's nearest point, stopping just short of it. None when the balloon touches its callout or sits on
+        it, or was dropped on bare paper (its box is then only the circle's)."""
+        (x, y), r = c["at"], c["r"]
+        x0, y0, x1, y1 = c["box"]
+        if abs((x1 - x0) - 2 * r) < 0.01 and abs((y1 - y0) - 2 * r) < 0.01 and abs((x0 + x1) / 2 - x) < 0.01 and abs((y0 + y1) / 2 - y) < 0.01:
+            return None
+        qx, qy = min(max(x, x0), x1), min(max(y, y0), y1)
+        d = math.hypot(qx - x, qy - y)
+        if d <= r * 1.5:  # touching, or near enough to be read as its own
+            return None
+        ux, uy = (qx - x) / d, (qy - y) / d
+        gap = min(1.0, (d - r) * 0.2)
+        return [[round(x + ux * r, 2), round(y + uy * r, 2)], [round(qx - ux * gap, 2), round(qy - uy * gap, 2)]]
 
     @staticmethod
     def _warnings(chars, labels):
@@ -352,7 +383,9 @@ class BalloonOps:
                 "issues": issues, "issueTags": list(ISSUE_TAGS),
                 "chars": chars, "tols": data.get("tols") or {}, "unit": data.get("unit"), "labels": balloons.KIND_LABEL,
                 "info": data.get("info") or {}, "fields": [[k, label] for k, label, _ in report.INFO], "layouts": report.LAYOUTS,
-                "samples": data.get("samples") or [], "results": data.get("results") or {},
+                "samples": data.get("samples") or [], "results": data.get("results") or {}, "leaders": data.get("leaders", True),
+                "lots": [{"id": x["id"], "name": x["name"], "at": x.get("at"), "by": x.get("by"), "parts": len(x.get("samples") or [])}
+                         for x in data.get("lots") or []],
                 "views": [{**v, "rect": self._out(self.fz[v["page"]], v["rect"]), "count": sum(1 for c in chars if c["view"] == v["id"])}
                           for v in data.get("views") or []]}
 
@@ -526,6 +559,8 @@ class BalloonOps:
                 "samples": old.get("samples") or [], "snext": old.get("snext", 1), "views": old.get("views") or [], "vnext": old.get("vnext", 1),
                 # (the balloons read again are new ones: what was measured against the old ones doesn't carry over)
                 "results": {k: r for k, r in (old.get("results") or {}).items() if k.split(".")[0] in {str(c["id"]) for c in stay}}}
+        for k, v in old.items():  # the rest is the sheet's, not the reading's: its id, status, log, issues, photos, lots...
+            data.setdefault(k, v)
         n = max([c["n"] for c in stay], default=0)
         for i in which:
             pg, lines, frames = read[i]
@@ -913,16 +948,83 @@ class BalloonOps:
                 count += 1
         return self._balloon_done(data, [], {"imported": count, "parts": len(parts), "unmatched": unmatched[:40], "unmatched_count": len(unmatched)})
 
-    def op_balloon_results_clear(self, parts=True):
-        """Start over for another lot: every result out, and (parts) the parts they were measured on."""
+    def op_balloon_results_clear(self, parts=True, keep=True, name=None):
+        """Start over for another lot: every result out, and (parts) the parts they were measured on. keep: the lot
+        just finished is kept, under `name` (else the job's lot number, else Lot 1, 2...), for SPC across lots."""
         data = self._insp()
         if not data["results"] and not (parts and data["samples"]):
             return self._answer([], result=self._balloon_out(data))
         self._snapshot()
+        if keep and data["results"]:
+            lots = data.setdefault("lots", [])
+            data.setdefault("lnext", max([int(x["id"]) for x in lots], default=0) + 1)
+            name = str(name or "").strip()[:60] or str((data.get("info") or {}).get("lot") or "").strip()[:60] or f"Lot {len(lots) + 1}"
+            lots.append({"id": data["lnext"], "name": name, "at": _stamp(), "by": who(),
+                         "samples": [dict(s) for s in data["samples"]], "results": {k: dict(r) for k, r in data["results"].items()}})
+            data["lnext"] += 1
         data["results"] = {}
         if parts:
             data["samples"], data["snext"] = [], 1
         return self._balloon_done(data, [])
+
+    def _lot(self, data, id):
+        for x in data.get("lots") or []:
+            if int(x["id"]) == int(id):
+                return x
+        raise ValueError("That lot isn't there any more.")
+
+    def op_balloon_lot_edit(self, id, name):
+        data = self._insp()
+        x = self._lot(data, id)
+        name = str(name or "").strip()[:60]
+        if not name:
+            raise ValueError("A lot needs a name.")
+        self._snapshot()
+        x["name"] = name
+        return self._balloon_done(data, [])
+
+    def op_balloon_lot_delete(self, id):
+        """A kept lot out of the history for good (its results go with it)."""
+        data = self._insp()
+        x = self._lot(data, id)
+        self._snapshot()
+        data["lots"].remove(x)
+        return self._balloon_done(data, [])
+
+    def _spc_groups(self, data, key):
+        """A row's results lot by lot, oldest first, this lot last (when it has any)."""
+        out = []
+        for x in data.get("lots") or []:
+            r = (x.get("results") or {}).get(key) or {}
+            out.append({"id": x["id"], "name": x["name"], "at": x.get("at"), "values": [r[str(s["id"])] for s in x.get("samples") or [] if str(s["id"]) in r]})
+        r = (data.get("results") or {}).get(key) or {}
+        now = [r[str(s["id"])] for s in data.get("samples") or [] if str(s["id"]) in r]
+        if now:
+            out.append({"id": None, "name": str((data.get("info") or {}).get("lot") or "").strip() or "This lot", "values": now})
+        return out
+
+    def _spc_rows(self, data):
+        """Every row of the list with what it is: [(key, label, characteristic)], a multiplied one a row a place."""
+        from . import report
+        return [(c.get("key") or str(c["id"]), str(report._n(c)), c) for c in report.expanded([{**c, "label": balloons.label(c)} for c in data["chars"]])]
+
+    def op_balloon_spc(self, key=None):
+        """How a row ran over the kept lots and this one (kernel/spc.py): {"key", "label", "text", "chart", "rows"}.
+        rows: every row that has numbers in two or more lots, to choose from; key None: the first of them."""
+        from . import spc
+        data = self._insp()
+        rows = []
+        for k, label, c in self._spc_rows(data):
+            g = self._spc_groups(data, k)
+            if sum(1 for x in g if spc.numbers(x["values"])) >= 2:
+                rows.append({"key": k, "label": label, "text": c.get("text") or ""})
+        if key is None and rows:
+            key = rows[0]["key"]
+        found = next(((k, label, c) for k, label, c in self._spc_rows(data) if k == str(key)), None)
+        chart = spc.chart(found[2], self._spc_groups(data, found[0])) if found else None
+        return {"key": key, "label": found[1] if found else None, "text": (found[2].get("text") or "") if found else "",
+                "places": (found[2].get("places") or 0) if found else 0, "chart": chart, "rows": rows,
+                "lots": len(data.get("lots") or []) + (1 if data.get("results") else 0)}
 
     # ================================================================== a new revision of the print
     def _other_list(self, path):
@@ -1247,6 +1349,13 @@ class BalloonOps:
         self._snapshot()
         data["chars"] = []
         return self._balloon_done(data, pages)
+
+    def op_balloon_leaders(self, on=True):
+        """Leader lines from the balloons to their callouts, on the print and in the saved PDF (on unless turned off)."""
+        data = self._insp()
+        self._snapshot()
+        data["leaders"] = bool(on)
+        return self._balloon_done(data, sorted({c["page"] for c in data["chars"]}))
 
     def op_balloon_tols(self, tols):
         """The title block's tolerances by decimals ({"1": .03, "2": .01, "3": .005, "4": .0005, "angle": .5}), applied
