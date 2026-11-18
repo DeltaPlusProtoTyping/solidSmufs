@@ -133,6 +133,17 @@ class OnTheModel(unittest.TestCase):
     def test_no_length_smaller_than_its_tolerance(self):  # ".005" with the title block's ±.005: a flatness, not a length
         self.assertEqual(self.run_on([size(".005", 0.005, 0.0, 0.010)])["results"][0]["status"], "none")
 
+    def test_plain_length_across_a_hole(self):  # a diameter dimensioned in a side view, or its Ø not read
+        r = self.run_on([size(".250", 0.25, 0.248, 0.252)])["results"][0]
+        self.assertEqual(r["status"], "one")
+        self.assertEqual(r["choices"][0]["faces"], self.faces_of("cylinder", 0.125 * IN))
+        self.assertIn("across", r["choices"][0]["what"])
+
+    def test_min_length(self):  # at least 3.900: the block's 4.000, not the holes 3.000 apart
+        r = self.run_on([size("3.900 MIN", 3.9, 3.9, None)])["results"][0]
+        self.assertEqual(r["status"], "one")
+        self.assertAlmostEqual(r["choices"][0]["size"], 4 * IN, places=3)
+
     def test_nothing_that_size(self):
         r = self.run_on([size("Ø.500", 0.5, 0.499, 0.501, typ="Diameter")])
         self.assertEqual(r["results"][0]["status"], "none")
@@ -171,6 +182,20 @@ class Bands(unittest.TestCase):
         self.assertAlmostEqual(callouts.band_in({"kind": "dim", "lo": 0.248, "hi": 0.252}, "in"), 0.004)
         self.assertAlmostEqual(callouts.band_in({"kind": "dim", "lo": 9.9, "hi": 10.1}, "mm"), 0.2 / IN)
         self.assertIsNone(callouts.band_in({"kind": "dim", "lo": 1, "hi": 1, "tol": "basic"}, "in"))
+
+    def test_min_and_max_windows(self):
+        lo, hi = callouts.window({"nominal": 3.0, "lo": 3.0, "hi": None}, "mm")
+        self.assertTrue(lo < 3.0 < 3.7 < hi < 3.8)
+        lo, hi = callouts.window({"nominal": 4.0, "lo": None, "hi": 4.0}, "mm")
+        self.assertTrue(2.9 < lo < 3.1 and 3.99 < hi < 4.01)
+
+
+class Angles(unittest.TestCase):
+    def test_chamfer_angle_from_the_face(self):  # a 22.5° chamfer on a head is a cone 67.5° off its axis
+        from types import SimpleNamespace
+        S = SimpleNamespace(cones=[{"face": 3, "half_angle": 67.5}, {"face": 5, "half_angle": 59.0}], planes=[], near={})
+        found = callouts._angle(S, {"nominal": 22.5}, "mm")
+        self.assertEqual(found[0]["faces"], [3])
 
 
 if __name__ == "__main__":

@@ -121,7 +121,8 @@ class Shapes:
 # ---------------------------------------------------------------------------------------------- sizes
 def window(c, unit):
     """(lo, hi) in mm the model's size may be to be this callout's, or None. Modelled at nominal or anywhere within
-    the limits; a size with none is good to half its last decimal place."""
+    the limits; a size with none is good to half its last decimal place. A MIN size is good up to a quarter over, a MAX
+    one down to a quarter under (any size past it would match every bigger or smaller pair of faces)."""
     nom = c.get("nominal")
     if nom is None:
         return None
@@ -129,6 +130,10 @@ def window(c, unit):
     lo, hi = c.get("lo"), c.get("hi")
     if lo is not None and hi is not None and hi >= lo:
         a, b = min(lo, nom), max(hi, nom)
+    elif lo is not None and hi is None:  # MIN
+        a, b = lo, lo * 1.25
+    elif hi is not None and lo is None:  # MAX
+        a, b = hi * 0.75, hi
     else:
         places = c.get("places") or 0
         half = min(0.5 * 10 ** -places, 0.005 * abs(nom) + (0.0005 if unit == "in" else 0.01))
@@ -172,6 +177,18 @@ def _diameter(S, c, unit):
             return [{"faces": sorted(f for g in found for f in g["faces"]), "count": len(found),
                      "what": f"{len(found)} {kind}{'s' if len(found) > 1 else ''} Ø{_show(2 * found[0]['r'], unit)}", "size": 2 * found[0]["r"]}]
     return []
+
+
+def _across(S, c, unit):
+    """A plain length that's the diameter of a whole round feature."""
+    w = window(c, unit)
+    found = [g for g in S.cyl if g["full"] and _in(2 * g["r"], w)]
+    if not found:
+        return []
+    holes = sum(g["hole"] for g in found)
+    kind = "hole" if holes == len(found) else "boss" if not holes else "round feature"
+    return [{"faces": sorted(f for g in found for f in g["faces"]), "count": len(found),
+             "what": f"across {len(found)} {kind}{'s' if len(found) > 1 else ''} Ø{_show(2 * found[0]['r'], unit)}", "size": 2 * found[0]["r"]}]
 
 
 def _radius(S, c, unit):
@@ -267,7 +284,8 @@ def _angle(S, c, unit):
     lo, hi = c.get("lo"), c.get("hi")
     tol = max(0.5, (hi - lo) / 2 if lo is not None and hi is not None else 0.5)
     ok = lambda a: abs(a - nom) <= tol + 1e-6  # noqa: E731
-    cones = [k for k in S.cones if ok(2 * k["half_angle"]) or ok(k["half_angle"])]
+    # a cone's angle across (countersinks, points), from its axis, or from the face it's cut into (chamfers)
+    cones = [k for k in S.cones if ok(2 * k["half_angle"]) or ok(k["half_angle"]) or ok(90 - k["half_angle"])]
     out = []
     if cones:
         out.append({"faces": sorted(k["face"] for k in cones), "count": len(cones),
@@ -328,7 +346,8 @@ def _one(S, c, unit):
             return _diameter(S, c, unit)
         if typ == "Radius":
             return _radius(S, c, unit)
-        return _linear(S, c, unit)
+        # no two faces that far apart: a diameter dimensioned across a side view (or its Ø not read)
+        return _linear(S, c, unit) or _across(S, c, unit)
     if kind == "angle":
         return _angle(S, c, unit)
     if kind == "chamfer":
