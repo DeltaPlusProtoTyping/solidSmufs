@@ -534,6 +534,59 @@ class BalloonOps:
         "info": what the report says about the job, "fields": [[key, label]] it can say}."""
         return self._balloon_out(self._insp())
 
+    def op_callouts(self, extra=None):
+        """What the print calls out, for finding it on the 3D model (kernel/callouts.py), changing nothing: its
+        balloons when it has them, else what ballooning would read. {"unit", "ballooned", "callouts": [{"key", "label",
+        "type", "kind", "text", "count", "nominal", "lo", "hi", "places", "tol", "page", "box", "with": the index of the
+        size a feature control frame hangs under, or None}]}."""
+        data = self._insp()
+        if data["chars"]:
+            out = self._balloon_out(data)
+            items = [{"key": f"b{c['id']}", "label": c["label"], **{k: c.get(k) for k in ("type", "kind", "text", "count", "nominal", "lo", "hi",
+                                                                                           "places", "tol", "page", "box")}}
+                     for c in out["chars"]]
+            unit, ballooned = data.get("unit") or (extra or {}).get("unit"), True
+        else:
+            unit, ballooned = (extra or {}).get("unit"), False
+            texts, pages = [], []
+            for i, pg in enumerate(self.fz):
+                lines = self._balloon_lines(pg, self._extra_page(extra, i))
+                texts += [ln["text"] for ln in lines]
+                pages.append((i, pg, lines))
+            tols, items = balloons.defaults(texts), []
+            for i, pg, lines in pages:
+                frames = self._extra_page(extra, i).get("frames") or []
+                segs, _ = self._balloon_marks(pg)
+                for it in balloons.read(lines, frames, unit, tols, (pg.rect.width, pg.rect.height), notes=False, segs=segs,
+                                        shapes=self._balloon_shapes(pg)):
+                    n = len(items) + 1
+                    items.append({"key": f"r{i}:{round(it['box'][0])}:{round(it['box'][1])}:{it.get('text')}", "label": str(n),
+                                  "type": balloons.type_of(it), "page": i, "group": it.get("group"),
+                                  **{k: it.get(k) for k in ("kind", "text", "count", "nominal", "lo", "hi", "places", "tol", "box")}})
+        for c in items:  # a frame belongs to the size it sits under (or beside)
+            c["with"] = None
+            if c["kind"] != "gdt":
+                continue
+            x, y, w, h = c["box"]
+            best = None
+            for j, o in enumerate(items):
+                if o["kind"] not in ("dim", "thread") or o["page"] != c["page"]:
+                    continue
+                if c.get("group") is not None and o.get("group") == c["group"]:
+                    best = (-1, j)
+                    break
+                ox, oy, ow, oh = o["box"]
+                across = min(x + w, ox + ow) - max(x, ox)
+                gap_y = max(y - (oy + oh), oy - (y + h), 0)
+                gap_x = max(x - (ox + ow), ox - (x + w), 0)
+                d = gap_y if across > 0 else gap_x if min(y + h, oy + oh) - max(y, oy) > 0 else None
+                if d is not None and d <= 1.5 * h and (best is None or d < best[0]):
+                    best = (d, j)
+            c["with"] = best and best[1]
+        for c in items:
+            c.pop("group", None)
+        return {"unit": unit, "ballooned": ballooned, "callouts": items}
+
     def op_balloon_auto(self, extra=None, notes=True, pages=None, want=None, split=False):
         """Read the print and balloon what's found, in place of the balloons on the pages read.
         pages: the pages to read, counted from 0 (None: every one); the balloons on the others stay, and the numbers

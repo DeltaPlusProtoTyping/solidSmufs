@@ -131,6 +131,18 @@ open, a right-clicked part shows in under half a second (a spare geometry proces
 the page's scripts and shaders are cached in `%LOCALAPPDATA%\SolidSmufs\web`). Each launch writes
 `[timing]` lines to `%APPDATA%\SolidSmufs\log.txt`.
 
+**Autosave:** edits to a PDF (markups, balloons, inspection results) are kept as a recovery copy
+about 15 seconds after each change, in `%LOCALAPPDATA%\SolidSmufs\recovery`; the print itself changes
+only when you save. Saving, closing with Don't Save, or undoing back to what was saved lets the copy go.
+If SolidSmurfs or the computer stops first, opening the PDF again offers the changes back (Restore, or
+Discard them), and says if the PDF itself has changed since. Copies older than 30 days are deleted.
+
+**Big SolidWorks parts, the first time:** the part is translated from the Parasolid model inside the file,
+and for a big part (250 faces or more) the slow parts of that (fillets, and edges where curved faces meet)
+are shared out to helper processes, one per CPU core, first. The result is the same, byte for byte. While
+it opens, the loading card shows the picture SolidWorks saved with the file. Set `SOLIDSMUFS_HELPERS=1`
+to translate on one core.
+
 **Save As STEP** (File menu): saves the open part or assembly as a STEP file for anyone without
 SolidWorks, with its colors and part names. An assembly is saved as one STEP assembly of its placed
 parts. Meshes can't be saved as STEP.
@@ -247,6 +259,37 @@ The weight uses `--density` (g/cm³), else `--material` (a name from the materia
 material the file names; with none, `weight` is null and the rest is still there. The exit code is 0, or 2 with
 `{"error": "..."}`. From Python: `solidsmufs.partinfo.read("part.step", material="304 Stainless")`. The fields are
 listed at the top of `solidsmufs/partinfo.py`.
+
+## The print's callouts on the part
+
+With a part open, the **Print Callouts** tab of the left panel (the fourth one) reads the part's print and finds each
+callout on the model. The print is any open PDF. The tab picks one named like the part, and offers PDFs in the
+part's folder that share its part number ("2402232 REV XA.pdf" beside "2402232-1_REV_XA_CAD.stp"). If the print has
+balloons, the list uses their numbers. Otherwise it reads the print the way ballooning does, without changing it.
+
+Callouts are matched by size alone:
+
+- **Diameters:** every hole or boss of that size.
+- **Radii:** the fillets and arcs.
+- **Threads:** holes drilled for the thread (tap drill, minor or major diameter) or a shaft at its major diameter.
+- **Lengths:** two parallel faces, a face and a hole's axis, or two axes that far apart.
+- **Angles:** cones and faces meeting at that angle.
+- **Chamfers:** faces of that size and angle.
+- **Feature control frames:** they follow the size they hang under.
+
+A size counts as matching anywhere within its limits. When a print's notes say inches but the sizes fit the part
+in mm, mm is used.
+
+Clicking a callout selects its faces. Most lengths fit several places: step through them with ‹ › and press
+**Use this**, or select faces and use those. **Leave out** drops a callout. What you choose is remembered for that
+part and print.
+
+- **Heat map** colors each face by the tightest tolerance on it: red ≤ .0005", orange ≤ .001, amber ≤ .002,
+  green ≤ .005, blue looser, and grey for faces with no tolerance called out.
+- **Labels** put each placed callout on the model. Clicking a label opens it in the list.
+
+It's a first pass to check, like ballooning. A STEP saved as AP242 can carry its own tolerances (PMI), but they
+aren't read, since most parts are dimensioned on the print only.
 
 ## Ballooning a print and its inspection report
 
@@ -478,6 +521,16 @@ readers show it, and comments stay comments they can change.
   Acrobat included.
 - **Edit:** click a line of the page's own text to change it (the old words are taken out of the file and the new ones
   set in the nearest standard font), add new words, and select a picture to move, size or delete it, or add one.
+- **Deleting what's selected:** with **Select**, drag across the page's own words and press **Delete** (or right-click
+  → **Delete from the page**): they're taken out of the file, and only they: not the lines or pictures under them,
+  nor the rest of the line. A selected comment, picture, form field or picked pages go with Delete as well. Ctrl+Z puts
+  any of it back. (Neither this nor Edit text applies redaction marks waiting for Apply on the same page.)
+- **Remove watermark…** (Edit): finds the watermarks and shows the first page with one before and after, then takes the
+  ticked ones out of every page: what's marked as a watermark in the page (Acrobat's Add Watermark, Word's), whatever
+  it draws (words, outlines, pictures); a watermark layer; watermark comments; and large or tilted words repeated on
+  the pages (DRAFT, COPY). Where repeated words run through other words, they're left on that page, and said, since
+  taking them out would take those words too. Nothing else changes, and Undo puts it back. One drawn as plain outlines
+  with nothing marking it isn't found.
 - **Pages:** in the side bar, Ctrl+click or Shift+click to pick pages and drag them to reorder; right-click or use the
   toolbar to turn, delete, duplicate, insert blank pages, insert other PDFs or pictures (combining files), replace,
   extract to a new PDF, split into several PDFs, and crop (drag the part to keep) or uncrop.
@@ -496,7 +549,9 @@ readers show it, and comments stay comments they can change.
   note, an old revision): drag across any words, or click a line of text or a drawn symbol (one of two stacked
   limits, a tolerance, a datum, a GD&T symbol or a Ø drawn as lines). Shift+click strikes the whole dimension (a size
   with its tolerance, stacked or not, and vertical ones along their length). The line runs through the middle of
-  the figures, in black or the color picked beside the tool. A strike-through is a mark of its own, not part of the
+  the figures, in black or the color picked beside the tool. Started off the words, a drag strikes anything: the
+  line goes where it's dragged (across lines, pictures or a scan), kept straight when nearly level or upright.
+  Clicking a strike-through with the tool takes it: drag it somewhere else, or press Delete. A strike-through is a mark of its own, not part of the
   drawing: it needs no Apply, and after saving and opening the file again it can still be selected, recolored or
   deleted (here or in any PDF reader). Flatten (Fill & Sign) makes it part of the page. **Remove hidden info** takes out the
   document's details, attachments, scripts and hidden text.

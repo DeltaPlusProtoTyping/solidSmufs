@@ -9,6 +9,7 @@ const TABS = [
   { id: 'tree', icon: 'featureMgr', title: 'FeatureManager Design Tree' },
   { id: 'pm', icon: 'propertyMgr', title: 'PropertyManager' },
   { id: 'display', icon: 'displayMgr', title: 'DisplayManager' },
+  { id: 'callouts', icon: 'annotations', title: 'Print Callouts: the sizes and tolerances on the print, found on the part' },
 ];
 
 export class Manager {
@@ -43,6 +44,7 @@ export class Manager {
   refresh() {
     if (this.tab === 'pm') this._renderPM();
     else if (this.tab === 'display') this._renderDisplay();
+    else if (this.tab === 'callouts') this.app.callouts.render(this.body);
     else this._renderTree();
     try { this.app.status?.(); } catch { /* still starting up */ } // hiding or showing bodies changes the size in the status bar
   }
@@ -50,6 +52,7 @@ export class Manager {
   selectionChanged() {
     if (this.tab === 'tree') this._markSelection();
     else if (this.tab === 'display') this._renderDisplay();
+    else if (this.tab === 'callouts') this.app.callouts.selectionChanged();
   }
 
   // ================================================================== PropertyManager

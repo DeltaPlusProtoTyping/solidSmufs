@@ -104,6 +104,8 @@ class PdfEditor(BalloonOps):
         self.undo, self.redo = [], []  # [(snapshot bytes, its generation)]
         self.gen = self.saved_gen = 0
         self.next_gen = 1
+        from .. import recovery
+        self.original = recovery.stamp(self.path)  # the file as it was when the edits began (autosave tells if it changed)
 
     @property
     def fz(self):
@@ -139,6 +141,32 @@ class PdfEditor(BalloonOps):
             self.pdf.fz.authenticate(self.pdf.password or "")
         old.close()
         self.pdf.changed()
+
+    # ================================================================== autosave (recovery.py)
+    def op_recover_write(self):
+        """The edits not saved, kept as the recovery copy; none kept when everything is saved."""
+        from .. import recovery
+        if self.gen == self.saved_gen:
+            recovery.clear(self.path)
+            return {"kept": False}
+        recovery.write(self.path, self._bytes(), self.original)
+        return {"kept": True}
+
+    def op_recover_load(self):
+        """The edits from the recovery copy put back, not saved (Undo takes them out again)."""
+        from .. import recovery
+        try:
+            data = recovery.read(self.path)
+        except OSError:
+            raise ValueError("The autosaved changes aren't there any more.") from None
+        self._snapshot()
+        self._restore(data)
+        return self._answer(None, structure=True)
+
+    def op_recover_clear(self):
+        from .. import recovery
+        recovery.clear(self.path)
+        return {"cleared": True}
 
     def op_undo(self):
         if not self.undo:
@@ -227,6 +255,11 @@ class PdfEditor(BalloonOps):
             out["points"] = [[self._pt_out(pg, p) for p in stroke] for stroke in (a.vertices or [])]
         elif kind in ("polygon", "polyline"):
             out["points"] = [self._pt_out(pg, p) for p in (a.vertices or [])]
+        elif kind == "strikeout":  # the line through each quad: where a click takes it
+            import pymupdf
+            v = a.vertices or []
+            out["segs"] = [[self._pt_out(pg, (pymupdf.Point(v[k]) + v[k + 2]) / 2), self._pt_out(pg, (pymupdf.Point(v[k + 1]) + v[k + 3]) / 2),
+                            round(abs(pymupdf.Point(v[k + 2]) - v[k]) / 2, 2)] for k in range(0, len(v) - 3, 4)]
         if kind == "text":
             out["fontsize"] = self._freetext_size(a)
             out["textColor"] = self._freetext_color(a)
@@ -322,7 +355,7 @@ class PdfEditor(BalloonOps):
                 quads.append(pymupdf.Quad(*[self._pt(pg, v) for v in q]))
             if not quads:
                 raise ValueError("Select some text to mark first.")
-            if o.get("subject") == STRIKE:
+            if o.get("subject") == STRIKE and not o.get("free"):  # (free: a line dragged across anything, as drawn)
                 quads = _through_middle(pg, quads)
             add = {"highlight": pg.add_highlight_annot, "underline": pg.add_underline_annot,
                    "strikeout": pg.add_strikeout_annot, "squiggly": pg.add_squiggly_annot}[kind]
@@ -1022,10 +1055,10 @@ class PdfEditor(BalloonOps):
             else:
                 sym = self._symbol_at(pg, x, y)
                 if sym is None:
-                    raise ValueError("Click on a dimension, tolerance, note or symbol to strike it through.")
+                    raise ValueError("Click on a dimension, tolerance, note or symbol to strike it through, or drag across anything to put a line through it.")
                 pieces, text = [{"box": sym}], "Symbol"
         if not pieces:
-            raise ValueError("Click on a dimension, tolerance, note or symbol to strike it through.")
+            raise ValueError("Click on a dimension, tolerance, note or symbol to strike it through, or drag across anything to put a line through it.")
         quads = []
         for ln in pieces:
             x0, y0, x1, y1 = ln["box"]
@@ -1124,11 +1157,55 @@ class PdfEditor(BalloonOps):
         else:
             inner.x0 += r.width * 0.25
             inner.x1 -= r.width * 0.25
-        pg.add_redact_annot(inner)
-        pg.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
-                            text=pymupdf.PDF_REDACT_TEXT_REMOVE)
+        pg = self._take_text(pg, [inner])
         if str(text).strip():
             self._write_text(pg, origin, text, o, angle)
+        return self._answer([int(page)], text=True)
+
+    def _take_text(self, pg, boxes):
+        """The page's own words in these boxes (page points) taken out for good, as a redaction does, and nothing else:
+        not the lines or pictures under them, and not the redaction marks waiting for Apply (MuPDF applies every one on
+        the page at once, so they're hidden from it meanwhile). Returns the page, drawn again."""
+        import pymupdf
+        doc, n = pg.parent, pg.number
+        waiting = [a.xref for a in pg.annots(types=[pymupdf.PDF_ANNOT_REDACT])]
+        for x in waiting:
+            doc.xref_set_key(x, "Subtype", "/Square")
+        try:
+            pg = doc[n]
+            for b in boxes:
+                pg.add_redact_annot(pymupdf.Rect(b), fill=False)
+            pg.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
+                                text=pymupdf.PDF_REDACT_TEXT_REMOVE)
+        finally:
+            for x in waiting:
+                doc.xref_set_key(x, "Subtype", "/Redact")
+        return doc[n]
+
+    def op_text_delete(self, page, rects):
+        """Selected words taken out of the page itself (Select, then Delete): each rect [x, y, w, h] as shown, a line
+        of the selection. Only the words go, a box a little inside each line's so the lines above and below stay."""
+        import pymupdf
+        pg = self._page(page)
+        boxes = []
+        for rect in rects or []:
+            r = self._in(pg, rect)
+            r.normalize()
+            line = self._lines_in(pg, r)
+            dirv = line["dir"] if line else ((1, 0) if r.width >= r.height else (0, 1))
+            inner = pymupdf.Rect(r)
+            if abs(dirv[0]) >= abs(dirv[1]):
+                inner.y0, inner.y1 = r.y0 + r.height * 0.25, r.y1 - r.height * 0.25
+                inner.x0, inner.x1 = r.x0 + 0.3, r.x1 - 0.3
+            else:
+                inner.x0, inner.x1 = r.x0 + r.width * 0.25, r.x1 - r.width * 0.25
+                inner.y0, inner.y1 = r.y0 + 0.3, r.y1 - 0.3
+            if not inner.is_empty:
+                boxes.append(inner)
+        if not boxes:
+            raise ValueError("Select some of the page's words first (drag across them with Select).")
+        self._snapshot()
+        self._take_text(pg, boxes)
         return self._answer([int(page)], text=True)
 
     def _lines_in(self, pg, r):
@@ -1271,6 +1348,77 @@ class PdfEditor(BalloonOps):
         url = lambda a: "data:image/png;base64," + base64.b64encode(enhance.png(self._shown(a, rot))).decode()  # noqa: E731
         return {"scan": True, "angle": angle, "before": url(g), "after": url(out)}
 
+    # ------------------------------------------------------------------ watermarks (kernel/watermark.py)
+    def _unmark(self, doc, kinds, keys=None):
+        """Takes the watermarks out of every page of `doc`: the tagged ones and watermark comments first, then the
+        repeated words found once those are gone (keys: which of them; all by default). {"tagged", "annot", "text":
+        pages with each; "kept": pages where repeated words were left, overlapping other words; "words": what was found}."""
+        from . import watermark
+        out = {"annot": [], "tagged": [], "text": [], "kept": [], "words": {}}
+        for i in range(doc.page_count):
+            if "annot" in kinds and watermark.annots(doc, i, True):
+                out["annot"].append(i)
+            if "tagged" in kinds and watermark.tagged(doc, i, True):
+                out["tagged"].append(i)
+        if "text" in kinds:
+            words = watermark.words(doc)
+            if keys is not None:
+                words = {k: v for k, v in words.items() if k in set(keys)}
+            out["words"] = words
+            for i in range(doc.page_count):
+                boxes, kept = watermark.word_boxes(doc[i], set(words))
+                if boxes:
+                    self._take_text(doc[i], boxes)
+                    out["text"].append(i)
+                if kept:
+                    out["kept"].append(i)
+        return out
+
+    def op_watermark_find(self, width=640):
+        """What Remove watermark would take out (worked out on a copy), and the first page with one before and after:
+        {"items": [{"kind", "label", "pages"}], "kept", "page", "before", "after"}."""
+        import base64
+        import pymupdf
+        doc = self.fz
+        tmp = pymupdf.open("pdf", doc.tobytes(garbage=0))
+        try:
+            found = self._unmark(tmp, {"tagged", "annot", "text"})
+            items = []
+            if found["tagged"]:
+                items.append({"kind": "tagged", "label": "Marked as a watermark in the page (as Acrobat and Word add them)", "pages": found["tagged"]})
+            if found["annot"]:
+                items.append({"kind": "annot", "label": "Watermark comments", "pages": found["annot"]})
+            for k, w in found["words"].items():
+                items.append({"kind": "text", "key": k, "pages": w["pages"],
+                              "label": f"“{w['text'][:40]}”: {'tilted' if w['tilted'] else 'large'} words repeated on the pages"})
+            out = {"items": items, "kept": found["kept"], "page": None}
+            firsts = [it["pages"][0] for it in items if it["pages"]]
+            if firsts:
+                i = min(firsts)
+                k = width / max(doc[i].rect.width, 1)
+                png = lambda page: "data:image/png;base64," + base64.b64encode(page.get_pixmap(matrix=pymupdf.Matrix(k, k), alpha=False).tobytes("png")).decode()  # noqa: E731
+                out.update(page=i, before=png(doc[i]), after=png(tmp[i]))
+            return out
+        finally:
+            tmp.close()
+
+    def op_watermark_remove(self, kinds=None, keys=None):
+        """Take the watermarks out of every page: kinds, some of "tagged", "annot", "text" (all by default); keys, which
+        repeated words (all found by default). {"pages", "kept"}."""
+        import pymupdf
+        kinds = set(kinds or ("tagged", "annot", "text"))
+        probe = pymupdf.open("pdf", self.fz.tobytes(garbage=0))  # (first on a copy: nothing to undo when there's none)
+        try:
+            found = self._unmark(probe, kinds, keys)
+        finally:
+            probe.close()
+        if not (found["tagged"] or found["annot"] or found["text"]):
+            raise ValueError("No watermark found to take out." + (" The repeated words overlap other words on every page: select them and press Delete instead." if found["kept"] else ""))
+        self._snapshot()
+        done = self._unmark(self.fz, kinds, keys)
+        pages = sorted(set(done["tagged"]) | set(done["annot"]) | set(done["text"]))
+        return self._answer(pages, text=True, result={"pages": len(pages), "kept": done["kept"]})
+
     def op_enhance(self, pages=None, specks=1, straighten=True, text=True):
         """Clean up scanned pages (kernel/enhance.py): each scanned page's picture swapped for its cleaned copy, black
         on white, straightened; and, with `text` (Windows only), what Windows OCR reads on it laid under it as hidden
@@ -1364,10 +1512,14 @@ class PdfEditor(BalloonOps):
 
     def op_save(self, path=None):
         """Save the edits: to the file it came from, or (Save As) to `path`, which it then is."""
+        from .. import recovery
         target = Path(path or self.path)
         self._save_doc(self.fz, target)
+        recovery.clear(self.path)  # (saved: nothing to recover, here or, after Save As, at the old name)
         self.path = str(target)
         self.saved_gen = self.gen
+        recovery.clear(self.path)
+        self.original = recovery.stamp(self.path)
         data = self._insp()
         if data["chars"] or data.get("issues"):  # (searched across jobs: kernel/inspindex.py)
             from . import inspindex

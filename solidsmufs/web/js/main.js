@@ -9,6 +9,7 @@ import { h, toast, closeMenus, modal } from './ui.js';
 import { Viewer } from './viewer.js';
 import { Shell } from './shell.js';
 import { Manager } from './manager.js';
+import { Callouts } from './callouts.js';
 import { Pages } from './pages.js';
 import { Tools } from './tools.js';
 import { TaskPane } from './taskpane.js';
@@ -40,6 +41,7 @@ class App {
     this.commands = this._commands();
     this.shell = new Shell(this);
     this.manager = new Manager(this);
+    this.callouts = new Callouts(this); // the print's callouts on the part (a tab of the left panel)
     this.pages = new Pages(this);
     this.tools = new Tools(this);
     this.taskpane = new TaskPane(this);
@@ -207,6 +209,10 @@ class App {
         ? Promise.all([api.meta(doc.id), api.mesh(doc.id)]) : null;
       Object.assign(doc, { name: st.name || doc.name, path: st.path || doc.path, state: st.state, stage: st.stage, fraction: st.fraction,
         error: st.error, elapsed: st.elapsed, exact: st.exact });
+      if (st.preview && doc.preview === undefined && st.state === 'loading') { // the picture saved with the file, while it opens
+        doc.preview = null;
+        api.preview(doc.id).then((r) => { doc.preview = r.image; if (this.active === doc) this.renderLoading(); }).catch(() => {});
+      }
       if (this.active === doc) this.renderLoading();
       this.shell.renderDocTabs();
       if (fetching) {
@@ -227,6 +233,7 @@ class App {
             toast(`${doc.name}: ${meta.notices.join(' ')}`, 'warn', 9000);
           }
           if (meta.pdf?.dwgSetup && !doc.offered) { doc.offered = true; this.offerDwgSetup(doc); }
+          if (st.recovery && !doc.recoveryAsked) { doc.recoveryAsked = true; this.offerRecovery(doc, st.recovery); }
         } catch (e) {
           doc.state = 'error';
           doc.error = e.message;
@@ -294,6 +301,7 @@ class App {
     const hasModel = doc.meta.bodies.length > 0;
     if (hasModel) this.viewer.setModel(doc.meta, doc.blob);
     else this.viewer.clear();
+    if (hasModel) this.callouts.apply(); // its heat map and labels, when they're on
     if (doc.meta.pdf) {
       doc.pdfMode ||= hasModel ? 'model' : 'pages'; // a 3D PDF opens on its model, one click from its pages
       this.pdf.open(doc);
@@ -333,6 +341,40 @@ class App {
     this.pdf.setMode(mode);
     this.refreshAll();
     requestAnimationFrame(() => this.viewer.requestRender());
+  }
+
+  // autosave (recovery.py): edits to this PDF that weren't saved, kept from last time; put back, or let go
+  async offerRecovery(doc, r) {
+    for (let i = 0; i < 100 && this.pdf.editor.doc !== doc; i++) { // (once its pages are up and editable)
+      if (!this.docs.includes(doc)) return;
+      await new Promise((res) => setTimeout(res, 100));
+    }
+    if (this.pdf.editor.doc !== doc) return;
+    const answer = await new Promise((res) => {
+      let done = false;
+      const pick = (a) => { done = true; d.close(); res(a); };
+      const d = modal('Restore unsaved changes', h('div', { class: 'pe-confirm' },
+        h('p', { text: `SolidSmurfs closed before your changes to ${r.name} were saved. They were autosaved at ${r.saved}.` }),
+        r.changed ? h('p', { class: 'pe-enh-note', text: 'The PDF itself has changed since then. Restoring brings back the PDF as it was then, with your changes; saving it would replace the newer one.' }) : null,
+        h('p', { class: 'pe-enh-note', text: 'Restored changes aren’t saved until you save; Undo takes them out again.' }),
+        h('div', { class: 'pe-pop-foot' },
+          h('button', { class: 'btn', text: 'Discard them', onclick: () => pick('discard') }),
+          h('button', { class: 'btn primary', text: 'Restore', onclick: () => pick('restore') }))), { width: 460 });
+      const was = d.onClose;
+      d.onClose = () => { was?.(); if (!done) res('later'); };
+    });
+    if (answer === 'later') { // (closed without an answer: kept, and asked again when it's opened next)
+      toast(`The autosaved changes to ${r.name} are kept: open it again to restore them. Until then, new edits to it aren't autosaved.`, 'warn', 9000);
+      return;
+    }
+    if (answer === 'discard') {
+      if (await this.pdf.editor._confirm('Discard the autosaved changes', `Throw away the changes to ${r.name} that were autosaved at ${r.saved}? They can't be brought back.`, 'Discard')) {
+        await this.pdf.editor.run('recover_clear');
+      } else this.offerRecovery(doc, r);
+      return;
+    }
+    const res = await this.pdf.editor.run('recover_load', {}, 'Restoring your changes…');
+    if (res) toast(`Your changes to ${r.name} are back. They aren't saved yet.`, 'ok', 6000);
   }
 
   // a PDF with edits not saved: Save, Don't Save, or Cancel (false: keep it open)
@@ -869,8 +911,10 @@ class App {
     el.hidden = false;
     const err = d.state === 'error';
     const pct = Math.round((d.fraction || 0) * 100);
-    el.replaceChildren(h('div', { class: `load-card${err ? ' error' : ''}` },
+    const pic = !err && d.preview;
+    el.replaceChildren(h('div', { class: `load-card${err ? ' error' : ''}${pic ? ' with-pic' : ''}` },
       h('div', { class: 'lc-head' }, h('img', { src: 'img/icon.svg', alt: '' }), h('span', { text: err ? 'Could not open the file' : 'Opening' })),
+      pic ? h('div', { class: 'lc-pic' }, h('img', { src: d.preview, alt: `${d.name}, as saved` })) : null,
       h('div', { class: 'lc-body' },
         h('div', { class: 'lc-name', text: d.name }),
         h('div', { class: 'lc-stage', text: err ? (d.error || 'Could not open this file.') : `${d.stage || 'Working'}…` }),

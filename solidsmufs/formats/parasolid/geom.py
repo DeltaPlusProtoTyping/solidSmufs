@@ -833,6 +833,7 @@ class Factory:
     def __init__(self, model):
         self.m = model
         self._c, self._s = {}, {}
+        self.memo, self.fresh = {}, {}  # blend spines worked out (BodyWriter's, which shares them)
 
     def nurbs_curve(self, idx):
         n = self.m[idx]

@@ -286,6 +286,11 @@ export class Shell {
       t.addEventListener('auxclick', (e) => { if (e.button === 1) app.closeDoc(d); });
       return t;
     }));
+    el.querySelector('.doc-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); // (when they still don't all fit)
+    if (!el.dataset.wheel) { // the wheel scrolls them sideways
+      el.dataset.wheel = '1';
+      el.addEventListener('wheel', (e) => { if (el.scrollWidth > el.clientWidth) { el.scrollLeft += e.deltaY || e.deltaX; e.preventDefault(); } }, { passive: false });
+    }
     this._title();
   }
 

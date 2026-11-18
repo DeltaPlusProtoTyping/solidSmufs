@@ -63,12 +63,12 @@ const SETS = [
   { id: 'comment', label: 'Comment', tools: ['select', 'note', 'text', 'highlight', 'underline', 'strikeout', 'squiggly', '|', 'pen', 'rect', 'ellipse', 'cloud', 'line', 'arrow', 'stamp'] },
   { id: 'fill', label: 'Fill & Sign', tools: ['select', 'typewriter', 'check', 'cross', 'dot', 'date', '|', 'sign', 'initials', '|', 'flatten'] },
   { id: 'form', label: 'Prepare Form', tools: ['select', 'formAuto', '|', 'fText', 'fMulti', 'fCheck', 'fCombo', '|', 'fProps', 'fDelete', 'formClear'] },
-  { id: 'edit', label: 'Edit', tools: ['select', 'editText', 'addText', 'editImage', 'addImage'] },
+  { id: 'edit', label: 'Edit', tools: ['select', 'editText', 'addText', 'editImage', 'addImage', '|', 'watermark'] },
   { id: 'pages', label: 'Pages', tools: [] },
   { id: 'redact', label: 'Redact', tools: ['select', 'redactText', 'redact', 'redactFind', 'strikeText', '|', 'redactApply', 'scrub'] },
 ];
 const TOOLS = {
-  select: { label: 'Select', tip: 'Drag across text to select it (Ctrl+C copies). Click a comment to select it: drag it to move it, its handles to size it, double-click to edit it. Drag bare paper to pan.' },
+  select: { label: 'Select', tip: 'Drag across text to select it (Ctrl+C copies, Delete takes it out of the page). Click a comment to select it: drag it to move it, its handles to size it, double-click to edit it. Drag bare paper to pan.' },
   note: { label: 'Sticky note', tip: 'Click to add a note' },
   text: { label: 'Text box', tip: 'Drag (or click) to add a text box' },
   typewriter: { label: 'Add text', tip: 'Click and type: fill in a form that has no fields', icon: 'typewriter' },
@@ -94,6 +94,7 @@ const TOOLS = {
   addText: { label: 'Add text', tip: 'Click to put new words into the page itself (not a comment)' },
   editImage: { label: 'Edit pictures', tip: 'Click a picture to select it: drag to move it, its handles to size it, Delete to remove it' },
   addImage: { label: 'Add picture', tip: 'Choose a picture, then click or drag where it goes' },
+  watermark: { label: 'Remove watermark…', tip: 'Find the watermarks (marked as one by Acrobat or Word, a watermark layer or comment, or large tilted words repeated on the pages), see them before and after, and take them out of every page', action: true, text: true },
   formAuto: { label: 'Detect fields', tip: 'Make this fillable: find the blanks (lines, boxes, table cells, check boxes) and put a field on each', action: true, text: true, icon: 'fText' },
   fText: { label: 'Text field', tip: 'Drag (or click) where a line of typing goes' },
   fMulti: { label: 'Text box of several lines', tip: 'Drag (or click) where several lines of typing go' },
@@ -106,7 +107,7 @@ const TOOLS = {
   redactText: { label: 'Mark text', tip: 'Drag across text to mark it for redaction' },
   redact: { label: 'Mark area', tip: 'Drag a box to mark it for redaction' },
   redactFind: { label: 'Mark found', tip: 'Mark every place the Find box finds', action: true, icon: 'redactText' },
-  strikeText: { label: 'Strike through', tip: 'Click a line of text or a symbol to put a single line through it (one of two stacked limits, a tolerance, a GD&T symbol);\nShift+click for the whole dimension with its tolerance; or drag across any text. The words stay readable.', icon: 'strikeout' },
+  strikeText: { label: 'Strike through', tip: 'Click a line of text or a symbol to put a single line through it (one of two stacked limits, a tolerance, a GD&T symbol);\nShift+click for the whole dimension with its tolerance; drag across text to strike those words,\nor drag from anywhere else to put the line where you drag, across anything (lines, symbols, pictures, scans).\nClick a strike-through to take it: drag it, or press Delete. The words stay readable.', icon: 'strikeout' },
   redactApply: { label: 'Apply', tip: 'Take everything marked for redaction out of the pages for good. Strike-throughs need no Apply: they stay marks you can select and delete later', action: true, text: true },
   scrub: { label: 'Remove hidden info', tip: "Take out the document's details, attachments, scripts, hidden text and comments", action: true, text: true },
 };
@@ -384,6 +385,7 @@ export class PdfEditor {
     if (id === 'redactFind') { this._redactFound(); return; }
     if (id === 'redactApply') { this._redactApply(); return; }
     if (id === 'scrub') { this._scrub(); return; }
+    if (id === 'watermark') { this._watermark(); return; }
     if (id === 'formAuto') { this._formAuto(b); return; }
     if (id === 'formClear') { this._formClear(); return; }
     if (id === 'fProps' || id === 'fDelete') {
@@ -476,6 +478,7 @@ export class PdfEditor {
     if (ctrl && (lk === 'y' || (lk === 'z' && e.shiftKey))) { this.redo(); return done(); }
     if ((e.key === 'Delete' || e.key === 'Backspace') && this.set === 'form' && this._fselField()) { this._fieldDelete(); return done(); }
     if ((e.key === 'Delete' || e.key === 'Backspace') && this.sel) { this.deleteSel(); return done(); }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && this.v.selection?.rects?.length && !this.v.balloons?.on) { this.deleteText(); return done(); }
     if ((e.key === 'Delete') && this.set === 'pages' && this.picked.size) { this._pagesDelete(); return done(); }
     if (e.key === 'Escape') {
       if (this.tool !== 'select') { this.setTool('select'); return done(); }
@@ -554,6 +557,19 @@ export class PdfEditor {
       if (f) { this.run('annot_add', { page: p.i, kind: 'redact', rects: [f.rect] }); return true; }
     }
     if (FIELD_TOOLS[tool]) { this._fieldDrag(e, p, pt); return true; }
+    if (tool === 'strikeText' || tool === 'strikeout') { // on a strike-through: take it, to drag or Delete (the tool stays)
+      const hit = this._hitAnnot(p.i, pt);
+      if (hit?.kind === 'strikeout') {
+        this.select({ type: 'annot', page: p.i, id: hit.id, rect: hit.rect, a: hit });
+        this._moveDrag(e, p, pt);
+        return true;
+      }
+      if (this.sel) this.select(null);
+    }
+    if (tool === 'strikeText' && !this._onWord(p.i, pt) && !e.shiftKey) { // off the words: a drag draws the line where it goes
+      this._strikeLine(e, p, pt);
+      return true;
+    }
     if (t.markup || tool === 'redactText' || tool === 'strikeText') {
       let moved = false; // (Strike through: a click, not a drag, strikes the dimension or note under it whole)
       const x0 = e.clientX, y0 = e.clientY;
@@ -680,6 +696,7 @@ export class PdfEditor {
       return Math.abs(d - 1) * Math.min(w, hh) / 2 <= tol;
     }
     if (a.kind === 'line' && a.points?.length >= 2) return segDist(pt, a.points[0], a.points[1]) <= tol;
+    if (a.kind === 'strikeout' && a.segs?.length) return a.segs.some(([q0, q1, half]) => segDist(pt, q0, q1) <= Math.max(half, 2) + 2);
     if (a.kind === 'ink' && a.points?.length) return a.points.some((s) => s.some((q, i) => (i ? segDist(pt, s[i - 1], q) : Math.hypot(pt[0] - q[0], pt[1] - q[1])) <= tol));
     if ((a.kind === 'polygon' || a.kind === 'polyline') && !a.fill && a.points?.length > 1) {
       const ring = a.kind === 'polygon' ? [...a.points, a.points[0]] : a.points;
@@ -777,6 +794,36 @@ export class PdfEditor {
       else if (tool === 'addImage') { await this.run('image_add', { page: p.i, rect: r, image: this.payload.image }); this.setTool('editImage'); }
       else if (tool === 'redact') await this.run('annot_add', { page: p.i, kind: 'redact', rects: [r] });
       else if (tool === 'crop') this._cropAsk(p, r);
+    });
+  }
+
+  // Strike through, from off the words: a drag puts a strike line across anything (lines, symbols drawn as outlines,
+  // pictures, scans) where it's dragged, kept straight when nearly level or upright; a click strikes the symbol there
+  _strikeLine(e, p, from) {
+    const color = this.style.colors.strikeText || '#000000', svg = this._ghost(p);
+    const ns = 'http://www.w3.org/2000/svg', line = document.createElementNS(ns, 'line');
+    Object.entries({ stroke: color, 'stroke-width': 2, 'vector-effect': 'non-scaling-stroke', 'stroke-linecap': 'butt' }).forEach(([k, v]) => line.setAttribute(k, v));
+    svg.append(line);
+    const level = (a, b) => { // within 4 degrees of level or upright: exactly so
+      const dx = b[0] - a[0], dy = b[1] - a[1], ang = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+      if (ang < 4 || ang > 176) return [b[0], a[1]];
+      if (Math.abs(ang - 90) < 4) return [a[0], b[1]];
+      return b;
+    };
+    this._drag(e, p, from, (a, b) => {
+      const [x1, y1] = this._view(p, a), [x2, y2] = this._view(p, level(a, b));
+      Object.entries({ x1, y1, x2, y2 }).forEach(([k, v]) => line.setAttribute(k, v));
+    }, async (a, b, moved) => {
+      svg.remove();
+      if (!moved || Math.hypot(b[0] - a[0], b[1] - a[1]) < 4) {
+        await this.run('strike_at', { page: p.i, at: a, whole: false, color });
+        return;
+      }
+      b = level(a, b);
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]), h = 5, ux = (b[0] - a[0]) / len, uy = (b[1] - a[1]) / len;
+      const up = [uy * h, -ux * h]; // (y runs down the page)
+      const quad = [[a[0] + up[0], a[1] + up[1]], [b[0] + up[0], b[1] + up[1]], [a[0] - up[0], a[1] - up[1]], [b[0] - up[0], b[1] - up[1]]];
+      await this.run('annot_add', { page: p.i, kind: 'strike', quads: [quad], free: true, text: '', color });
     });
   }
 
@@ -972,6 +1019,8 @@ export class PdfEditor {
         { label: 'Squiggly underline', action: mark('squiggly') },
         { sep: true },
         { label: 'Mark for redaction', action: mark('redact') },
+        { sep: true },
+        { label: 'Delete from the page', kb: 'Del', action: () => this.deleteText() },
       ], { at });
       return;
     }
@@ -1169,6 +1218,16 @@ export class PdfEditor {
       const a = res?.result;
       if (a) this.select({ type: 'annot', page: s.page, id: a.id, rect: a.rect, a: { ...a, page: s.page } });
     }
+  }
+
+  // the selected words taken out of the page itself (not a comment): Ctrl+Z puts them back
+  async deleteText() {
+    const s = this.v.selection;
+    if (!s?.rects?.length || !this.editable) return;
+    this.v.selection = null;
+    this.v._showSelection();
+    const r = await this.run('text_delete', { page: s.page, rects: s.rects }, 'Deleting…');
+    if (r) toast('Deleted from the page. Ctrl+Z puts it back.', 'info', 2500);
   }
 
   async deleteSel() {
@@ -1608,6 +1667,47 @@ export class PdfEditor {
       toast(`${msg}.${args.text && !x.read ? ` ${x.error ? `OCR couldn't read it (${x.error})` : 'Searchable text needs Windows OCR, which isn\'t on this computer'}.` : ''} Undo puts it back.`, 'ok', 8000);
     });
     preview();
+  }
+
+  // Edit > Remove watermark: what's found, each to keep or take out, the first page with one before and after
+  async _watermark() {
+    const body = h('div', { class: 'pe-confirm pe-enh' }, h('p', { class: 'pe-enh-note', text: 'Looking for watermarks…' }));
+    const d = modal('Remove watermark', body, { width: 860 });
+    let r;
+    try { r = await this._ask('watermark_find', {}); } catch (e) { body.replaceChildren(h('p', { text: e.message })); return; }
+    const pages = (list) => (list.length === this.v.pages.length ? `every page` : list.length === 1 ? `page ${list[0] + 1}` : `${list.length} pages`);
+    if (!r.items.length) {
+      body.replaceChildren(
+        h('p', { text: 'No watermark found: nothing marked as one, no watermark layer or comment, and no large or tilted words repeated on the pages.' }),
+        h('p', { class: 'pe-enh-note', text: 'If you can see one, it may be a picture (Edit pictures, click it, Delete) or words you can select (Select, drag across them, Delete). One drawn as outlines can’t be picked out yet.' }),
+        h('div', { class: 'pe-pop-foot' }, h('button', { class: 'btn primary', text: 'OK', onclick: () => d.close() })));
+      return;
+    }
+    const ticks = r.items.map((it) => {
+      const box = h('input', { type: 'checkbox', checked: true });
+      return { it, box, row: h('label', { class: 'pe-line pe-wm-row' }, box, h('span', { text: ` ${it.label}` }), h('span', { class: 'pe-enh-note', text: ` (${pages(it.pages)})` })) };
+    });
+    const go = h('button', { class: 'btn primary', text: 'Remove' });
+    const sync = () => { go.disabled = !ticks.some((t) => t.box.checked); };
+    ticks.forEach((t) => t.box.addEventListener('change', sync));
+    body.replaceChildren(
+      h('p', { text: 'Found on this PDF. Ticked ones are taken out of every page they’re on; nothing else on the pages changes, and Undo puts them back.' }),
+      h('div', { class: 'pe-wm-list' }, ...ticks.map((t) => t.row)),
+      r.kept.length ? h('p', { class: 'pe-enh-note', text: `On ${r.kept.length === 1 ? `page ${r.kept[0] + 1}` : `pages ${r.kept.map((i) => i + 1).join(', ')}`} the repeated words run through other words, so they stay there (taking them out would take those too): select them and press Delete to do it by hand.` }) : '',
+      r.page != null ? h('div', { class: 'pe-enh-pair' },
+        h('figure', {}, h('figcaption', { text: `Before (page ${r.page + 1})` }), h('img', { class: 'pe-enh-img', src: r.before, alt: 'Before' })),
+        h('figure', {}, h('figcaption', { text: 'After, with everything found taken out' }), h('img', { class: 'pe-enh-img', src: r.after, alt: 'After' }))) : '',
+      h('div', { class: 'pe-pop-foot' }, h('button', { class: 'btn', text: 'Cancel', onclick: () => d.close() }), go));
+    go.addEventListener('click', async () => {
+      const on = ticks.filter((t) => t.box.checked).map((t) => t.it);
+      const kinds = [...new Set(on.map((it) => it.kind))];
+      const keys = on.filter((it) => it.kind === 'text').map((it) => it.key);
+      d.close();
+      const res = await this.run('watermark_remove', { kinds, keys: kinds.includes('text') ? keys : null }, 'Removing the watermark…');
+      if (!res) return;
+      const x = res.result;
+      toast(`Watermark taken out of ${x.pages} page${x.pages === 1 ? '' : 's'}${x.kept.length ? `; left on ${pages(x.kept)} where it runs through other words` : ''}. Undo puts it back.`, 'ok', 7000);
+    });
   }
 
   _which() { return this.picked.size ? [...this.picked].sort((a, b) => a - b) : [this.v.current || 0]; }

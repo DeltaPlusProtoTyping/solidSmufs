@@ -52,8 +52,9 @@ class Spine:
     """t -> ball centre. From an exact curve, or from an intersection: its chart, densified and moved onto
     the two surfaces once, then interpolated by a C2 spline (t in [0, 1])."""
 
-    def __init__(self, curve=None, chart_pts=None, surfaces=None):
+    def __init__(self, curve=None, chart_pts=None, surfaces=None, memo=None, key=None):
         self.curve, self.surfaces = curve, surfaces
+        self.memo, self.key = memo, key  # (factory.memo, factory.fresh), ("spine", node): built once, shared
         self.period = None
         self.P = None
         if curve is not None:
@@ -75,6 +76,14 @@ class Spine:
             self.period = 1.0
 
     def _build(self):
+        if self.memo is not None and self.key in self.memo[0]:
+            self.deg, self.U, self.P = self.memo[0][self.key]
+            return
+        self._build_here()
+        if self.memo is not None:
+            self.memo[0][self.key] = self.memo[1][self.key] = (self.deg, self.U, self.P)
+
+    def _build_here(self):
         deg, U, S = N.interp_points(self._chart)
         knots = np.unique(U)
         ts = np.unique(np.concatenate([np.linspace(a, b, 3)[:-1] for a, b in zip(knots, knots[1:])] + [[1.0]]))
@@ -260,7 +269,7 @@ def make_blend(factory, node):
         ch = m[sp["chart"]]
         pts = [h for h in (ch["hvec"] if ch else []) if h is not None]
         surfs = tuple(factory.surface(i) for i in sp["surface"])
-        spine = Spine(chart_pts=pts, surfaces=surfs)
+        spine = Spine(chart_pts=pts, surfaces=surfs, memo=(factory.memo, factory.fresh), key=("spine", node.idx))
     else:
         spine = Spine(curve=factory.curve(f["spine"]))
     b = Blend(s0, s1, spine, r)

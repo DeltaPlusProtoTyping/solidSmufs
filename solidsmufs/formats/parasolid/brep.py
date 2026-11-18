@@ -15,6 +15,7 @@ B-splines (FIT_TOL), intersections with C2 splines through their chart points, r
 an edge with no usable curve is rebuilt where its two faces' surfaces meet. Polylines are the last resort.
 """
 
+import hashlib
 from collections import Counter
 
 import numpy as np
@@ -25,14 +26,33 @@ from .blend import Blend, on_intersection
 from .geom import (BSpline, BSurface, ChartCurve, Circle, Ellipse, Factory, GeomError, Line, Offset, SPCurve,
                    Spun, Swept, TWO_PI)
 
+def _try(f, *a):
+    """f(*a), or the GeomError it raised (kept, so a part worked out ahead fails the same way)."""
+    try:
+        return f(*a)
+    except GeomError as e:
+        return e
+
+
 FIT_TOL = 1e-7  # m: how far an approximated edge may stray from the true curve (0.1 µm)
 POLY_TOL = 1e-6  # m: for polylines, the last resort
 
 
+def digest(a):
+    """A short key for an array's exact values (and shape)."""
+    a = np.ascontiguousarray(a, float)
+    return a.shape, hashlib.blake2b(a.tobytes(), digest_size=16).digest()
+
+
 class BodyWriter:
-    def __init__(self, model, w):
+    def __init__(self, model, w, memo=None):
         self.m, self.w = model, w
+        # the slow sums (an intersection edge's points, a blend's or offset's fitted surface), by exactly what they
+        # were worked out from: filled ahead on all cores for a big part (parallel.py), else as it goes
+        self.memo = memo if memo is not None else {}
+        self.fresh = {}  # what this writer worked out itself
         self.F = Factory(model)
+        self.F.memo, self.F.fresh = self.memo, self.fresh  # (and the blends' spines)
         self.verts, self.edges, self.surfs = {}, {}, {}
         self.edge_pts = {}  # edge index -> points along it (start to end)
         self.n_exact = self.n_fit = self.n_poly = 0
@@ -240,11 +260,11 @@ class BodyWriter:
         try:
             S = self.F.surface(idx)
             if isinstance(S, Blend):
-                out = self._blend(S, edges)
+                out = self._blend(S, edges, idx)
             elif isinstance(S, Offset) and isinstance(S.basis, (BSurface, Swept, Spun, Offset)):
                 # OpenCASCADE can hang on offsets of free-form surfaces (singular where the offset exceeds a
                 # radius of curvature): the part the face uses, fitted
-                out = self._offset_fit(S, edges)
+                out = self._offset_fit(S, edges, idx)
             else:
                 out = S.step(self.w)
         except GeomError as e:
@@ -254,7 +274,13 @@ class BodyWriter:
         self.surfs[key] = out
         return out
 
-    def _offset_fit(self, S, edges, tol=1e-6):
+    def _remember(self, key, work):
+        if key in self.memo:
+            return self.memo[key]
+        v = self.memo[key] = self.fresh[key] = work()
+        return v
+
+    def _offset_fit(self, S, edges, idx, tol=1e-6):
         """A B-spline fitted to an offset surface over the parameters the face's edges cover (the basis's
         parameters, so the natural normal is the basis's, as for the offset)."""
         pts = [self.edge_pts[e] for e in edges if e in self.edge_pts]
@@ -276,14 +302,15 @@ class BodyWriter:
             uu, vv = np.repeat(us, len(vs)), np.tile(vs, len(us))
             return S.eval(uu, vv).reshape(len(us), len(vs), 3)
 
-        r = N.fit_surface_grid(grid, u0, u1, v0, v1, tol, max_n=49)
+        r = self._remember(("offset", idx, u0, u1, v0, v1),
+                           lambda: N.fit_surface_grid(grid, u0, u1, v0, v1, tol, max_n=49))
         if r is None:
             raise GeomError("offset surface fit failed")
         du, dv, U, V, P, _err = r
         self.notes["offset surfaces approximated as B-splines"] += 1
         return self.w.bspline_surface(du, dv, U, V, P), False
 
-    def _blend(self, B, edges):
+    def _blend(self, B, edges, idx):
         """A blend face's surface: a B-spline fitted over the part of the blend its edges bound. Its flip says
         whether its natural normal (d/dt x d/db) points towards the ball centre (Parasolid's blend normal
         points away from it)."""
@@ -291,7 +318,10 @@ class BodyWriter:
         if not pts:
             raise GeomError("blend face without edges")
         samples = np.vstack(pts)
-        du, dv, U, V, P, _err = B.fit(samples)
+        r = self._remember(("blend", idx, digest(samples)), lambda: _try(B.fit, samples))
+        if isinstance(r, Exception):
+            raise r
+        du, dv, U, V, P, _err = r
         nu, nv = P.shape[:2]
         # the fitted surface's natural normal at its middle vs. the direction away from the ball centre
         uc, vc = (U[du] + U[nu]) / 2, (V[dv] + V[nv]) / 2
@@ -557,7 +587,7 @@ class BodyWriter:
             except GeomError:
                 surfs = None
         if surfs:
-            pts = self._refine_on(surfs, pts)
+            pts = self._remember(("refine", tuple(node["surface"]), digest(pts)), lambda: self._refine_on(surfs, pts))
         if len(pts) == 2:
             return "fit", (self.w.bspline_curve(1, [0, 0, 1, 1], pts), True, pts[0], pts)
         deg, U, Pc = N.interp_points(pts)

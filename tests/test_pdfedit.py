@@ -249,6 +249,46 @@ class Editing(unittest.TestCase):
         self.assertEqual(self.pdf.find("PUBLIC")[0]["page"], 0)  # and finding sees the change
         self.assertIsNone(e.run("text_at", {"page": 0, "at": [500, 700]}))
 
+    def test_delete_selected_text(self):
+        e = self.ed
+        # a redaction mark waiting for Apply on the same page stays a mark, its words still there
+        e.run("annot_add", {"page": 0, "kind": "redact", "rects": [[70, 86, 200, 18]]})
+        sel = self.pdf.select(0, 72, 135, 160, 135)  # "SECRET 555-1234"
+        self.assertEqual(sel["text"].strip(), "SECRET 555-1234")
+        e.run("text_delete", {"page": 0, "rects": sel["rects"]})
+        text = self.pdf.fz[0].get_text()
+        self.assertNotIn("SECRET", text)
+        self.assertNotIn("555-1234", text)
+        self.assertIn("here", text)  # the rest of the line, not selected
+        self.assertIn("quick brown fox", text)  # under the waiting redaction mark: not applied by this
+        self.assertIn("Line below stays", text)
+        self.assertEqual([a.type[1] for a in self.pdf.fz[0].annots()], ["Redact"])
+        self.assertEqual([h for h in self.pdf.find("SECRET") if h["page"] == 0], [])
+        e.run("undo", {})
+        self.assertIn("SECRET 555-1234", self.pdf.fz[0].get_text())
+        # on a turned page too
+        sel = self.pdf.select(1, *[v for v in self._shown_word(1, "SECRET")])
+        e.run("text_delete", {"page": 1, "rects": sel["rects"]})
+        self.assertNotIn("SECRET", self.pdf.fz[1].get_text())
+        self.assertIn("Line below stays", self.pdf.fz[1].get_text())
+        with self.assertRaises(ValueError):
+            e.run("text_delete", {"page": 0, "rects": []})
+
+    def _shown_word(self, page, word):
+        """A drag across `word` as the page is shown: (ax, ay, bx, by)."""
+        r = self.pdf.find(word)[0]["rects"][0] if self.pdf.find(word)[0]["page"] == page else \
+            next(h for h in self.pdf.find(word) if h["page"] == page)["rects"][0]
+        x, y, w, h = r
+        return (x + 1, y + h / 2, x + w - 1, y + h / 2) if w >= h else (x + w / 2, y + 1, x + w / 2, y + h - 1)
+
+    def test_edit_text_keeps_waiting_redactions(self):
+        e = self.ed
+        e.run("annot_add", {"page": 0, "kind": "redact", "rects": [[70, 86, 200, 18]]})
+        line = e.run("text_at", {"page": 0, "at": [100, 136]})
+        e.run("text_replace", {"page": 0, "rect": line["rect"], "text": "PUBLIC words", "size": line["size"]})
+        self.assertIn("quick brown fox", self.pdf.fz[0].get_text())
+        self.assertEqual([a.type[1] for a in self.pdf.fz[0].annots()], ["Redact"])
+
     def test_add_text_on_a_turned_page(self):
         e = self.ed
         e.run("text_add", {"page": 1, "at": [100, 500], "text": "Across the page", "size": 20})
@@ -326,6 +366,28 @@ class Editing(unittest.TestCase):
         e.run("save", {})
         self.assertEqual(list(self.reopen()[0].annots()), [])
         self.assertIn("SECRET", self.reopen()[0].get_text())
+
+    def test_strike_anything_then_move_and_delete_it(self):
+        e, pg = self.ed, self.pdf.fz[0]
+        pg.draw_line((300, 500), (420, 560), width=2)  # a drawing, no words: the line goes where it's dragged
+        r = e.run("annot_add", {"page": 0, "kind": "strike", "quads": [[[300, 495], [420, 495], [300, 505], [420, 505]]],
+                                "free": True, "text": "", "color": "#000000"})["result"]
+        (a, b, width, color), = _struck(pg)
+        self.assertTrue(abs(a.x - 300) < 0.5 and abs(a.y - 500) < 0.5 and abs(b.x - 420) < 0.5 and abs(b.y - 500) < 0.5, (a, b))
+        self.assertAlmostEqual(width, 1.0, delta=0.05)
+        (mark,) = [m for m in e.run("annots", {}) if m["id"] == r["id"]]
+        (q0, q1, half), = mark["segs"]  # where a click takes it: along the line
+        self.assertEqual((q0, q1), ([300, 500], [420, 500]))
+        self.assertAlmostEqual(half, 5, delta=0.05)
+        x, y, w, h = mark["rect"]
+        e.run("annot_set", {"page": 0, "id": mark["id"], "rect": [x + 10, y + 40, w, h]})  # dragged
+        (a, b, *_), = _struck(pg)
+        self.assertTrue(abs(a.x - 310) < 0.5 and abs(a.y - 540) < 0.5, (a, b))
+        (mark,) = [m for m in e.run("annots", {}) if m["kind"] == "strikeout"]
+        for got, want in zip(sum(mark["segs"][0][:2], []), [310, 540, 430, 540]):
+            self.assertAlmostEqual(got, want, delta=0.1)
+        e.run("annot_delete", {"page": 0, "ids": [mark["id"]]})  # Delete
+        self.assertEqual(_struck(pg), [])
 
     def test_strike_goes_through_the_middle_of_the_figures(self):
         pg = self.pdf.fz[0]

@@ -355,6 +355,11 @@ class _Handler(BaseHTTPRequestHandler):
             if doc.meta.get("pdf") is not None:
                 doc.meta["pdf"]["saveAs"] = needs_save_as(doc, self.ctx.upload_dir)
             return self._json(doc.meta)
+        if what == "preview":  # the picture saved with a SolidWorks file, while it opens
+            if doc.preview is None:
+                return self._error("No picture", 404)
+            import base64
+            return self._json({"image": "data:image/png;base64," + base64.b64encode(doc.preview).decode("ascii")})
         if what == "mesh":
             if doc.state != "ready":
                 return self._error("Not ready", 409)
@@ -392,8 +397,11 @@ class _Handler(BaseHTTPRequestHandler):
             if op == "save" and args.get("path") is None and needs_save_as(doc, self.ctx.upload_dir):
                 return self._error("This copy can't be saved over: choose where to save it.", 409)
             r = doc.request("pdf_edit", timeout=600, op=op, args=args)
+            if op in ("recover_load", "recover_clear"):  # the autosaved edits put back, or let go
+                doc.answered_recovery()
             if isinstance(r, dict) and "state" in r:
                 doc.pdf_dirty = r["state"]["dirty"]
+                doc.edited(r["state"])
                 if op == "save" and r["state"]["path"] != doc.path:  # Save As: the document is that file now
                     doc.path = r["state"]["path"]
                     doc.name = Path(doc.path).name
@@ -424,6 +432,10 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json(doc.request("section_props", timeout=120, faces=b.get("faces", [])))
         if what == "holes":
             return self._json(doc.request("holes", timeout=120))
+        if what == "callouts":  # which faces a print's callouts are about (kernel/callouts.py)
+            return self._json(doc.request("callouts", timeout=300, callouts=b.get("callouts", []), unit=b.get("unit")))
+        if what == "print-guess":  # PDFs beside the part that are likely its print
+            return self._json({"paths": _prints_beside(doc.path)})
         if what == "save-step":
             out = self.ctx.native.save_file("Save as STEP", Path(doc.path or doc.name).stem + ".step",
                                             "STEP file (*.step *.stp)")
@@ -431,6 +443,20 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"path": None})
             return self._json(doc.request("save_step", timeout=600, out=out))
         return self._error("Not found", 404)
+
+
+def _prints_beside(path):
+    """PDFs in the part's folder named like it, best first: the same name, then one that starts with the part's
+    number (its name up to the first space, dash or underscore past the first few characters)."""
+    try:
+        p = Path(path)
+        stem = p.stem.lower()
+        head = re.split(r"[\s_]+|(?<=.{4})-", stem)[0]
+        pdfs = [q for q in p.parent.iterdir() if q.suffix.lower() == ".pdf" and q.is_file()]
+    except (OSError, TypeError, ValueError):
+        return []
+    rank = lambda q: 0 if q.stem.lower() == stem else 1 if q.stem.lower().startswith(stem) else 2 if len(head) >= 3 and q.stem.lower().startswith(head) else 9  # noqa: E731
+    return [str(q) for q in sorted(pdfs, key=lambda q: (rank(q), q.name.lower())) if rank(q) < 9][:5]
 
 
 # ---------------------------------------------------------------------------------------------- file explorer

@@ -160,19 +160,32 @@ def _stream_order(name):
 
 def _zlib_transmits(data):
     """The marked zlib transmits of a stream, each from its pieces."""
-    out, i = [], 0
+    out, i, n = [], 0, len(data)
+    view = memoryview(data)
     while True:
         j = data.find(GEO_MAGIC, i)
         if j < 0:
             return out
         i = j + 1
+        parts, p = [], j + 16  # each piece: [raw size][compressed size] + zlib
         try:
-            z = zlib.decompressobj()
-            parts, rest = [z.decompress(data[j + 24:])], z.unused_data
-            while len(rest) > 10 and rest[8:9] == b"\x78":  # [size][compressed size] + zlib, 4 KiB at a time
-                z = zlib.decompressobj()
-                parts.append(z.decompress(rest[8:]))
-                rest = z.unused_data
+            while p + 10 < n and data[p + 8:p + 9] == b"\x78":
+                size = struct.unpack_from("<I", data, p + 4)[0]
+                piece = None
+                if 0 < size <= n - p - 8:  # just this piece (handing zlib the whole rest copies it every time)
+                    z = zlib.decompressobj()
+                    try:
+                        piece = z.decompress(view[p + 8:p + 8 + size])
+                    except zlib.error:
+                        pass
+                    if not z.eof:
+                        piece = None
+                if piece is None:  # the size wasn't the piece's: find its end the slow way
+                    z = zlib.decompressobj()
+                    piece = z.decompress(view[p + 8:])
+                    size = n - p - 8 - len(z.unused_data)
+                parts.append(piece)
+                p += 8 + size
         except zlib.error:
             continue
         t = b"".join(parts)
@@ -324,3 +337,29 @@ def blast(d, start=0, end=None):
             bb >>= 8
             bc -= 8
     return bytes(out)
+
+
+# ------------------------------------------------------------------ the picture SolidWorks saves with a file
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def preview_png(path):
+    """The picture of the part, assembly or drawing SolidWorks saved with the file (PreviewPNG, 640 x 480), as PNG
+    bytes, or None. Quick: nothing else in the file is read. (Shown while the model itself is worked out.)"""
+    try:
+        with open(path, "rb") as fh:
+            d = fh.read()
+    except OSError:
+        return None
+    png = None
+    try:
+        if d[:8] == OLE_MAGIC:  # before 2015
+            import olefile
+            with olefile.OleFileIO(d) as ole:
+                if ole.exists("PreviewPNG"):
+                    png = ole.openstream("PreviewPNG").read()
+        else:
+            png = chunk_streams(d, lambda name: name == "PreviewPNG").get("PreviewPNG")
+    except Exception:
+        return None
+    return png if png and png[:8] == PNG_MAGIC else None

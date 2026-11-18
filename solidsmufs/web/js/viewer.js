@@ -453,6 +453,7 @@ export class Viewer {
 
   setModel(meta, blob) {
     this.clear();
+    this.faceTint = null;
     this.resize();
     const buf = (key, T) => { const b = meta.buffers[key]; return new T(blob, b.offset, b.length); };
     const pos = buf('positions', Float32Array), nrm = buf('normals', Float32Array);
@@ -580,7 +581,7 @@ export class Viewer {
     // a metal tint stands in for SolidWorks' pale "no appearance" color while RealView is on
     const base = (this.realView && body.finish?.tint) || body.color;
     for (let f = body.f0; f < body.f0 + body.fn; f++) {
-      const rgb = body.override || F.color[f] || base || DEFAULT_COLOR;
+      const rgb = this.faceTint?.get(f) || body.override || F.color[f] || base || DEFAULT_COLOR;
       c.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace);
       const a = F.vstart[f] - body.v0, n = F.vcount[f];
       for (let i = a; i < a + n; i++) col.setXYZ(i, c.r, c.g, c.b);
@@ -1536,7 +1537,7 @@ export class Viewer {
   clearAnnotations() {
     this.annot.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.annot.clear();
-    this.labels = this.labels.filter((l) => { if (!l.ref && !l.box && !l.preview) { l.el.remove(); l.lead?.remove(); return false; } return true; });
+    this.labels = this.labels.filter((l) => { if (!l.ref && !l.box && !l.preview && !l.kept) { l.el.remove(); l.lead?.remove(); return false; } return true; });
     this.requestRender();
   }
 
@@ -1548,6 +1549,37 @@ export class Viewer {
     this.labels.push({ el, pos: pos.clone() });
     this.requestRender();
     return el;
+  }
+
+  /** Each face's own color in place of the body's (a map face → [r, g, b] 0..1), or null for the usual colors: the
+   *  tolerance heat map (callouts.js). */
+  setFaceTint(map) {
+    this.faceTint = map && map.size ? map : null;
+    for (const b of this.bodies) if (b && !b.lineOnly) this._paintBody(b);
+    this._rebuildCaps();
+    this.requestRender();
+  }
+
+  /** A label that stays when measuring clears its own (the print's callouts on the model), under `tag`. */
+  addKeptLabel(pos, html, cls, tag) {
+    const el = this.addLabel(pos, html, cls);
+    const l = this.labels[this.labels.length - 1];
+    l.kept = tag;
+    return el;
+  }
+
+  removeKeptLabels(tag) {
+    this.labels = this.labels.filter((l) => { if (l.kept === tag) { l.el.remove(); l.lead?.remove(); return false; } return true; });
+    this.requestRender();
+  }
+
+  /** The middle of a face's mesh (for a label when nothing better is known). */
+  faceCenter(f) {
+    const m = this.model, F = m?.meta.faces;
+    if (!F || f < 0 || f >= m.nF) return null;
+    const v0 = F.vstart[f], n = F.vcount[f], c = new THREE.Vector3();
+    for (let v = v0; v < v0 + n; v++) { c.x += m.pos[v * 3]; c.y += m.pos[v * 3 + 1]; c.z += m.pos[v * 3 + 2]; }
+    return n ? c.multiplyScalar(1 / n) : null;
   }
 
   // Labels sit on their points unless that would cover another label or something on screen (the

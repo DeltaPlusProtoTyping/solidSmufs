@@ -25,7 +25,8 @@ def _has(model, solid):
     return any(t == "S" for t in regions.values())
 
 
-def convert(src_path, out_path, config=None):
+def load(src_path, config=None):
+    """(source, [(stream name, model)] to convert, note): the part's models, read."""
     src = open_source(src_path)
     models, errors = [], []
     for name, t in _for_config(src.transmits, config):
@@ -41,12 +42,19 @@ def convert(src_path, out_path, config=None):
     chosen, choice_note = _choose(models)
     if not chosen:
         raise UnsupportedFile("This file has no solid or surface bodies.")
+    return src, chosen, choice_note
+
+
+def convert(src_path, out_path, config=None, workers=None):
+    src, chosen, choice_note = load(src_path, config)
+    from .parallel import precompute
+    memos = precompute(src_path, config, chosen, workers)  # a big part's slow sums, done on all cores first
 
     w = Step()
     items, notes, styles, colours, clears = [], {}, [], [], []
     n_exact = n_fit = n_poly = n_faces = 0
-    for _name, m in chosen:
-        bw = BodyWriter(m, w)
+    for k, (_name, m) in enumerate(chosen):
+        bw = BodyWriter(m, w, memo=memos.get(k))
         items += bw.bodies()
         styles += bw.styles
         colours += bw.body_colours

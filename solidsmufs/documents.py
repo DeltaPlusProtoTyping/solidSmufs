@@ -11,6 +11,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import recovery
+
 from . import settings
 from .kernel.formats import PASSWORD_NEEDED, PASSWORD_WRONG
 
@@ -32,6 +34,7 @@ def _spawn_worker():
     child.close()
     return proc, conn
 _ids = itertools.count(1)
+PREVIEW_EXTS = (".sldprt", ".sldasm", ".slddrw")  # files SolidWorks saves a picture in
 
 
 class WorkerGone(RuntimeError):
@@ -57,19 +60,55 @@ class Document:
         self._pending = {}
         self._send_lock = threading.Lock()
         self._busy = threading.Lock()
+        self.preview = None  # the picture SolidWorks saved with the file: PNG bytes, shown while it opens
+        # autosave (recovery.py): a copy found when the PDF opened, offered back until it's answered; the timer that
+        # writes ours a little after an edit; and whether one of ours is kept
+        self.recovery, self._checked, self._autosave, self._kept = None, False, None, False
+        self.pdf_dirty = False
         self.proc, self._conn = worker or _spawn_worker()
         threading.Thread(target=self._reader, daemon=True).start()
         threading.Thread(target=self._load, args=("load",), daemon=True).start()
+        if Path(path).suffix.lower() in PREVIEW_EXTS:
+            threading.Thread(target=self._find_preview, daemon=True).start()
+
+    def _find_preview(self):
+        from .formats.parasolid.containers import preview_png
+        self.preview = preview_png(self.path)
 
     # ------------------------------------------------------------------ status
     def status(self):
         return {"id": self.id, "name": self.name, "path": self.path, "state": self.state, "stage": self.stage,
                 "fraction": round(self.fraction, 3), "error": self.error, "quality": self.quality,
-                "elapsed": round(time.time() - self.opened, 1), "exact": self.exact, "rev": self.rev, "locked": self.locked}
+                "elapsed": round(time.time() - self.opened, 1), "exact": self.exact, "rev": self.rev, "locked": self.locked,
+                "preview": self.preview is not None, "recovery": self.recovery}
+
+    # ------------------------------------------------------------------ autosave (recovery.py)
+    def edited(self, state):
+        """After an edit to the PDF ({"dirty", ...}): its recovery copy written a little later (or let go)."""
+        if self.recovery is not None:  # (an earlier copy is waiting for an answer: it isn't written over)
+            return
+        if (state.get("dirty") or self._kept) and self._autosave is None:
+            t = threading.Timer(recovery.AFTER_S, self._autosave_now)
+            t.daemon = True
+            self._autosave = t
+            t.start()
+
+    def _autosave_now(self):
+        self._autosave = None
+        try:
+            self._kept = bool(self.request("pdf_edit", timeout=300, op="recover_write", args={}).get("kept"))
+        except Exception as e:
+            log.warning("autosave of %s failed: %s", self.name, e)
+
+    def answered_recovery(self):
+        self.recovery = None
 
     def _publish(self, meta, blob):
         meta["id"] = self.id
         meta["name"] = self.name
+        if meta.get("pdf") is not None and not self._checked:  # edits that weren't saved last time?
+            self._checked = True
+            self.recovery = recovery.find(self.path)
         self.meta, self.blob = meta, blob
         self.rev += 1
         self.state, self.stage, self.fraction = "ready", "Ready", 1.0
@@ -168,6 +207,11 @@ class Document:
                 slot["event"].set()
 
     def close(self):
+        if self._autosave is not None:
+            self._autosave.cancel()
+        # closed on purpose (saved, or Don't Save): its copy let go; kept if its engine stopped (that's what it's for)
+        if (self.pdf_dirty or self._kept) and self.recovery is None and self.proc.is_alive():
+            recovery.clear(self.path)
         try:
             with self._send_lock:
                 self._conn.send((0, "quit", {}))
@@ -187,6 +231,7 @@ class Documents:
         self._spare = None
         self._spare_lock = threading.Lock()
         self._closed = False
+        threading.Thread(target=recovery.tidy, daemon=True).start()  # (autosaved copies a month old let go)
 
     def open(self, path, quality="normal", display_name=None):
         doc = Document(path, quality, display_name, self._take_spare())

@@ -273,7 +273,7 @@ class Session:
             raise ValueError("Only a PDF can be edited. (A picture can be printed to a PDF, then edited.)")
         if getattr(self, "editor", None) is None or self.editor.pdf is not self.pdf:
             self.editor = PdfEditor(self.pdf, self.path)
-        if op in ("balloon_auto", "balloon_add", "balloon_carry"):  # ballooning reads the print the way hovering does
+        if op in ("balloon_auto", "balloon_add", "balloon_carry", "callouts"):  # ballooning reads the print the way hovering does
             args = {**(args or {}), "extra": self._balloon_extra(wait=op != "balloon_add")}
         out = self.editor.run(op, args or {})
         if isinstance(out, dict) and (out.get("structure") or out.get("changed") is None) and "state" in out:
@@ -852,6 +852,15 @@ class Session:
                         "through": g["through"], "faces": g["faces"], "thread": g["thread"] or (hw and hw["callout"]), "likely": likely})
         return jsonable({"groups": out, "holes": len(result)})
 
+    def callouts(self, callouts, unit=None):
+        """Which faces each of a print's callouts is about (kernel/callouts.py)."""
+        from . import callouts as found
+        try:
+            holes = self.holes()
+        except Exception:
+            holes = None
+        return jsonable(found.match(self.model, callouts, unit, holes))
+
     def _hole_has_bottom(self, hole):
         """Is the hole closed at one end by a face across it (flat bottom or a drill point)?"""
         from .measure import face_area
@@ -1252,8 +1261,8 @@ def _load_dwg(path, name, progress):
     return m
 
 
-EXACT_CMDS = ("measure", "massprops", "bbox", "section_props", "holes")
-SOLID_CMDS = ("massprops", "bbox", "section_props", "holes", "align", "facing", "save_step")  # need faces: not for a 2D drawing
+EXACT_CMDS = ("measure", "massprops", "bbox", "section_props", "holes", "callouts")
+SOLID_CMDS = ("massprops", "bbox", "section_props", "holes", "callouts", "align", "facing", "save_step")  # need faces: not for a 2D drawing
 
 
 def main(conn):
