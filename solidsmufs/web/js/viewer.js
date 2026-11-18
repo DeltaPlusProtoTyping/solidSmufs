@@ -31,6 +31,17 @@ const GESTURES = [
   { dir: 'upleft', ang: -135, cmd: 'iso', label: 'Isometric', icon: 'iso' },
 ];
 
+// The convex hull of [x, y] points, counterclockwise (Andrew's monotone chain)
+function convexHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p.length ? p : [[0, 0]];
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], hi = [];
+  for (const q of p) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (hi.length >= 2 && cross(hi[hi.length - 2], hi[hi.length - 1], q) <= 0) hi.pop(); hi.push(q); }
+  return lo.slice(0, -1).concat(hi.slice(0, -1));
+}
+
 function idColor(id) { return [(id & 255) / 255, ((id >> 8) & 255) / 255, ((id >> 16) & 255) / 255]; }
 
 const FACE_PICK_VS = /* glsl */`
@@ -308,7 +319,10 @@ export class Viewer {
     requestAnimationFrame(this._loop);
     if (this._spaceStep(now)) this.needsRender = true;
     if (this.rig.tick(now)) this.needsRender = true;
-    if (!this.needsRender) return;
+    if (!this.needsRender) {
+      if (this._labelsGliding) this._placeLabels();  // callout labels still easing to where they go (_placeRing)
+      return;
+    }
     if (!this.model && performance.now() < this.holdUntil) return;
     this.needsRender = false;
     this.render();
@@ -1561,10 +1575,12 @@ export class Viewer {
   }
 
   /** A label that stays when measuring clears its own (the print's callouts on the model), under `tag`. */
-  addKeptLabel(pos, html, cls, tag) {
+  addKeptLabel(pos, html, cls, tag, { ring = false, faces = null } = {}) {
     const el = this.addLabel(pos, html, cls);
     const l = this.labels[this.labels.length - 1];
     l.kept = tag;
+    l.ring = ring;  // laid out around the part with a leader to its point (_placeRing), not on it
+    if (faces?.length) l.faces = faces;  // the leader goes to whichever point of these faces is nearest the viewer
     return el;
   }
 
@@ -1593,8 +1609,10 @@ export class Viewer {
       const near = this._nearBoxCorner();
       for (const l of this.labels) if (l.boxBit) l.pos.copy(this.boxCorner(near)).add(this.boxCorner(near ^ l.boxBit)).multiplyScalar(0.5);
     }
-    const items = [];
+    const items = [], placed = this._labelObstacles();
+    this._placeRing(this.labels.filter((l) => l.ring), placed);
     for (const l of this.labels) {
+      if (l.ring) continue;
       const s = this.project(l.pos);
       if (s.behind) { l.el.style.display = 'none'; if (l.lead) l.lead.style.display = 'none'; continue; }
       l.el.style.display = '';
@@ -1602,7 +1620,7 @@ export class Viewer {
     }
     if (!items.length) return;
     items.sort((a, b) => a.rank - b.rank);
-    const PAD = 3, placed = this._labelObstacles();
+    const PAD = 3;
     const overlap = (x, y, w, h) => {
       let sum = 0;
       for (const r of placed) {
@@ -1644,6 +1662,151 @@ export class Viewer {
         Object.assign(l.lead.style, { display: '', left: `${ax}px`, top: `${ay}px`, width: `${len}px`,
           transform: `rotate(${Math.atan2(y - ay, x - ax)}rad)` });
       } else if (l.lead) l.lead.style.display = 'none';
+    }
+  }
+
+  // Callout labels around the part the way a drawing's balloons go: each just outside the part's outline on screen,
+  // out from the part's middle toward its feature, with a leader back to it. They keep the order their features
+  // have round the middle, spaced along the outline as little apart from where they would point as lets them clear
+  // each other (a ring further out takes every other one when one ring can't hold them all), so as the view turns
+  // they move smoothly, and they glide to new spots rather than jump (the viewer keeps calling this while any moves).
+  _placeRing(ring, placed) {
+    const W = this.width, H = this.height, M = 22, GAP = 4, EDGE = 6, TAU = 2 * Math.PI;
+    const items = [], eye = this.rig.dir(), F = this.model?.meta.faces, P = this.model?.pos;
+    const R = this.rig.radius || 1;
+    for (const l of ring) {
+      if (l.faces && F && P && l.faces.every((f) => /cylinder|cone|torus|sphere/.test(F.type[f] || ''))) {
+        // a hole's rim rather than its middle, inside the part; kept unless another point is clearly nearer
+        let best = -Infinity, bv = -1;
+        for (const f of l.faces) {
+          const v0 = F.vstart[f], n = F.vcount[f], step = Math.max(1, Math.floor(n / 200));
+          for (let v = v0; v < v0 + n; v += step) {
+            const d = P[v * 3] * eye.x + P[v * 3 + 1] * eye.y + P[v * 3 + 2] * eye.z;
+            if (d > best) { best = d; bv = v; }
+          }
+        }
+        const k = l.rimV;
+        const keep = k != null && k >= 0 && P[k * 3] * eye.x + P[k * 3 + 1] * eye.y + P[k * 3 + 2] * eye.z >= best - 0.03 * R;
+        l.rimV = keep ? k : bv;
+        if (l.rimV >= 0) l.pos.set(P[l.rimV * 3], P[l.rimV * 3 + 1], P[l.rimV * 3 + 2]);
+      }
+      const s = this.project(l.pos);
+      if (s.behind) { l.el.style.display = 'none'; if (l.lead) l.lead.style.display = 'none'; continue; }
+      l.el.style.display = '';
+      items.push({ l, ax: s.x, ay: s.y, w: l.el.offsetWidth, h: l.el.offsetHeight });
+    }
+    this._labelsGliding = false;
+    if (!items.length) return;
+    // the part's outline on screen: the convex hull of its mesh's points (up to ~3000 of them) and the label points
+    const pts = [];
+    const n = P ? P.length / 3 : 0, stepP = Math.max(1, Math.floor(n / 3000));
+    const m = new THREE.Matrix4().multiplyMatrices(this.rig.camera.projectionMatrix, this.rig.camera.matrixWorldInverse), p = new THREE.Vector3();
+    for (let i = 0; i < n; i += stepP) {
+      p.set(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]).applyMatrix4(m);
+      pts.push([(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]);
+    }
+    for (const it of items) pts.push([it.ax, it.ay]);
+    const hull = convexHull(pts);
+    // its middle: the outline's area center (the corners' average jumps when a corner comes or goes)
+    let cx = 0, cy = 0, area = 0;
+    for (let i = 0; i < hull.length; i++) {
+      const [x0, y0] = hull[i], [x1, y1] = hull[(i + 1) % hull.length], c = x0 * y1 - x1 * y0;
+      area += c; cx += (x0 + x1) * c; cy += (y0 + y1) * c;
+    }
+    if (Math.abs(area) > 1e-6) { cx /= 3 * area; cy /= 3 * area; } else { cx = hull[0][0]; cy = hull[0][1]; }
+    const reach = (a) => {  // how far from the middle the outline is, looking along angle a
+      const ux = Math.cos(a), uy = Math.sin(a);
+      let best = 0;
+      for (let i = 0; i < hull.length; i++) {
+        const [x0, y0] = hull[i], [x1, y1] = hull[(i + 1) % hull.length];
+        const ex = x1 - x0, ey = y1 - y0, den = ux * ey - uy * ex;
+        if (Math.abs(den) < 1e-9) continue;
+        const t = ((x0 - cx) * ey - (y0 - cy) * ex) / den, u = ((x0 - cx) * uy - (y0 - cy) * ux) / den;
+        if (t > best && u >= -1e-6 && u <= 1 + 1e-6) best = t;
+      }
+      return best;
+    };
+    const dist = (it, a, out) => reach(a) + M + out + Math.abs(Math.cos(a)) * it.w / 2 + Math.abs(Math.sin(a)) * it.h / 2;
+    const spot = (it, a, out) => {
+      const d = dist(it, a, out);
+      let x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
+      x = Math.min(Math.max(x, EDGE + it.w / 2), W - EDGE - it.w / 2);
+      y = Math.min(Math.max(y, EDGE + it.h / 2), H - EDGE - it.h / 2);
+      for (const o of placed) {  // off the toolbar, view cube and triad: up or down, whichever is nearer
+        if (Math.abs(x - o.x) < (it.w + o.w) / 2 + GAP && Math.abs(y - o.y) < (it.h + o.h) / 2 + GAP) {
+          const up = o.y - (it.h + o.h) / 2 - GAP, down = o.y + (it.h + o.h) / 2 + GAP;
+          y = (up - it.h / 2 >= EDGE && Math.abs(up - y) < Math.abs(down - y)) || down + it.h / 2 > H - EDGE ? up : down;
+        }
+      }
+      return [x, y];
+    };
+    // the room each takes round the ring, as an angle: its size across the ray, over how far out it sits
+    const span = (it, a, out) => (Math.abs(Math.sin(a)) * it.w + Math.abs(Math.cos(a)) * it.h + GAP) / Math.max(dist(it, a, out), 40);
+    for (const it of items) { it.want = Math.atan2(it.ay - cy, it.ax - cx); it.a = null; }
+    // as few rings as hold them all: each a row further out, taking every k-th in order
+    // (callouts on the same point keep one order, the order they were added in, so they don't swap places)
+    ring.forEach((l, i) => { l.ringNo = i; });
+    const order = items.slice().sort((a, b) => (Math.abs(a.want - b.want) < 0.03 ? a.l.ringNo - b.l.ringNo : a.want - b.want));
+    const rowH = Math.max(...items.map((it) => it.h)) + GAP;
+    let rings = 1;
+    for (; rings < 4; rings++) {
+      let fits = true;
+      for (let r = 0; r < rings && fits; r++) {
+        fits = order.filter((_, i) => i % rings === r).reduce((t, it) => t + span(it, it.want, r * rowH), 0) <= TAU * 0.92;
+      }
+      if (fits) break;
+    }
+    for (let r = 0; r < rings; r++) {
+      const list = order.filter((_, i) => i % rings === r), out = r * rowH;
+      if (!list.length) continue;
+      for (const it of list) it.out = out;
+      if (list.length === 1) { list[0].a = list[0].want; continue; }
+      // cut the circle where its points are furthest apart, then spread along it: the closest angles to where each
+      // would point with every neighbor at least its room away (pool adjacent violators, which moves smoothly)
+      let cut = 0, gapMax = -1;
+      for (let i = 0; i < list.length; i++) {
+        const g = (list[(i + 1) % list.length].want - list[i].want + TAU) % TAU || TAU;
+        if (g > gapMax) { gapMax = g; cut = (i + 1) % list.length; }
+      }
+      const seq = list.slice(cut).concat(list.slice(0, cut));
+      let a0 = seq[0].want;
+      const want = seq.map((it) => { let w = it.want; while (w < a0) w += TAU; a0 = w; return w; });
+      for (let pass = 0; pass < 3; pass++) {
+        const at = (i) => seq[i].a ?? want[i];
+        let acc = 0;
+        const shift = seq.map((it, i) => (acc += i ? (span(seq[i - 1], at(i - 1), out) + span(it, at(i), out)) / 2 : 0));
+        const blocks = [];
+        seq.forEach((it, i) => {
+          blocks.push({ v: want[i] - shift[i], n: 1, from: i });
+          while (blocks.length > 1 && blocks[blocks.length - 2].v > blocks[blocks.length - 1].v) {
+            const b = blocks.pop(), a = blocks[blocks.length - 1];
+            a.v = (a.v * a.n + b.v * b.n) / (a.n + b.n);
+            a.n += b.n;
+          }
+        });
+        for (const b of blocks) for (let i = b.from; i < b.from + b.n; i++) seq[i].a = b.v + shift[i];
+      }
+    }
+    for (const it of items) {
+      const [x1, y1] = spot(it, it.a, it.out);
+      const l = it.l;
+      let x = x1, y = y1;
+      if (l.ringAt) {  // glide there from where it was drawn last
+        x = l.ringAt[0] + (x1 - l.ringAt[0]) * 0.35;
+        y = l.ringAt[1] + (y1 - l.ringAt[1]) * 0.35;
+        if (Math.hypot(x1 - x, y1 - y) > 0.5) this._labelsGliding = true; else { x = x1; y = y1; }
+      }
+      l.ringAt = [x, y];
+      l.el.style.left = `${x}px`;
+      l.el.style.top = `${y}px`;
+      placed.push({ x: x1, y: y1, w: it.w, h: it.h });
+      // the leader runs from the point to where the line toward the label's middle meets its edge
+      const dx = x - it.ax, dy = y - it.ay;
+      const t = Math.min(dx ? (it.w / 2) / Math.abs(dx) : Infinity, dy ? (it.h / 2) / Math.abs(dy) : Infinity, 1);
+      const ex = x - dx * t, ey = y - dy * t, len = Math.hypot(ex - it.ax, ey - it.ay);
+      if (!l.lead) { l.lead = document.createElement('div'); l.lead.className = `mlead co-lead${l.el.classList.contains('guess') ? ' guess' : ''}`; this.labelLayer.prepend(l.lead); }
+      Object.assign(l.lead.style, { display: len > 2 ? '' : 'none', left: `${it.ax}px`, top: `${it.ay}px`, width: `${len}px`,
+        transform: `rotate(${Math.atan2(ey - it.ay, ex - it.ax)}rad)` });
     }
   }
 

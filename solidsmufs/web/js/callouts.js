@@ -19,6 +19,7 @@ const TAG = 'callouts';
 
 const rgb = (hex) => { const c = new THREE.Color(hex); return [c.r, c.g, c.b]; };
 const bandOf = (b) => BANDS.find((x) => b <= x.max + 1e-9);
+const r0 = (st, i) => (st.res[i].via != null ? st.res[i].via : i);  // the size a frame hangs under, or the callout itself
 const STATUS = { one: 'Found', choices: 'Pick one', none: 'Not found', skip: 'Not on a face', off: 'Left out', mine: 'Your faces' };
 
 export class Callouts {
@@ -42,6 +43,7 @@ export class Callouts {
   _prints() { return this.app.docs.filter((d) => d.path && /\.pdf$/i.test(d.path) && d !== this.doc && !(d.meta?.pdf?.picture)); }
 
   // ================================================================== what each callout is on now
+  // (a frame's guess is the size's it hangs under: r0 finds that size)
   /** {faces, at, what, size} the callout i is on (the user's pick, or what was found), or null. */
   effective(st, i, depth = 0) {
     const c = st.list[i], r = st.res[i];
@@ -51,6 +53,7 @@ export class Callouts {
     if (r.via != null && depth < 2) return this.effective(st, r.via, depth + 1);
     if (r.status === 'one') return r.choices[0];
     if (r.status === 'choices' && pick?.i != null) return r.choices[pick.i] || null;
+    if (r.status === 'choices') return { ...r.choices[0], guess: true };  // the likeliest place until one is chosen
     return null;
   }
 
@@ -147,8 +150,8 @@ export class Callouts {
     const more = [];
     const tol = c.lo != null && c.hi != null ? `${c.lo} – ${c.hi}` : c.tol === 'basic' ? 'basic' : c.tol === 'ref' ? 'reference' : null;
     more.push(h('div', { class: 'co-what' }, [c.type, tol, c.page != null ? `sheet ${c.page + 1}` : null].filter(Boolean).join(' · ')));
-    if (eff) more.push(h('div', { class: 'co-what' }, eff.what));
-    else if (r.status === 'none' || (r.via != null && !eff)) more.push(h('div', { class: 'co-what', text: r.via != null ? `On the size it's attached to (${st.list[r.via].label}), which isn't placed yet.` : 'Nothing on the part is that size. Select its faces and use them.' }));
+    if (eff && !eff.guess) more.push(h('div', { class: 'co-what' }, eff.what));
+    else if (r.status === 'none' || (r.via != null && !eff)) more.push(h('div', { class: 'co-what', text: r.via != null ? `On the size it's attached to (${st.list[r.via].label}), which isn't placed yet.` : `${r.why || 'Nothing on the part is that size.'} Select its faces and use them.` }));
     else if (r.status === 'skip') more.push(h('div', { class: 'co-what', text: 'A note or finish: not found by size. Select its faces and use them if you like.' }));
     if (r.status === 'choices' && r.via == null && !pick.faces && !pick.off) {
       const at = pick.i ?? 0;
@@ -167,7 +170,7 @@ export class Callouts {
         h('span', { text: `${at + 1} of ${Math.min(r.choices.length, r.total)}${r.total > r.choices.length ? ` (of ${r.total})` : ''}: ${r.choices[at].what}` }),
         h('button', { class: 'btn', text: '›', title: 'The next place', onclick: step(1) }),
         pick.i == null ? h('button', { class: 'btn co-use', text: 'Use this', title: 'This is the place: keep it', onclick: step(0) }) : null));
-      if (pick.i == null) more.push(h('div', { class: 'co-what', text: 'Step to the right place and use it: what you choose is kept.' }));
+      if (pick.i == null) more.push(h('div', { class: 'co-what', text: 'Shown on the model at the first place, as a guess (dashed). Step to the right place and use it: what you choose is kept.' }));
     }
     const act = (label, title, fn) => h('button', { class: 'btn', text: label, title, onclick: (e) => { e.stopPropagation(); fn(); this._savePicks(doc, st); this.apply(); this.refresh(); } });
     const faces = (this.app.sel || []).filter((x) => x.kind === 'face').map((x) => x.index);
@@ -261,10 +264,13 @@ export class Callouts {
         const at = e.at ? new THREE.Vector3(...e.at) : v.faceCenter(e.faces[0]);
         if (!at) return;
         const band = st.res[i].band != null ? bandOf(st.res[i].band) : null;
-        const el = v.addKeptLabel(at, '', 'co-label', TAG);
+        // a length points at the face it was put on; a feature at its first (a 4X hole's first hole), at the edge nearest you
+        const el = v.addKeptLabel(at, '', `co-label${e.guess ? ' guess' : ''}`, TAG, { ring: true, faces: e.ends ? null : (e.one || e.faces.slice(0, 1)) });
         el.append(h('b', { text: c.label }), ' ', c.text || '');
+        if (e.guess) el.append(h('i', { class: 'co-q', text: '?' }));
         if (band) el.style.borderLeftColor = band.color;
-        el.title = `${c.type || ''}: ${e.what}`;
+        const r = st.res[r0(st, i)];
+        el.title = e.guess ? `A guess: the first of ${r.total} places it fits (${e.what}). Pick the right one in the list.` : `${c.type || ''}: ${e.what}`;
         el.addEventListener('click', () => { st.open = i; this.app.manager.show('callouts'); this.app.setSelection(e.faces.map((f) => ({ kind: 'face', index: f }))); });
       });
     }

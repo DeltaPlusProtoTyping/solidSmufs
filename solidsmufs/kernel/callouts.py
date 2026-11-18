@@ -28,6 +28,7 @@ from .geom import unit as _unit
 
 IN = 25.4
 MAX_CHOICES = 12
+TOO_MANY = 40  # more places than this: not found
 FULL = 300  # degrees round its axis a cylinder covers to be a whole hole or boss
 
 
@@ -42,7 +43,7 @@ class Shapes:
         for fs in m.edge_faces:
             for a in fs:
                 self.near.setdefault(a, set()).update(b for b in fs if b != a)
-        self._centroids = {}
+        self._centroids, self._ends = {}, {}
         for f, t in enumerate(m.face_type):
             p = m.face_params[f] if f < len(m.face_params) else None
             if not p:
@@ -63,6 +64,11 @@ class Shapes:
             gap = float(np.max(np.diff(np.concatenate([ang, ang[:1] + 360])))) if len(ang) else 360.0
             c["full"] = 360 - gap >= FULL
         self.threads = [g for g in (holes or {}).get("groups", []) if g.get("thread")]
+        try:  # the part's size across (mm), to tell a misread size from a real one
+            b = m.bbox()
+            self.size = float(np.linalg.norm(np.subtract(b[3:], b[:3])))
+        except Exception:
+            self.size = None
 
     def _add_cylinder(self, f, p):
         m = self.m
@@ -94,6 +100,15 @@ class Shapes:
             c = face_centroid(self.m, f)
             self._centroids[f] = None if c is None else [float(v) for v in c]
         return self._centroids[f]
+
+    def ends(self, f, d):
+        """How far along d a face starts and stops."""
+        key = (f, tuple(np.round(d, 6)))
+        if key not in self._ends:
+            pts, _ = self.m.face_triangles(f)
+            t = np.asarray(pts, np.float64) @ d if len(pts) else np.zeros(0)
+            self._ends[key] = (float(t.min()), float(t.max())) if len(t) else ()
+        return self._ends[key]
 
     def at(self, faces):
         pts = [p for p in (self.centroid(f) for f in faces[:1]) if p is not None]
@@ -174,8 +189,14 @@ def _diameter(S, c, unit):
         if found:
             holes = sum(g["hole"] for g in found)
             kind = ("hole" if holes == len(found) else "boss" if not holes else "round feature") + ("" if full else " (partial)")
-            return [{"faces": sorted(f for g in found for f in g["faces"]), "count": len(found),
+            return [{"faces": sorted(f for g in found for f in g["faces"]), "count": len(found), "one": sorted(found[0]["faces"]),
                      "what": f"{len(found)} {kind}{'s' if len(found) > 1 else ''} Ø{_show(2 * found[0]['r'], unit)}", "size": 2 * found[0]["r"]}]
+    # a countersink's (or a chamfered edge's) diameter: where its cone is widest
+    cones = [k for k in S.cones if k.get("radius_max") and _in(2 * k["radius_max"], w)]
+    if cones:
+        return [{"faces": sorted(k["face"] for k in cones), "count": len(cones),
+                 "what": f"{len(cones)} countersink or chamfer face{'s' if len(cones) > 1 else ''} Ø{_show(2 * cones[0]['radius_max'], unit)} across",
+                 "size": 2 * cones[0]["radius_max"]}]
     return []
 
 
@@ -187,7 +208,7 @@ def _across(S, c, unit):
         return []
     holes = sum(g["hole"] for g in found)
     kind = "hole" if holes == len(found) else "boss" if not holes else "round feature"
-    return [{"faces": sorted(f for g in found for f in g["faces"]), "count": len(found),
+    return [{"faces": sorted(f for g in found for f in g["faces"]), "count": len(found), "one": sorted(found[0]["faces"]),
              "what": f"across {len(found)} {kind}{'s' if len(found) > 1 else ''} Ø{_show(2 * found[0]['r'], unit)}", "size": 2 * found[0]["r"]}]
 
 
@@ -211,7 +232,7 @@ def _thread(S, c):
     if found:
         faces = sorted(f for g in found for f in g["faces"])
         n = sum(g["count"] for g in found)
-        return [{"faces": faces, "count": n, "what": f"{n} hole{'s' if n > 1 else ''} with a modelled or Hole Wizard {key} thread"}]
+        return [{"faces": faces, "count": n, "one": sorted(found[0]["faces"]), "what": f"{n} hole{'s' if n > 1 else ''} with a modelled or Hole Wizard {key} thread"}]
     drilled, major, shafts = [], [], []  # a hole drilled for it (tap drill, minor diameter); one drawn at its major
     for g in S.cyl:
         if not g["full"]:
@@ -229,7 +250,7 @@ def _thread(S, c):
     if not out:
         return []
     holes = sum(g["hole"] for g in out)
-    return [{"faces": sorted(f for g in out for f in g["faces"]), "count": len(out),
+    return [{"faces": sorted(f for g in out for f in g["faces"]), "count": len(out), "one": sorted(out[0]["faces"]),
              "what": f"{len(out)} {'hole' if holes else 'shaft'}{'s' if len(out) > 1 else ''} sized for {key}"}]
 
 
@@ -242,6 +263,16 @@ def _levels(S, d):
     for g in S.cyl:
         if g["full"] and abs(g["a"] @ d) < 1e-6:
             lv.append(("axis", float(g["c"] @ d), g["faces"]))
+    # where round faces along it start and stop: a hole's or countersink's depth, a step on a turned part (only
+    # where no flat face already is)
+    flats = [x[1] for x in lv if x[0] == "face"]
+    rounds = [(f, _unit(g["a"])) for g in S.cyl for f in g["faces"]] + [(k["face"], _unit(k["axis"])) for k in S.cones]
+    for f, a in rounds:
+        if abs(abs(a @ d) - 1) > 1e-6:
+            continue
+        for off in S.ends(f, d):
+            if not any(abs(off - x) < 1e-3 for x in flats):
+                lv.append(("end", off, [f]))
     merged = []
     for kind, off, faces in sorted(lv, key=lambda x: x[1]):
         same = next((x for x in merged if x["kind"] == kind and abs(x["off"] - off) < 1e-4), None)
@@ -269,8 +300,11 @@ def _linear(S, c, unit):
                     break
                 if gap < w[0]:
                     continue
-                rank = {("face", "face"): 0, ("axis", "face"): 1, ("face", "axis"): 1}.get((a["kind"], b["kind"]), 2)
-                what = {0: "2 parallel faces", 1: "a face and a hole's axis", 2: "two holes' axes"}[rank]
+                pair = frozenset((a["kind"], b["kind"]))
+                rank, what = {frozenset(["face"]): (0, "2 parallel faces"), frozenset(["face", "axis"]): (1, "a face and a hole's axis"),
+                              frozenset(["face", "end"]): (2, "a face and where a round face ends (a depth)"),
+                              frozenset(["axis"]): (3, "two holes' axes"), frozenset(["end", "axis"]): (4, "a hole's axis and where a round face ends"),
+                              frozenset(["end"]): (5, "where two round faces end")}[pair]
                 pa, pb = S.at(a["faces"]), S.at(b["faces"])
                 at = pa if a["kind"] == "face" else pb if b["kind"] == "face" else pa  # on a face (between them is in the part)
                 found.append((rank, abs(gap - nom), {"faces": sorted(set(a["faces"] + b["faces"])), "what": f"{what} {_show(gap, unit)} apart",
@@ -335,19 +369,45 @@ def _chamfer(S, c, unit):
     return [{"faces": sorted(set(faces)), "count": len(set(faces)), "what": f"{len(set(faces))} chamfer face{'s' if len(set(faces)) > 1 else ''}"}] if faces else []
 
 
+def _dim(S, c, unit):
+    if (c.get("type") or "") == "Diameter" or "Ø" in (c.get("text") or ""):
+        return _diameter(S, c, unit)
+    if c.get("type") == "Radius":
+        return _radius(S, c, unit)
+    # no two faces that far apart: a diameter dimensioned across a side view (or its Ø not read)
+    return _linear(S, c, unit) or _across(S, c, unit)
+
+
 def _one(S, c, unit):
     kind, typ = c.get("kind"), c.get("type") or ""
     if kind == "thread":
         return _thread(S, c)
+    if c.get("nominal") is None and c.get("lo") is not None and c.get("hi") is not None:
+        c = {**c, "nominal": (c["lo"] + c["hi"]) / 2}  # limits, 4.910 / 4.830: anywhere between
     if c.get("nominal") is None:
         return None
     if kind == "dim":
-        if typ == "Diameter" or "Ø" in (c.get("text") or ""):
-            return _diameter(S, c, unit)
-        if typ == "Radius":
-            return _radius(S, c, unit)
-        # no two faces that far apart: a diameter dimensioned across a side view (or its Ø not read)
-        return _linear(S, c, unit) or _across(S, c, unit)
+        found = _dim(S, c, unit)
+        if found or unit != "in" or S.size is None:
+            return found
+        # a size this part can't have (bigger than it) is most likely misread, often by OCR: its decimal point
+        # lost (Ø 225 for Ø.225), or its degree sign (45.00 for an angle)
+        nom, num = c["nominal"], re.search(r"\d+(?:[.,]\d+)?", re.sub(r"^\s*\d+\s*X\s*", "", c.get("text") or ""))
+        if nom * IN <= S.size:
+            return found
+        if num and not re.search(r"[.,]", num.group()) and len(num.group()) <= 4:
+            k = 10 ** len(num.group())
+            again = _dim(S, {**c, "nominal": nom / k, **{x: c[x] / k for x in ("lo", "hi") if c.get(x) is not None}}, unit)
+            for ch in again:
+                ch["what"] += f" (read as .{num.group()})"
+            if again:
+                return again
+        if nom <= 180 and (c.get("type") or "") not in ("Diameter", "Radius") and "Ø" not in (c.get("text") or ""):
+            again = _angle(S, c, unit)
+            for ch in again:
+                ch["what"] += " (read as an angle)"
+            return again
+        return found
     if kind == "angle":
         return _angle(S, c, unit)
     if kind == "chamfer":
@@ -358,6 +418,8 @@ def _one(S, c, unit):
 def _result(S, found):
     if found is None:
         return {"status": "skip", "choices": [], "total": 0}
+    if len(found) > TOO_MANY:  # a size that fits that many places says nothing about where it is (a misread, often)
+        return {"status": "none", "choices": [], "total": len(found), "why": f"It fits {len(found)} places on the part, too many to tell which."}
     for ch in found:
         if ch.get("at") is None:
             ch["at"] = S.at(ch["faces"])

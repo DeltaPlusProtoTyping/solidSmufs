@@ -144,6 +144,11 @@ class OnTheModel(unittest.TestCase):
         self.assertEqual(r["status"], "one")
         self.assertAlmostEqual(r["choices"][0]["size"], 4 * IN, places=3)
 
+    def test_decimal_point_lost(self):  # OCR's "Ø 250" on an inch print: no part has a 250 in hole
+        r = self.run_on([size("4X Ø 250", 250, typ="Diameter", count=4, places=0)])["results"][0]
+        self.assertEqual(r["status"], "one")
+        self.assertIn("read as .250", r["choices"][0]["what"])
+
     def test_nothing_that_size(self):
         r = self.run_on([size("Ø.500", 0.5, 0.499, 0.501, typ="Diameter")])
         self.assertEqual(r["results"][0]["status"], "none")
@@ -177,6 +182,84 @@ class OffThePrint(unittest.TestCase):
         self.assertEqual(path.read_bytes(), before)
 
 
+class DrawnSymbols(unittest.TestCase):
+    """Symbols some CAD exports draw as lines, not text: read into the callout they're in."""
+
+    def test_read(self):
+        import pymupdf
+
+        from solidsmufs.kernel.pdfdoc import PdfFile
+        from solidsmufs.kernel.pdfedit import PdfEditor
+
+        d = Path(tempfile.mkdtemp(prefix="ss-sym-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        path = d / "print.pdf"
+        doc = pymupdf.open()
+        pg = doc.new_page(width=792, height=612)
+
+        def text(x, y, s):
+            pg.insert_text((x, y), s, fontsize=10, fontname="helv")
+            return x + pymupdf.get_text_length(s, fontname="helv", fontsize=10)
+
+        def pm(x, y):  # ± as two flats and an upright, 4.6 wide
+            sh = pg.new_shape()
+            sh.draw_line((x, y - 5.5), (x + 4.6, y - 5.5))
+            sh.draw_line((x + 2.3, y - 7.8), (x + 2.3, y - 3.2))
+            sh.draw_line((x, y), (x + 4.6, y))
+            sh.finish(width=0.5, color=(0, 0, 0))
+            sh.commit()
+            return x + 4.6
+
+        def dia(x, y):  # Ø as a circle and a slash
+            sh = pg.new_shape()
+            sh.draw_circle((x + 3.5, y - 3.5), 3.2)
+            sh.draw_line((x + 0.5, y + 1), (x + 6.5, y - 8))
+            sh.finish(width=0.5, color=(0, 0, 0))
+            sh.commit()
+            return x + 7
+
+        x = text(100, 100, "15.00")
+        x = pm(x + 3, 100)
+        text(x + 3, 100, "0.25")
+        x = dia(100, 200)
+        text(x + 3, 200, "3.20")
+        x = text(300, 300, "10.00")
+        text(x + 3, 295, "0.00")
+        text(x + 3, 305, "-0.36")
+        doc.save(path)
+        doc.close()
+        pdf = PdfFile(str(path))
+        self.addCleanup(pdf.close)
+        r = PdfEditor(pdf, path).run("callouts", {"extra": {"unit": "mm", "pages": {}}})
+        got = {c["nominal"]: c for c in r["callouts"] if c["kind"] == "dim"}
+        self.assertEqual((got[15.0]["lo"], got[15.0]["hi"]), (14.75, 15.25), r["callouts"])
+        self.assertIn("Ø", got[3.2]["text"])
+        self.assertEqual(got[3.2]["type"], "Diameter")
+        self.assertAlmostEqual(got[10.0]["lo"], 9.64)
+        self.assertAlmostEqual(got[10.0]["hi"], 10.0)
+        self.assertNotIn(0.25, got)  # the tolerance isn't a size of its own
+
+    def test_parse(self):
+        from solidsmufs.kernel import balloons
+
+        kinds = lambda t: [(i["kind"], i["nominal"], i["plus"]) for i in balloons.parse(t, "mm")]  # noqa: E731
+        self.assertEqual(kinds("0.50 ±0.25 X 45°"), [("chamfer", 0.5, 0.25)])
+        self.assertEqual(kinds("Ø 4.20 ±0.20 X 90° ± 5°"), [("dim", 4.2, 0.2), ("angle", 90.0, 5.0)])  # a countersink
+
+
+class Misreads(unittest.TestCase):
+    def test_countersink_diameter(self):
+        from types import SimpleNamespace
+        S = SimpleNamespace(spheres=[], cyl=[], cones=[{"face": 7, "radius_min": 1.6, "radius_max": 2.1}])
+        found = callouts._diameter(S, size("Ø4.20 ±0.20", 4.2, 4.0, 4.4, typ="Diameter"), "mm")
+        self.assertEqual(found[0]["faces"], [7])
+
+    def test_too_many_places(self):
+        r = callouts._result(None, [{"faces": [i], "at": [0, 0, 0]} for i in range(callouts.TOO_MANY + 1)])
+        self.assertEqual(r["status"], "none")
+        self.assertIn("too many", r["why"])
+
+
 class Bands(unittest.TestCase):
     def test_band(self):
         self.assertAlmostEqual(callouts.band_in({"kind": "dim", "lo": 0.248, "hi": 0.252}, "in"), 0.004)
@@ -188,6 +271,19 @@ class Bands(unittest.TestCase):
         self.assertTrue(lo < 3.0 < 3.7 < hi < 3.8)
         lo, hi = callouts.window({"nominal": 4.0, "lo": None, "hi": 4.0}, "mm")
         self.assertTrue(2.9 < lo < 3.1 and 3.99 < hi < 4.01)
+
+
+class Depths(unittest.TestCase):
+    def test_depth_to_where_a_countersink_ends(self):  # an end face, and a countersink 4.2 into it (no flat face there)
+        import numpy as np
+        from types import SimpleNamespace
+        d = np.array([1.0, 0, 0])
+        S = SimpleNamespace(planes=[{"face": 0, "n": d, "off": 0.0}], cyl=[], cones=[{"face": 1, "axis": [1, 0, 0]}],
+                            directions=lambda: [d], ends=lambda f, dd: (4.2, 5.0), at=lambda faces: [0, 0, 0])
+        found = callouts._linear(S, size("4.20", 4.2), "mm")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["faces"], [0, 1])
+        self.assertIn("depth", found[0]["what"])
 
 
 class Angles(unittest.TestCase):

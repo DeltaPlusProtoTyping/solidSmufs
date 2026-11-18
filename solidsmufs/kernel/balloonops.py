@@ -60,6 +60,7 @@ OURS = (SUBJECT, VIEW, LEADER)
 RED = (0.82, 0.07, 0.07)
 VIEW_COLORS = ["#1f77b4", "#e67e22", "#2a9d48", "#8e44ad", "#00838f", "#b8860b", "#c2185b", "#5d6d7e"]
 ORDERS = ("list", "rows", "columns", "clockwise")
+SYMBOLS = ("±", "Ø", "°", "↧", "⌴", "⌵")  # what _drawn_symbols tells from linework
 
 
 def _rgb(color):
@@ -416,30 +417,82 @@ class BalloonOps:
         read where it has none."""
         import pymupdf
         rot, lines, own = pg.rotation_matrix, [], self._balloon_rects(pg)
+        found = []  # (vert, down, [(text, box)]) per line of the page's text
         for block in pg.get_text("dict").get("blocks", []):
             for line in block.get("lines", []):
                 dx, dy = line.get("dir", (1, 0))
                 d = pymupdf.Point(dx, dy) * pymupdf.Matrix(rot.a, rot.b, rot.c, rot.d, 0, 0)
                 vert = abs(d.y) > abs(d.x)
-                down = vert and d.y > 0
-                pieces = []
-                for s in line.get("spans", []):  # spans far apart on one baseline are callouts of their own
+                spans = []
+                for s in line.get("spans", []):
                     b = pymupdf.Rect(s["bbox"]) * rot
                     b.normalize()
-                    if not s["text"].strip():
+                    if s["text"].strip():
+                        spans.append((s["text"], b))
+                if spans:
+                    found.append((vert, vert and d.y > 0, spans))
+        # symbols some CAD exports draw as linework, not text (±, Ø, °, depth, counterbore, countersink): each goes
+        # into the line of text it sits in, where it is along it
+        flat = [i for i, (vert, _, _) in enumerate(found) if not vert]
+        for sym in self._drawn_symbols(pg):
+            x0, y0, x1, y1 = sym["box"]
+            cy, best = (y0 + y1) / 2, None
+            for i in flat:
+                spans = found[i][2]
+                lx0, ly0 = min(b.x0 for _, b in spans), min(b.y0 for _, b in spans)
+                lx1, ly1 = max(b.x1 for _, b in spans), max(b.y1 for _, b in spans)
+                h = ly1 - ly0
+                if not (ly0 - 0.15 * h <= cy <= ly1 + 0.15 * h and max(x1 - x0, y1 - y0) <= 1.05 * h):
+                    continue
+                dist = max(lx0 - x1, x0 - lx1, 0.0)
+                # Ø, depth, counterbore and countersink come before their size, ° after its number
+                wrong = sym["c"] in "Ø↧⌴⌵" and lx0 < x0 or sym["c"] == "°" and lx1 > x1
+                if dist <= 1.2 * h and (best is None or (wrong, dist) < best[0]):
+                    best = ((wrong, dist), i)
+            if best:
+                found[best[1]][2].append((sym["c"], pymupdf.Rect(x0, y0, x1, y1)))
+        for vert, down, spans in found:
+            if not vert:
+                spans.sort(key=lambda sb: sb[1].x0)
+            pieces = []
+            texth = max((min(b.width, b.height) for t, b in spans if t not in SYMBOLS), default=1.0) or 1.0
+            for text, b in spans:  # spans far apart on one baseline are callouts of their own
+                if own and re.fullmatch(r"\d+(?:\.\d+)?", text.strip()) and any(
+                        o[0] <= (b.x0 + b.x1) / 2 <= o[2] and o[1] <= (b.y0 + b.y1) / 2 <= o[3] for o in own):
+                    continue  # a balloon's own number
+                h = texth if text in SYMBOLS else (min(b.width, b.height) or 1.0)
+                last = pieces[-1] if pieces else None
+                gap = None if last is None else (b.y0 - last["box"][3] if down else last["box"][1] - b.y1 if vert else b.x0 - last["box"][2])
+                if last is not None and -h <= gap <= 1.4 * h:
+                    tight = gap < 0.12 * h or last["text"].endswith(" ") or text.startswith(" ") or text == "°"
+                    last.update(text=last["text"] + ("" if tight else " ") + text, box=balloons._union(last["box"], [b.x0, b.y0, b.x1, b.y1]))
+                else:
+                    pieces.append({"text": text, "box": [b.x0, b.y0, b.x1, b.y1], "vert": vert, "down": down})
+            lines += [p for p in pieces if p["text"].strip() and p["text"].strip() not in SYMBOLS]
+        # one callout the export split into separate lines of text, nearly touching on one baseline ("−" and "0.36")
+        flat = sorted((ln for ln in lines if not ln["vert"]), key=lambda ln: (ln["box"][1], ln["box"][0]))
+        gone = set()
+        for a in flat:
+            if id(a) in gone:
+                continue
+            while True:
+                ah = a["box"][3] - a["box"][1]
+                nxt = None
+                for b in flat:
+                    if b is a or id(b) in gone:
                         continue
-                    if own and re.fullmatch(r"\d+(?:\.\d+)?", s["text"].strip()) and any(
-                            o[0] <= (b.x0 + b.x1) / 2 <= o[2] and o[1] <= (b.y0 + b.y1) / 2 <= o[3] for o in own):
-                        continue  # a balloon's own number
-                    h = min(b.width, b.height) or 1.0
-                    last = pieces[-1] if pieces else None
-                    gap = None if last is None else (b.y0 - last["box"][3] if down else last["box"][1] - b.y1 if vert else b.x0 - last["box"][2])
-                    if last is not None and -h <= gap <= 1.4 * h:
-                        joined = last["text"] + ("" if gap < 0.12 * h or last["text"].endswith(" ") or s["text"].startswith(" ") else " ") + s["text"]
-                        last.update(text=joined, box=balloons._union(last["box"], [b.x0, b.y0, b.x1, b.y1]))
-                    else:
-                        pieces.append({"text": s["text"], "box": [b.x0, b.y0, b.x1, b.y1], "vert": vert, "down": down})
-                lines += [p for p in pieces if p["text"].strip()]
+                    bh = b["box"][3] - b["box"][1]
+                    gap = b["box"][0] - a["box"][2]
+                    if abs(bh - ah) <= 0.25 * max(ah, bh) and abs((b["box"][1] + b["box"][3]) - (a["box"][1] + a["box"][3])) / 2 <= 0.2 * ah \
+                            and -0.1 * ah <= gap <= 0.45 * ah and (nxt is None or gap < nxt[0]):
+                        nxt = (gap, b)
+                if not nxt:
+                    break
+                b = nxt[1]
+                a["text"] = a["text"].rstrip() + " " + b["text"].lstrip()
+                a["box"] = balloons._union(a["box"], b["box"])
+                gone.add(id(b))
+        lines = [ln for ln in lines if id(ln) not in gone]
         mine = [ln["box"] for ln in lines]
         for text, x0, y0, x1, y1 in (extra or {}).get("ocr", []):
             cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -477,6 +530,67 @@ class BalloonOps:
             if closed:
                 sides = len(items) + (1 if path.get("closePath") and abs(first.x - last.x) + abs(first.y - last.y) >= 0.5 else 0)
                 out.append((r.x0, r.y0, r.x1, r.y1, sides))
+        return out
+
+    @staticmethod
+    def _drawn_symbols(pg):
+        """Drawing symbols drawn as linework rather than typed: [{"c": the character, "box": [x0, y0, x1, y1]}], as the
+        page is shown. Told by their strokes: ± two short flats and an upright; Ø a circle with a slash through it; °
+        a small circle; ↧ (depth) a bar over an arrow; ⌴ (counterbore) two uprights and a flat; ⌵ (countersink) a V."""
+        import pymupdf
+        rot, out = pg.rotation_matrix, []
+        try:
+            paths = pg.get_drawings()
+        except Exception:
+            return out
+        for path in paths:
+            r = pymupdf.Rect(path["rect"]) * rot
+            r.normalize()
+            size = max(r.width, r.height)
+            if not 1.2 <= size <= 16 or path.get("fill") is not None and path.get("type") == "f":
+                continue
+            items = path.get("items", [])
+            if not items or len(items) > 120:
+                continue
+            flats = ups = slants = bits = 0
+            seen = set()
+            for it in items:
+                if it[0] == "c":
+                    bits += 4
+                    continue
+                if it[0] != "l":
+                    break
+                key = tuple(sorted([(round(it[1].x, 1), round(it[1].y, 1)), (round(it[2].x, 1), round(it[2].y, 1))]))
+                if key in seen:
+                    continue  # a stroke drawn back over (a path closed on its last line)
+                seen.add(key)
+                a, b = pymupdf.Point(it[1]) * rot, pymupdf.Point(it[2]) * rot
+                dx, dy = abs(b.x - a.x), abs(b.y - a.y)
+                if max(dx, dy) < 0.3 * size:
+                    bits += 1  # a piece of a curve
+                elif dy < 0.15 * dx:
+                    flats += 1
+                elif dx < 0.15 * dy:
+                    ups += 1
+                else:
+                    slants += 1
+            else:
+                round_ = bits >= 8
+                c = None
+                if round_ and slants == 1 and not flats and not ups:
+                    c = "Ø"
+                elif round_ and not (flats or ups or slants) and size <= 4.5:
+                    c = "°"
+                elif not bits and flats == 2 and ups == 1 and not slants and r.height >= r.width:
+                    c = "±"
+                elif not bits and flats == 1 and ups >= 1 and slants == 2:
+                    c = "↧"
+                elif not bits and flats == 1 and ups == 2 and not slants:
+                    c = "⌴"
+                elif not bits and slants == 2 and not flats and not ups:
+                    c = "⌵"
+                if c:
+                    out.append({"c": c, "box": [r.x0, r.y0, r.x1, r.y1]})
         return out
 
     @staticmethod

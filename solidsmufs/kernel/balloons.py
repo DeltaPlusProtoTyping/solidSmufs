@@ -27,12 +27,14 @@ _PRE = r"(?:[⌴⌵↧]\s*(?:Ø|R(?=[\d.,]))?|SØ|SR(?=[\d.,])|Ø|R(?=[\d.,])|�
 THREAD = re.compile(r"(?<![\w.])(?:(?:#\d{1,2}|\d+/\d+|\d*\.\d+|\d+)\s*-\s*\d{1,2}(?:\.\d)?\s*(?:UNJC|UNJF|UNEF|UNC|UNF|UNS|UN|NPTF|NPT)"
                     r"(?:\s*-\s*[123][AB])?|M\d+(?:[.,]\d+)?(?:\s*X\s*\d+(?:[.,]\d+)?)?(?:\s*-\s*\d[a-hA-H]\d?[a-hA-H]?)?(?![\w]))")
 FINISH = re.compile(r"(?<![\w.])(?:(?:Ra|RA|RMS)\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*(?:Ra|RA|RMS|µin|μin|µm|μm)(?!\w)|\d+\s*√|√\s*\d+(?:[.,]\d+)?)")
-CHAMFER = re.compile(rf"(?<![\w.,/:#])(?P<num>{NUM})\s*X\s*(?P<ang>{NUM})\s*°")
+# (not a countersink's Ø4.20 ±0.20 X 90°, nor its tolerance; a chamfer may have its own: 0.50 ±0.25 X 45°)
+CHAMFER = re.compile(rf"(?<![\w.,/:#±Ø])(?<![±Ø]\s)(?P<num>{NUM})(?:\s*(?P<pm>±\s*{NUM}))?\s*X\s*(?P<ang>{NUM})\s*°")
 ANGLE = re.compile(rf"(?<![\w.,/:#])(?P<num>{NUM})\s*°(?:\s*(?P<pm>±\s*{NUM})\s*°?)?")
 LIMITS = re.compile(rf"(?<![\w.,/:#+±-])(?P<pre>{_PRE})?\s*(?P<a>{DEC})\s*[-–/]\s*(?P<b>{DEC})(?![\w.,/:°])")
 DIM = re.compile(rf"(?<![\w.,/:#+±-])(?P<pre>{_PRE})?\s*(?P<num>{NUM})"
                  rf"(?:\s*(?P<pm>±\s*{NUM})|\s*(?P<up>\+\s*{NUM})(?:\s*/?\s*(?P<dn>[-–]\s*{NUM}))?)?(?:\s*(?P<lim>MAX|MIN)\b)?(?![\w,/:°]|\.\d)")
 SIGNED = re.compile(rf"^(?P<sign>[+\-–±])\s*(?P<num>{NUM})$")
+ZERO = re.compile(r"^\+?\s*0?[.,]0+$")
 SIGNED2 = re.compile(rf"^\+\s*(?P<up>{NUM})\s*/?\s*[-–]\s*(?P<dn>{NUM})$")
 COUNT = re.compile(r"^(?P<n>\d{1,3})\s*X(?:\s+|(?=[Ø⌴⌵↧R.#M\d]))")
 PLACES = re.compile(r"\(?\b(?P<n>\d{1,3})\s*(?:PLACES|PLCS|PLC|PL|HOLES)\b\.?\)?")
@@ -157,7 +159,10 @@ def parse(text, unit=None):
             add(m, "finish")
     for m in CHAMFER.finditer(t):
         if free(*m.span()):
-            add(m, "chamfer", nominal=_f(m.group("num")), places=_places(m.group("num")))
+            it = add(m, "chamfer", nominal=_f(m.group("num")), places=_places(m.group("num")))
+            if m.group("pm"):
+                d = _f(m.group("pm")[1:])
+                it.update(plus=d, minus=d, tol="print")
     for m in ANGLE.finditer(t):
         if free(*m.span()):
             it = add(m, "angle", nominal=_f(m.group("num")), places=_places(m.group("num")))
@@ -428,6 +433,9 @@ def read(lines, frames=(), unit=None, tols=None, size=(612.0, 792.0), notes=True
         m2, m1 = SIGNED2.match(t), SIGNED.match(t)
         if m2:
             signed.append((ln, {"plus": _f(m2.group("up")), "minus": _f(m2.group("dn")), "ps": m2.group("up"), "ms": m2.group("dn")}))
+            continue
+        if ZERO.match(t):  # the +0 over a stacked tolerance's minus: 10.00 with 0.00 over -0.36
+            signed.append((ln, {"plus": 0.0, "ps": t.strip().lstrip("+").strip()}))
             continue
         if m1:
             d, raw = _f(m1.group("num")), m1.group("num")
