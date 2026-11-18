@@ -106,6 +106,9 @@ class PdfEditor(BalloonOps):
         self.next_gen = 1
         from .. import recovery
         self.original = recovery.stamp(self.path)  # the file as it was when the edits began (autosave tells if it changed)
+        self.base = getattr(pdf, "raw", None)  # its bytes then: an appended save adds to these
+        self.guards = self._guards()
+        self.guards_ok = False  # told that saving would undo them, and saved anyway
 
     @property
     def fz(self):
@@ -1510,18 +1513,181 @@ class PdfEditor(BalloonOps):
             if os.path.exists(tmp):
                 os.remove(tmp)
 
-    def op_save(self, path=None):
-        """Save the edits: to the file it came from, or (Save As) to `path`, which it then is."""
+    # A signed PDF, a PDF/A or an XFA form is written as other programs expect only when what changed is added to
+    # the end of the file, as Acrobat does it, leaving the bytes that were signed (or checked) as they were. A save
+    # does that when the edits are comments, balloons or filled-in fields; an edit to the pages themselves can't be
+    # added that way, so before such a save the window says what it would undo, and offers a copy instead.
+    def _guards(self):
+        """What about this PDF a whole rewrite would undo: {"signed": [who], "certified": P (1 no changes, 2 forms,
+        3 comments too) or None, "pdfa": "PDF/A-2b" or None, "xfa": bool}."""
+        doc, out = self.fz, {"signed": [], "certified": None, "pdfa": None, "xfa": False}
+        try:
+            cat = doc.pdf_catalog()
+            for x in range(1, doc.xref_length()):
+                try:
+                    obj = doc.xref_object(x, compressed=True)
+                except Exception:
+                    continue
+                if "/ByteRange" in obj and "/Contents" in obj:
+                    m = re.search(r"/Name\s*\(([^)]*)\)", obj)
+                    out["signed"].append(m.group(1) if m else "")
+            kind, val = doc.xref_get_key(cat, "Perms/DocMDP")
+            if kind == "xref":
+                m = re.search(r"/P\s+(\d)", doc.xref_object(int(val.split()[0]), compressed=True))
+                out["certified"] = int(m.group(1)) if m else 2
+            meta = doc.get_xml_metadata() or ""
+            m = re.search(r"pdfaid:part\s*=\s*[\"'](\d)|<pdfaid:part>(\d)", meta)
+            if m:
+                c = re.search(r"pdfaid:conformance\s*=\s*[\"'](\w)|<pdfaid:conformance>(\w)", meta)
+                out["pdfa"] = f"PDF/A-{m.group(1) or m.group(2)}{((c.group(1) or c.group(2)) if c else '').lower()}"
+            out["xfa"] = doc.xref_get_key(cat, "AcroForm/XFA")[0] not in ("null", "none")
+        except Exception:
+            pass
+        return out
+
+    def _guarded(self):
+        g = self.guards
+        return bool(g["signed"] or g["certified"] or g["pdfa"] or g["xfa"])
+
+    def _changes(self, T):
+        """How the document now differs from the file it came from (opened as T): (objects to write [(xref, object,
+        raw stream or None)], whether the pages themselves changed, whether anything besides comments did)."""
+        cur = self.fz
+        n0, n1 = T.xref_length(), cur.xref_length()
+        mine = set()  # the pages' own makings: page objects, their contents and resources, the page tree
+        pages_changed = cur.page_count != T.page_count or [p.xref for p in cur] != [p.xref for p in T]
+        for pg in T:
+            mine.update(pg.get_contents())
+            kind, val = T.xref_get_key(pg.xref, "Resources")
+            if kind == "xref":
+                mine.add(int(val.split()[0]))
+        todo, other = [], False
+        for x in range(1, n1):
+            new = cur.xref_object(x, compressed=True)
+            raw_new = cur.xref_stream_raw(x) if cur.xref_is_stream(x) else None
+            if x < n0:
+                if T.xref_is_stream(x) and T.xref_get_key(x, "Type")[1] in ("/ObjStm", "/XRef"):
+                    if new.strip() not in ("null", "") and new != T.xref_object(x, compressed=True):
+                        pages_changed = True  # an edit took a number the file uses for its own (can't be added on)
+                    continue  # the file's own containers: what's in them stays where it is
+                old = T.xref_object(x, compressed=True)
+                raw_old = T.xref_stream_raw(x) if T.xref_is_stream(x) else None
+                if new == old and raw_new == raw_old:
+                    continue
+                if x in mine or T.xref_get_key(x, "Type")[1] == "/Pages":
+                    pages_changed = True
+                elif T.xref_get_key(x, "Type")[1] == "/Page":
+                    strip = lambda s: re.sub(r"/Annots\s*(\[[^\]]*\]|\d+ 0 R)", "", s)  # noqa: E731
+                    if strip(new) != strip(old):
+                        pages_changed = True
+                elif x == T.pdf_catalog():
+                    other = True  # (balloon records, attached photos)
+            todo.append((x, new, raw_new))
+        return todo, pages_changed, other or pages_changed
+
+    def _append_save(self, target):
+        """Save by adding what changed to the end of the file it came from, leaving its bytes as they were. False
+        when that can't be done (the pages themselves changed, or a check after failed)."""
+        import pymupdf
+        if not self.base or self.fz.is_encrypted or self.fz.needs_pass:
+            return False
+        fd, tmp = tempfile.mkstemp(prefix=".~", suffix=".pdf")
+        os.close(fd)
+        try:
+            Path(tmp).write_bytes(self.base)
+            T = pymupdf.open(tmp)
+            try:
+                todo, pages_changed, _ = self._changes(T)
+                if pages_changed:
+                    return False
+                while T.xref_length() < self.fz.xref_length():
+                    T.get_new_xref()
+                for x, obj, raw in todo:
+                    T.update_object(x, obj)
+                    if raw is not None:
+                        T.update_stream(x, raw, compress=False)
+                        T.update_object(x, obj)  # (the stream's dictionary as it was: its filters and length)
+                T.save(tmp, incremental=True, encryption=pymupdf.PDF_ENCRYPT_KEEP)
+            finally:
+                T.close()
+            used = pymupdf.open(tmp)
+            n_used = used.xref_length()  # (the update's own index may have taken a number: edits from now on take later ones)
+            used.close()
+            data = Path(tmp).read_bytes()
+            check = pymupdf.open(stream=data, filetype="pdf")
+            ok = (data[:len(self.base)] == self.base and not check.is_repaired and check.page_count == self.fz.page_count
+                  and [len(list(p.annots() or [])) for p in check] == [len(list(p.annots() or [])) for p in self.fz])
+            check.close()
+            if not ok:
+                return False
+            try:
+                os.replace(tmp, target)
+            except PermissionError:
+                raise ValueError(f"{Path(target).name} can't be written: it's open in another program, or the folder is read-only.") from None
+            while self.fz.xref_length() < n_used:
+                self.fz.get_new_xref()
+            return True
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+    def _what_breaks(self):
+        """What a whole rewrite would undo, said for the window, or None when nothing would."""
+        g, said = self.guards, []
+        if g["signed"]:
+            who = ", ".join(n for n in g["signed"] if n) or None
+            said.append(f"It's digitally signed{f' by {who}' if who else ''}: the signature would show as invalid in Acrobat and other readers.")
+        if g["certified"]:
+            said.append("It's certified, and its certification would be broken.")
+        if g["pdfa"]:
+            said.append(f"It says it's {g['pdfa']} (archival): Acrobat may flag it as no longer meeting that.")
+        if g["xfa"]:
+            said.append("It has an XFA form, which is likely to stop working in Acrobat.")
+        return said or None
+
+    def op_save(self, path=None, changedOk=False, guardsOk=False):
+        """Save the edits: to the file it came from, or (Save As) to `path`, which it then is. When the file changed
+        on disk since it was opened (another program saved it), or a whole rewrite would undo a signature, PDF/A or
+        XFA form, nothing is written and the window is asked first: result {"ask": {"kind", "title", "text", "go"}}."""
         from .. import recovery
         target = Path(path or self.path)
-        self._save_doc(self.fz, target)
+        same = os.path.normcase(os.path.abspath(str(target))) == os.path.normcase(os.path.abspath(self.path))
+        now = recovery.stamp(target)
+        if same and not changedOk and self.original and now and (abs(now[0] - self.original[0]) > 1 or now[1] != self.original[1]):
+            return self._answer([], result={"ask": {
+                "kind": "changed", "title": "Changed by another program",
+                "text": f"{target.name} was changed by another program after you opened it here. Saving over it "
+                        "loses those changes.", "go": "Overwrite"}})
+        appended = False
+        if self._guarded() and not self.guards_ok:
+            certified = self.guards["certified"]
+            comments_ok = certified is None or certified >= 3
+            if comments_ok:
+                appended = self._append_save(target)
+            if not appended and not guardsOk:
+                why = self._what_breaks()
+                if certified and not comments_ok:
+                    why.append("Its certification allows " + ("no changes at all." if certified == 1 else "filling in its form, not comments."))
+                else:
+                    why.append("Comments and balloons can be added without that, but this edit changes the pages themselves.")
+                return self._answer([], result={"ask": {
+                    "kind": "guarded", "title": "Saving would undo something",
+                    "text": " ".join(why), "go": "Save anyway"}})
+        if not appended:
+            self._save_doc(self.fz, target)
+            if self._guarded():
+                self.guards_ok = True  # (said once; the file is as it is now)
         recovery.clear(self.path)  # (saved: nothing to recover, here or, after Save As, at the old name)
         self.path = str(target)
         self.saved_gen = self.gen
         recovery.clear(self.path)
         self.original = recovery.stamp(self.path)
+        try:
+            self.base = Path(self.path).read_bytes()  # (the next save adds to the file as it is now)
+        except OSError:
+            self.base = None
         data = self._insp()
         if data["chars"] or data.get("issues"):  # (searched across jobs: kernel/inspindex.py)
             from . import inspindex
             inspindex.record(self.path, data)
-        return self._answer([], result={"path": self.path})
+        return self._answer([], result={"path": self.path, "appended": appended})

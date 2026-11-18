@@ -49,6 +49,7 @@ class PdfFile:
         if self.fz.page_count < 1:
             raise ValueError("This PDF can't be read (it may be damaged).")
         self.password = password
+        self.raw = data  # the file as it was read: what a save can add to the end of (a signed PDF's signature stays good)
         self._qt_doc = None
         self._load_qt(data)
         self.text = {}

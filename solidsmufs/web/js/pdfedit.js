@@ -1920,9 +1920,35 @@ export class PdfEditor {
     await this._settle();
     if (this.doc.meta.pdf.saveAs) return this.saveAs();
     if (!this.state?.dirty) { toast('No changes to save.', 'info'); return true; }
-    const r = await this.run('save', {}, 'Saving…');
-    if (r) toast(`Saved ${this.doc.name}.`);
+    const r = await this._saveRun({}, true);
+    if (r === 'copy') return this.saveAs();
+    if (r) toast(r.result?.appended ? `Saved ${this.doc.name}: the changes were added to the end of the file, so what was signed or checked stays as it was.` : `Saved ${this.doc.name}.`, 'ok', r.result?.appended ? 6000 : 3000);
     return !!r;
+  }
+
+  // a save, asking first when the file changed on disk since it was opened, or when saving would undo a signature,
+  // PDF/A or XFA form (the editor answers with a question rather than saving): the answer, 'copy', or null
+  async _saveRun(args, copy) {
+    for (;;) {
+      const r = await this.run('save', args, 'Saving…');
+      const ask = r?.result?.ask;
+      if (!ask) return r;
+      const pick = await new Promise((res) => {
+        let done = false;
+        const go = (a) => { done = true; d.close(); res(a); };
+        const d = modal(ask.title, h('div', { class: 'pe-confirm' },
+          h('p', { text: ask.text }),
+          h('div', { class: 'pe-pop-foot' },
+            h('button', { class: 'btn', text: 'Cancel', onclick: () => go('cancel') }),
+            h('button', { class: copy ? 'btn' : 'btn primary', text: ask.go, onclick: () => go('go') }),
+            copy ? h('button', { class: 'btn primary', text: 'Save a copy…', onclick: () => go('copy') }) : null)), { width: 460 });
+        const was = d.onClose;
+        d.onClose = () => { was?.(); if (!done) res('cancel'); };
+      });
+      if (pick === 'cancel') return null;
+      if (pick === 'copy') return 'copy';
+      args = { ...args, [ask.kind === 'changed' ? 'changedOk' : 'guardsOk']: true };
+    }
   }
 
   async saveAs() {
@@ -1931,7 +1957,7 @@ export class PdfEditor {
     await this._settle();
     const r = await api.savePdfDialog(this.doc.name, 'Save PDF As').catch((e) => { toast(e.message, 'error'); return null; });
     if (!r?.path) return false;
-    const res = await this.run('save', { path: r.path }, 'Saving…');
+    const res = await this._saveRun({ path: r.path }, false);
     if (!res) return false;
     this.doc.path = r.path;
     this.doc.name = r.path.split(/[\\/]/).pop();
