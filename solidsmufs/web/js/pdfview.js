@@ -125,8 +125,9 @@ export class PdfView {
     const b = this.bar;
     if (!b.clientWidth) return;
     const was = b.classList.contains('narrow');
-    b.classList.remove('narrow');
+    b.classList.remove('narrow', 'tight');
     if (b.scrollWidth > b.clientWidth + 1) b.classList.add('narrow');
+    if (b.scrollWidth > b.clientWidth + 1) b.classList.add('tight'); // still too narrow: the part's difficulty steps aside too
     if (was !== b.classList.contains('narrow')) this.app?.status?.(); // (the status bar says what the bar no longer has room for)
   }
 

@@ -799,8 +799,8 @@ class App {
     pdef('pdfPagesPanel', { label: 'Pages panel', kb: 'F4', tip: 'The pages as small pictures, to jump to one or pick some', also: 'Thumbnails', toggle: () => !!pv.state?.side, run: () => pv._toggleSide() });
     pdef('pdfCommentsPanel', { label: 'Comments panel', kb: 'F6', tip: 'The list of comments, to read, answer and delete', edits: true, toggle: () => ed.showPanel && !pv.balloons.on,
       run: () => { if (pv.balloons.on) toast('The comments list is put away while ballooning.', 'info'); else ed.togglePanel(); } });
-    pdef('pdfInches', { label: 'Inches on hover', tip: 'Print help: hovering a metric size shows it in inches', toggle: () => !!pv.hints.store?.inches, run: () => pv.hints._inches(!pv.hints.store?.inches) });
-    pdef('pdfTolerance', { label: 'Tolerance help on hover (GD&T)', tip: 'Print help: what a feature control frame means, and how hard it is to hold', also: 'TP on hover, true position',
+    pdef('pdfInches', { label: 'Inches on hover', tip: 'Hovering a metric size on the print shows it in inches', toggle: () => !!pv.hints.store?.inches, run: () => pv.hints._inches(!pv.hints.store?.inches) });
+    pdef('pdfTolerance', { label: 'TP on hover', tip: 'Hovering a feature control frame shows what it means, and how hard it is to hold', also: 'tolerance help, GD&T, true position',
       toggle: () => !!pv.hints.store?.tp, run: () => pv.hints._tp(!pv.hints.store?.tp) });
     pdef('pdfDifficulty', { label: 'Part difficulty', tip: "How hard the part is to make, from the print's geometric tolerances", off: () => !this.active?.partDifficulty, run: () => this.tools.partDifficulty() });
     pdef('pdfAutoBalloon', { label: 'Auto Balloon', tip: 'Read the print and balloon what there is to inspect on it', edits: true,

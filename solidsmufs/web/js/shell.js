@@ -160,7 +160,7 @@ export class Shell {
   // the whole part's difficulty, from the geometric tolerances read off its print: far right of the command bar
   partDifficulty() {
     const d = this.app.active, p = d?.partDifficulty;
-    if (!p || (d.meta?.pdf && d.pdfMode === 'pages')) return []; // (a PDF's pages hide this row: theirs is under Print help)
+    if (!p || (d.meta?.pdf && d.pdfMode === 'pages')) return []; // (a PDF's pages hide this row: theirs is on the Document bar)
     const n = Math.round(p.score);
     const cells = Array.from({ length: 10 }, (_, i) => h('i', { class: i < n ? 'on' : '', style: i < n ? { background: `hsl(${Math.round(125 - (125 * i) / 9)} 75% 42%)` } : null }));
     const el = h('button', { class: 'cm-diff', title: `Part difficulty ${p.score}/10, from ${p.count} geometric tolerance${p.count === 1 ? '' : 's'} on the print (${p.points} points)${p.whole ? '' : '\nStill reading the print: this may go up'}\nClick to see what it's made of` },

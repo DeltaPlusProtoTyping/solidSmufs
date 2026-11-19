@@ -2,7 +2,7 @@
 // in English, and, with "Inches on hover" on, a metric size in inches. The marks come from the document's worker
 // (kernel/printmarks.py): the PDF's own text at once, then what Windows OCR reads off the page's picture.
 import { api } from './api.js';
-import { h, menu } from './ui.js';
+import { h } from './ui.js';
 
 const RANK = { gdt: -1, fit: 0, dim: 1, fr: 2 }; // a size inside a French line wins over the line
 const AGAIN = 1500; // ms between asks while OCR is still reading a page
@@ -15,12 +15,18 @@ export class PrintHints {
     this.box = h('div', { class: 'pv-hint' });
     this.tip = h('div', { class: 'pv-tip', hidden: true });
     document.body.append(this.tip);
-    // one button for the print's aids: what hovering shows, and how hard the part is
-    this.btn = h('button', { class: 'pv-btn pv-toggle', text: 'Print help ▾',
-      title: 'What hovering the print shows, and how hard the part is to make.\nInches on hover: a metric size in inches (on by itself when the print looks metric). Fit classes like H7 always show\ntheir limits (H is a hole, h a shaft), and French notes show in English.\nTolerance help on hover: what a feature control frame (true position and the other geometric tolerances) means,\nits zone, and how hard it is to hold and to measure, from 1 to 10. The scores are a first guess, still being tuned.',
-      onclick: () => this._menu() });
+    // the print's aids, each a click away on the Document bar: what hovering shows, and how hard the part is. When
+    // the bar is short of room the long words step aside for the short ones (see .pv-bar.narrow)
+    const words = (long, short) => [h('span', { class: 'pv-long', text: long }), h('span', { class: 'pv-short', text: short })];
+    this.btn = h('button', { class: 'pv-btn pv-toggle',
+      title: 'Inches on hover: hover a size on the print to see it in inches. On by itself when the print looks metric.\nFit classes like H7 always show their limits (H is a hole, h a shaft), and French notes show in English.',
+      onclick: () => { if (this.store) this._inches(!this.store.inches); } }, ...words('Inches on hover', 'Inches'));
+    this.tpBtn = h('button', { class: 'pv-btn pv-toggle',
+      title: 'TP on hover: hover a feature control frame (true position and the other geometric tolerances) to see what it\nmeans, its zone, and how hard it is to hold and to measure, from 1 to 10. The scores are a first guess, still being tuned.',
+      onclick: () => { if (this.store) this._tp(!this.store.tp); } }, ...words('TP on hover', 'TP'));
+    this.diffBtn = h('button', { class: 'pv-btn pv-diff', hidden: true, onclick: () => this.v.app?.tools?.partDifficulty() });
     this.status = h('span', { class: 'pv-of pv-ocr', hidden: true });
-    view.chip.before(this.btn, this.status);
+    view.chip.before(this.btn, this.tpBtn, this.diffBtn, this.status);
     view.scroller.addEventListener('pointermove', (e) => this._move(e));
     view.scroller.addEventListener('pointerleave', () => this.hide());
     view.scroller.addEventListener('scroll', () => this.hide());
@@ -83,18 +89,6 @@ export class PrintHints {
     }, ms);
   }
 
-  _menu() {
-    const st = this.store, p = this.doc?.partDifficulty;
-    if (!st) return;
-    menu(this.btn, [
-      { label: 'Inches on hover', check: !!st.inches, action: () => this._inches(!st.inches) },
-      { label: 'Tolerance help on hover (GD&T)', check: !!st.tp, action: () => this._tp(!st.tp) },
-      { sep: true },
-      { label: p ? `Part difficulty ${p.score.toFixed(1)}/10${p.whole ? '' : ' (still reading)'}…` : 'Part difficulty: no geometric tolerances read yet', disabled: !p,
-        action: () => this.v.app?.tools?.partDifficulty() },
-    ]);
-  }
-
   _inches(on) {
     this.store.inches = on;
     this._button();
@@ -108,9 +102,19 @@ export class PrintHints {
     this.hide();
   }
 
-  // the button is lit while either aid is on
+  // each button is lit while its aid is on; the part's difficulty shows once the print's tolerances are read
   _button() {
-    this.btn.classList.toggle('on', !!(this.store?.inches || this.store?.tp));
+    this.btn.classList.toggle('on', !!this.store?.inches);
+    this.tpBtn.classList.toggle('on', !!this.store?.tp);
+    const p = this.doc?.partDifficulty;
+    this.diffBtn.hidden = !p;
+    if (p) {
+      const n = Math.min(Math.max(Math.round(p.score), 1), 10);
+      this.diffBtn.replaceChildren(h('i', { class: 'pv-dd', style: { background: `hsl(${Math.round(125 - (125 * (n - 1)) / 9)} 75% 42%)` } }),
+        h('span', { class: 'pv-long', text: 'Difficulty' }), h('b', { text: `${p.score.toFixed(1)}/10${p.whole ? '' : '…'}` }));
+      this.diffBtn.title = `Part difficulty ${p.score.toFixed(1)}/10, from ${p.count} geometric tolerance${p.count === 1 ? '' : 's'} on the print${p.whole ? '' : '\nStill reading the print: this may go up'}\nClick to see what it's made of`;
+    }
+    this.v._fitBar?.();
   }
 
   _status() {

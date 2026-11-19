@@ -648,6 +648,12 @@ kbd { font: 11px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px so
 .pv-btn.pv-toggle.on { background: var(--btn-on); border-color: var(--btn-hover-line); }
 .pv-ocr { margin-left: 8px; font-style: italic; }
 .pv-ocr[hidden] { display: none; }
+/* the print's aids on the Document bar: long words while there's room, short ones when there isn't */
+.pv-bar .pv-btn[hidden], .pv-short { display: none; }
+.pv-bar.narrow .pv-long { display: none; }
+.pv-bar.narrow .pv-short { display: inline; }
+.pv-bar.tight .pv-diff { display: none; }
+.pv-dd { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .pv-hit { position: absolute; background: rgba(255, 196, 0, .42); }
 .pv-hit.now { background: rgba(255, 120, 0, .55); }
 
