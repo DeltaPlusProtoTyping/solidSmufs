@@ -724,8 +724,41 @@ export class Tools {
   help() {
     const row = (a, b) => h('div', {}, h('span', { text: a }), h('span', { html: b }));
     const sw = this.app.prefs.mouse === 'sw';
+    // a PDF's pages have their own mouse and keys: listed first while they're on show, last otherwise
+    const pdf = [
+      h('h3', { text: 'PDF pages: moving around' }),
+      row('Pan', '<kbd>Drag</kbd> bare paper · <kbd>Middle-drag</kbd> · <kbd>Space</kbd>+<kbd>Drag</kbd> with any tool'),
+      row('Zoom', '<kbd>Ctrl</kbd>+<kbd>Wheel</kbd> (one page: <kbd>Wheel</kbd>) · <kbd>Ctrl</kbd>+<kbd>+</kbd> · <kbd>Ctrl</kbd>+<kbd>-</kbd>'),
+      row('Fit page · actual size · fit width', '<kbd>Ctrl</kbd>+<kbd>0</kbd> · <kbd>Ctrl</kbd>+<kbd>1</kbd> · <kbd>Ctrl</kbd>+<kbd>2</kbd>'),
+      row('Next · previous · first · last page', '<kbd>Page Down</kbd> · <kbd>Page Up</kbd> · <kbd>Home</kbd> · <kbd>End</kbd>'),
+      row('Turn view (not saved)', '<kbd>R</kbd>'),
+      row('Find in PDF · next · previous', '<kbd>Ctrl</kbd>+<kbd>F</kbd> · <kbd>Enter</kbd> · <kbd>Shift</kbd>+<kbd>Enter</kbd>'),
+      row('Pages panel · Comments panel', '<kbd>F4</kbd> · <kbd>F6</kbd>'),
+      h('h3', { text: 'PDF pages: selecting and editing' }),
+      row('Select words', '<kbd>Drag</kbd> across them · <kbd>Double-click</kbd> a word · <kbd>Ctrl</kbd>+<kbd>A</kbd> the page'),
+      row('Select a comment · edit it', '<kbd>Click</kbd> it · <kbd>Double-click</kbd> it'),
+      row('Select several comments', '<kbd>Shift</kbd>+<kbd>Click</kbd> each · <kbd>Ctrl</kbd>+<kbd>Drag</kbd> a box over paper · <kbd>Ctrl</kbd>+<kbd>A</kbd> with one selected'),
+      row('Next comment · previous', '<kbd>Tab</kbd> · <kbd>Shift</kbd>+<kbd>Tab</kbd>'),
+      row('Menu for words, a comment or the page', '<kbd>Right-click</kbd>'),
+      row('Copy · cut · paste · duplicate a comment', '<kbd>Ctrl</kbd>+<kbd>C</kbd> · <kbd>Ctrl</kbd>+<kbd>X</kbd> · <kbd>Ctrl</kbd>+<kbd>V</kbd> · <kbd>Ctrl</kbd>+<kbd>D</kbd>'),
+      row('Nudge the selected comment', '<kbd>Arrows</kbd> · <kbd>Shift</kbd>+<kbd>Arrows</kbd>'),
+      row('Keep it level or upright · a square, a circle, its shape', '<kbd>Shift</kbd> while dragging it · while dragging a corner handle'),
+      row('Delete what is selected', '<kbd>Delete</kbd> (page words: only in the Edit tab)'),
+      row('Delete picked pages', 'Click a thumbnail, then <kbd>Delete</kbd>'),
+      row('Step back: drag, tool, selection, Find', '<kbd>Esc</kbd>, once for each'),
+      row('Undo · redo', '<kbd>Ctrl</kbd>+<kbd>Z</kbd> · <kbd>Ctrl</kbd>+<kbd>Y</kbd>'),
+      row('Save · Save As · print', '<kbd>Ctrl</kbd>+<kbd>S</kbd> · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> · <kbd>Ctrl</kbd>+<kbd>P</kbd>'),
+      row('Typing in a box on the page', '<kbd>Enter</kbd> new line · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> done · <kbd>Esc</kbd> cancel'),
+      h('h3', { text: 'PDF tools, one key each (Comment, Fill & Sign, Edit and Redact tabs)' }),
+      row('Select · Sticky note · Text box', '<kbd>V</kbd> · <kbd>N</kbd> · <kbd>T</kbd>'),
+      row('Highlight · Underline · Strikethrough · Cross out', '<kbd>H</kbd> · <kbd>U</kbd> · <kbd>K</kbd> · <kbd>X</kbd>'),
+      row('Draw · Arrow · Line', '<kbd>D</kbd> · <kbd>A</kbd> · <kbd>L</kbd>'),
+      row('Rectangle · Oval · Cloud', '<kbd>B</kbd> · <kbd>E</kbd> · <kbd>C</kbd>'),
+    ];
+    const first = this.app.pdfOn;
     modal('Mouse and Keyboard', h('div', { class: 'keys' },
-      h('h3', { text: `Mouse (${sw ? 'SolidWorks buttons' : 'left-drag rotates'} — change in Options)` }),
+      ...(first ? pdf : []),
+      h('h3', { text: `3D view: mouse (${sw ? 'SolidWorks buttons' : 'left-drag rotates'} — change in Options)` }),
       sw ? row('Rotate (about the model\'s center)', '<kbd>Middle-drag</kbd>') : row('Rotate (about the point under the cursor)', '<kbd>Left-drag</kbd> · <kbd>Middle-drag</kbd>'),
       sw ? row('Rotate about a vertex, edge or face', '<kbd>Middle-click</kbd> it, then <kbd>Middle-drag</kbd> (middle-click empty space to go back)') : null,
       row('Pick a face hidden behind another', 'Right-click › <b>Select Other</b>'),
@@ -756,6 +789,7 @@ export class Tools {
       row('Search commands', '<kbd>Ctrl</kbd>+<kbd>F</kbd>'),
       row('Copy measurement · picture', '<kbd>Ctrl</kbd>+<kbd>C</kbd> · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>'),
       row('Open · close · next document', '<kbd>Ctrl</kbd>+<kbd>O</kbd> · <kbd>Ctrl</kbd>+<kbd>W</kbd> · <kbd>Ctrl</kbd>+<kbd>Tab</kbd>'),
+      ...(first ? [] : pdf),
     ), { width: 760, icon: 'select' });
   }
 

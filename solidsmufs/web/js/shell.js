@@ -15,6 +15,8 @@ const TABS = [
 const HUD = ['zoomFit', 'zoomArea', 'prevView', 'sectionView', '|', 'orientation', 'displayStyle', 'hideShow', 'appearance', 'scene', 'viewSettings'];
 const QAT = ['open', 'reload', 'print', 'savePicture', '|', 'select', 'options'];
 const SHORTCUTS = ['measure', 'massProps', 'sectionView', 'zoomFit', 'normalTo', 'orientation', 'displayStyle', 'hideShow', 'appearance', 'bbox', 'holes', 'stock'];
+// a PDF's pages are on show: their commands lead the Edit, View and Tools menus ('|' is a line; see main.js for them)
+const pdfItems = (app, ids) => ids.map((id) => (id === '|' ? { sep: true } : app.shell.menuItem(id)));
 const MENUS = {
   File: (app) => [
     { label: 'Open…', icon: 'open', kb: 'Ctrl+O', action: () => app.run('open') },
@@ -34,6 +36,7 @@ const MENUS = {
     { label: 'File Properties…', icon: 'props', disabled: !app.meta, action: () => app.run('fileProps') },
   ],
   Edit: (app) => [
+    ...(app.pdfOn ? pdfItems(app, ['pdfUndo', 'pdfRedo', '|', 'pdfCut', 'pdfCopy', 'pdfPaste', 'pdfSelectAll', '|', 'pdfFind', '|']) : []),
     { label: 'Copy Measurement', kb: 'Ctrl+C', disabled: !app.quick, action: () => app.tools.copyMeasure() },
     { label: 'Clear Selection', kb: 'Esc', disabled: !app.sel.length, action: () => app.setSelection([]) },
     { sep: true },
@@ -41,6 +44,9 @@ const MENUS = {
     { label: 'Material…', icon: 'material', disabled: !app.meta, action: () => app.run('material') },
   ],
   View: (app) => [
+    ...(app.pdfOn ? pdfItems(app, ['pdfZoomIn', 'pdfZoomOut', 'pdfFitPage', 'pdfFitWidth', 'pdfActual', '|', 'pdfTurnRight', 'pdfTurnLeft', '|',
+      'pdfPagesPanel', 'pdfCommentsPanel', '|', 'pdfInches', 'pdfTolerance', '|']) : []),
+    ...(app.active?.meta?.pdf && app.active.meta.bodies.length ? pdfItems(app, ['pdfShowModel', 'pdfShowPages', '|']) : []),
     { label: 'Display', icon: 'displayStyle', sub: () => [...app.styleItems(), { sep: true }, ...app.shell.viewSettingsItems()] },
     { label: 'Modify', icon: 'orientation', sub: () => [
       { label: 'Zoom to Fit', icon: 'zoomFit', kb: 'F', action: () => app.run('zoomFit') },
@@ -61,6 +67,9 @@ const MENUS = {
     { label: 'Dark Interface', check: app.prefs.theme === 'dark', action: () => app.run('theme') },
   ],
   Tools: (app) => [
+    ...(app.pdfOn && app.pdf.editor.editable ? [{ head: 'PDF tools' },
+      ...pdfItems(app, ['comment', 'balloon', 'pages', 'fill', 'edit', 'form', 'redact'].map((t) => `pdf-tab-${t}`)),
+      { head: 'Whole document' }, ...pdfItems(app, ['enhance', 'watermark', 'flatten', 'scrub'].map((t) => `pdf-tool-${t}`))] : []),
     { head: 'Evaluate' },
     ...['measure', 'massProps', 'sectionProps', 'bbox', 'statistics'].map((id) => app.shell.menuItem(id)),
     { sep: true },
@@ -151,7 +160,7 @@ export class Shell {
   // the whole part's difficulty, from the geometric tolerances read off its print: far right of the command bar
   partDifficulty() {
     const d = this.app.active, p = d?.partDifficulty;
-    if (!p) return [];
+    if (!p || (d.meta?.pdf && d.pdfMode === 'pages')) return []; // (a PDF's pages hide this row: theirs is under Print help)
     const n = Math.round(p.score);
     const cells = Array.from({ length: 10 }, (_, i) => h('i', { class: i < n ? 'on' : '', style: i < n ? { background: `hsl(${Math.round(125 - (125 * i) / 9)} 75% 42%)` } : null }));
     const el = h('button', { class: 'cm-diff', title: `Part difficulty ${p.score}/10, from ${p.count} geometric tolerance${p.count === 1 ? '' : 's'} on the print (${p.points} points)${p.whole ? '' : '\nStill reading the print: this may go up'}\nClick to see what it's made of` },
@@ -167,7 +176,7 @@ export class Shell {
     const b = h('button', {
       class: `cm-btn${c.menu ? ' drop' : ''}${c.toggle?.() ? ' on' : ''}`,
       title: `${c.label}${c.kb ? ` (${c.kb})` : ''}\n${c.tip || ''}`,
-      disabled: c.needsDoc && !app.meta,
+      disabled: app.cmdOff(c),
       'data-cmd': id,
     }, h('span', { class: 'ci', html: tool(c.icon) }), h('span', { class: 'cl', text: c.label }));
     b.addEventListener('click', (e) => {
@@ -186,7 +195,7 @@ export class Shell {
 
   menuItem(id) {
     const c = this.app.commands[id];
-    return { label: c.label, icon: c.icon, kb: c.kb, check: c.toggle ? c.toggle() : undefined, disabled: c.needsDoc && !this.app.meta, action: () => this.app.run(id) };
+    return { label: c.label, icon: c.icon, kb: c.kb, check: c.toggle ? c.toggle() : undefined, disabled: this.app.cmdOff(c), action: () => this.app.run(id) };
   }
 
   // ------------------------------------------------------------------ heads-up view toolbar
@@ -275,6 +284,8 @@ export class Shell {
   renderDocTabs() {
     const app = this.app;
     const el = document.getElementById('doc-tabs');
+    // (with one document there are no tabs: over a PDF's pages, where the command tabs hide too, the whole strip goes)
+    el.parentNode.classList.toggle('no-docs', app.docs.length < 2 && !(app.docs.length === 1 && app.docs[0].state !== 'ready'));
     if (app.docs.length < 2 && !(app.docs.length === 1 && app.docs[0].state !== 'ready')) { el.replaceChildren(); this._title(); return; }
     el.replaceChildren(...app.docs.map((d) => {
       const asm = d.meta && d.meta.bodies.some((b) => (b.path || []).length > 1);
@@ -357,7 +368,7 @@ export class Shell {
     this._syncCubeButtons();
     document.querySelectorAll('.qat .tb-btn[data-cmd]').forEach((b) => {
       const c = this.app.commands[b.dataset.cmd];
-      b.disabled = c.needsDoc && !this.app.meta;
+      b.disabled = this.app.cmdOff(c);
     });
     const vp = document.getElementById('viewport');
     vp.classList.toggle('cursor-measure', this.app.measuring);
@@ -422,10 +433,14 @@ export class Shell {
     const show = () => {
       const q = inp.value.trim().toLowerCase();
       if (!q) { closeMenus(); return; }
+      // by name, by what it says it does, or by a name it went by before (also); what can act now comes first, and
+      // of those the ones whose name starts with what was typed
+      const rank = (c) => (app.cmdOff(c) ? 4 : 0) + (c.label.toLowerCase().startsWith(q) ? 0 : c.label.toLowerCase().includes(q) ? 1 : 2);
       const hits = Object.values(app.commands)
-        .filter((c) => c.label.toLowerCase().includes(q) || (c.tip || '').toLowerCase().includes(q))
+        .filter((c) => c.label.toLowerCase().includes(q) || (c.tip || '').toLowerCase().includes(q) || (c.also || '').toLowerCase().includes(q))
+        .sort((a, b) => rank(a) - rank(b))
         .slice(0, 12);
-      const items = hits.length ? hits.map((c) => ({ label: c.label, icon: c.icon, kb: c.kb, disabled: c.needsDoc && !app.meta, action: () => { inp.value = ''; app.run(c.id); } }))
+      const items = hits.length ? hits.map((c) => ({ label: c.label, icon: c.icon, kb: c.kb, disabled: app.cmdOff(c), action: () => { inp.value = ''; app.run(c.id); } }))
         : [{ label: 'No matching commands', disabled: true }];
       menu(inp.parentElement, items, { force: true, cls: 'cmd-results', align: 'right' });
     };

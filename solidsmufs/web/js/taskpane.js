@@ -33,6 +33,13 @@ export class TaskPane {
     });
   }
 
+  // a PDF's pages are on show (or not): Appearances & Scenes is the 3D view's, so its tab steps aside for them
+  pdfMode(on) {
+    const b = this.strip.querySelector('.tp-tab[data-tab="appearance"]');
+    if (b) b.hidden = on;
+    if (on && this.tab === 'appearance') this.hide();
+  }
+
   toggle() {
     this.visible = !this.visible;
     document.getElementById('taskpane').hidden = !this.visible;

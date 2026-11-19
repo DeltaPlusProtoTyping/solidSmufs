@@ -13,12 +13,18 @@ import getpass
 import math
 import os
 import re
+import shutil
+import sys
 import tempfile
+import traceback
+import weakref
 from pathlib import Path
 
 from .balloonops import OURS as BALLOON_MARKS, BalloonOps
+from .pdfdoc import reading_quad
 
-UNDO_BYTES = 400_000_000  # the most the snapshots for undo hold before the oldest go
+UNDO_BYTES = 400_000_000  # the most the snapshots for undo hold in memory: past it the older ones wait in files
+UNDO_DISK = 4_000_000_000  # the most those files hold before the oldest steps go (the window is told: "undoTrimmed")
 HIGHLIGHT = (1.0, 0.85, 0.1)
 RED = (0.86, 0.1, 0.1)
 
@@ -34,6 +40,12 @@ BASE14 = {(False, False, False): "helv", (False, True, False): "hebo", (False, F
           (False, True, True): "hebi", (True, False, False): "tiro", (True, True, False): "tibo",
           (True, False, True): "tiit", (True, True, True): "tibi"}
 MONO = {(False, False): "cour", (True, False): "cobo", (False, True): "coit", (True, True): "cobi"}
+# marks on words, as the window calls them and as PDF does
+MARKUP_KINDS = {"highlight": "Highlight", "underline": "Underline", "strikeout": "StrikeOut", "squiggly": "Squiggly"}
+MARKUPS = set(MARKUP_KINDS.values())
+FITTED = ("Typewriter", "Date")  # text typed straight onto the page (its subject): always just the size of its words
+QUOTE = "SolidSmurfsQuote"  # where a mark on words keeps the words it marks (its /Contents is the note about them)
+CLIPS = {"ink", "line", "polygon", "polyline", "rect", "ellipse", "text", "note", "stamp", *MARKUP_KINDS}  # what can be copied
 
 
 def author():
@@ -44,17 +56,48 @@ def author():
 
 
 def _now():
-    return datetime.datetime.now().astimezone().strftime("D:%Y%m%d%H%M%S%z").replace("+", "+").replace("-", "-")
+    """Now as a PDF date: D:20260131094500-06'00' (the zone as PDF writes it, which strict readers need)."""
+    t = datetime.datetime.now().astimezone()
+    z = t.strftime("%z") or "+0000"
+    return t.strftime("D:%Y%m%d%H%M%S") + f"{z[:3]}'{z[3:5]}'"
+
+
+class _Spilled:
+    """An undo snapshot kept in a file, not in memory. The file goes when the step does."""
+    __slots__ = ("path", "size")
+
+    def __init__(self, folder, data):
+        fd, self.path = tempfile.mkstemp(suffix=".pdf", dir=folder)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        self.size = len(data)
+
+    def read(self):
+        return Path(self.path).read_bytes()
+
+    def __del__(self):
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
 
 
 def _color(c, default=None):
-    """A color from the window ("#rrggbb", [r, g, b] 0..1, or None)."""
+    """A color from the window ("#rrggbb" or "#rgb", [r, g, b] 0..1, or None)."""
     if c is None or c == "":
         return default
-    if isinstance(c, str):
-        c = c.lstrip("#")
-        return tuple(int(c[i:i + 2], 16) / 255 for i in (0, 2, 4))
-    return tuple(float(x) for x in c[:3])
+    try:
+        if isinstance(c, str):
+            c = c.strip().lstrip("#")
+            if len(c) == 3:
+                c = "".join(x * 2 for x in c)
+            if len(c) != 6:
+                raise ValueError
+            return tuple(int(c[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        r, g, b = (min(max(float(x), 0.0), 1.0) for x in c[:3])
+        return (r, g, b)
+    except (TypeError, ValueError):
+        raise ValueError("That color can't be used: pick one from the colors shown.") from None
 
 
 def _hex(c):
@@ -68,6 +111,68 @@ STRIKE = "Strike through"  # the subject of a strike-through mark from the Redac
 
 def _is_strike(a):
     return a.type[1] == "StrikeOut" and a.info.get("subject") == STRIKE
+
+
+# ---------------------------------------------------------------------- fonts for what the standard ones lack
+# The 14 standard fonts hold Latin-1 only: a diameter sign, a "less than or equal", a curly quote from Word would come
+# out as a dot. Those characters are set in a font from this PC that has them, embedded in the PDF so it shows the same
+# anywhere. Looked for in this order: the look asked for, then the fonts with the most symbols.
+_FONT_DIRS = [Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts", Path("/usr/share/fonts/truetype/dejavu"),
+              Path("/usr/share/fonts/truetype/noto"), Path("/Library/Fonts"), Path("/System/Library/Fonts/Supplemental")]
+_FONT_LOOKS = {"sans": ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf"),
+               "serif": ("times.ttf", "timesbd.ttf", "timesi.ttf", "timesbi.ttf"),
+               "mono": ("consola.ttf", "consolab.ttf", "consolai.ttf", "consolaz.ttf")}
+_FONT_MORE = ("seguisym.ttf", "cambria.ttc", "segoeui.ttf", "arial.ttf", "DejaVuSans.ttf", "NotoSansSymbols-Regular.ttf",
+              "NotoSansMath-Regular.ttf", "Arial Unicode.ttf")
+_fonts = {}  # file name -> (its path, the font read), or None when this PC hasn't got it
+
+
+def _font(name):
+    if name not in _fonts:
+        import pymupdf
+        _fonts[name] = None
+        for d in _FONT_DIRS:
+            try:
+                if (d / name).is_file():
+                    _fonts[name] = (str(d / name), pymupdf.Font(fontfile=str(d / name)))
+                    break
+            except Exception:
+                continue
+    return _fonts[name]
+
+
+def _runs(text, o=None):
+    """A line of text as runs to set each in one font: [(None for the standard font, or (name, path, font), text)].
+    Says so when no font here has one of its characters, before anything is written."""
+    o = o or {}
+    look = "mono" if o.get("mono") else "serif" if o.get("serif") else "sans"
+    names = (_FONT_LOOKS[look][(1 if o.get("bold") else 0) + (2 if o.get("italic") else 0)],) + _FONT_MORE
+    out = []
+    for c in str(text):
+        use = None
+        if ord(c) > 255:
+            for name in names:
+                f = _font(name)
+                if f and f[1].has_glyph(ord(c)):
+                    use = (name, *f)
+                    break
+            else:
+                raise ValueError(f"No font on this PC has the symbol \u201c{c}\u201d (U+{ord(c):04X}): leave it out, or draw it.")
+        if out and (out[-1][0] and out[-1][0][0]) == (use and use[0]):
+            out[-1][1] += c
+        else:
+            out.append([use, c])
+    return out
+
+
+def _width(text, size, o=None, base="helv"):
+    """How wide a line of text sets, in points. (A character no font here has counts as a wide one.)"""
+    import pymupdf
+    try:
+        runs = _runs(text, o)
+    except ValueError:
+        return sum(size if ord(c) > 255 else pymupdf.get_text_length(c, base, size) for c in str(text))
+    return sum(pymupdf.get_text_length(t, base, size) if f is None else f[2].text_length(t, size) for f, t in runs)
 
 
 CAP = 0.7  # how tall a figure or capital stands over its baseline, for a font of size 1: most fonts' are 0.7 to 0.74
@@ -101,7 +206,9 @@ class PdfEditor(BalloonOps):
     def __init__(self, pdf, path):
         self.pdf = pdf
         self.path = str(path)
-        self.undo, self.redo = [], []  # [(snapshot bytes, its generation)]
+        self.undo, self.redo = [], []  # [(snapshot: bytes, or _Spilled in a file, its generation)]
+        self.trimmed = False  # the oldest undo steps were let go (large file, long session)
+        self._spill = None  # the folder for snapshots kept in files
         self.gen = self.saved_gen = 0
         self.next_gen = 1
         from .. import recovery
@@ -117,7 +224,8 @@ class PdfEditor(BalloonOps):
     # ================================================================== the edit record
     def state(self):
         return {"dirty": self.gen != self.saved_gen, "undo": bool(self.undo), "redo": bool(self.redo),
-                "path": self.path, "fields": self._has_fields()}
+                "path": self.path, "fields": self._has_fields(), "undoSteps": len(self.undo), "redoSteps": len(self.redo),
+                "undoTrimmed": self.trimmed}
 
     def _has_fields(self):
         try:
@@ -128,9 +236,45 @@ class PdfEditor(BalloonOps):
     def _snapshot(self):
         self.undo.append((self._bytes(), self.gen))
         self.redo.clear()
-        while len(self.undo) > 1 and sum(len(b) for b, _ in self.undo) > UNDO_BYTES:
-            self.undo.pop(0)
+        self._budget()
         self.gen, self.next_gen = self.next_gen, self.next_gen + 1
+
+    def _budget(self):
+        """Keeps the undo history deep on a large file: past UNDO_BYTES in memory the older snapshots go to files
+        (read back when undone to); past UNDO_DISK there, or when they can't be written, the oldest steps go."""
+        held = sum(len(d) for d, _ in self.undo + self.redo if isinstance(d, bytes))
+        full = False
+        for stack in (self.undo, self.redo):
+            for k, (d, gen) in enumerate(stack[:-1] if stack is self.undo else stack):  # (the newest stays at hand)
+                if held <= UNDO_BYTES:
+                    break
+                if not isinstance(d, bytes):
+                    continue
+                try:
+                    if self._spill is None:
+                        self._spill = tempfile.mkdtemp(prefix="ss-undo-")
+                        weakref.finalize(self, shutil.rmtree, self._spill, True)
+                    stack[k] = (_Spilled(self._spill, d), gen)
+                    held -= len(d)
+                except OSError:
+                    full = True  # (no room for files either: the oldest go, below)
+                    break
+        filed = sum(d.size for d, _ in self.undo + self.redo if not isinstance(d, bytes))
+        while len(self.undo) > 1 and ((full and held > UNDO_BYTES) or filed > UNDO_DISK):
+            d, _ = self.undo.pop(0)
+            if isinstance(d, bytes):
+                held -= len(d)
+            else:
+                filed -= d.size
+            self.trimmed = True
+
+    @staticmethod
+    def _data(d):
+        return d if isinstance(d, bytes) else d.read()
+
+    def _shape(self):
+        """What the window builds its pages from: their sizes, turns and labels, and which page is where."""
+        return self.pdf.pages(), [pg.xref for pg in self.fz]
 
     def _bytes(self):
         import pymupdf
@@ -139,7 +283,7 @@ class PdfEditor(BalloonOps):
     def _restore(self, data):
         import pymupdf
         old = self.pdf.fz
-        self.pdf.fz = pymupdf.open(stream=data, filetype="pdf")
+        self.pdf.fz = pymupdf.open(stream=self._data(data), filetype="pdf")
         if self.pdf.fz.needs_pass:
             self.pdf.fz.authenticate(self.pdf.password or "")
         old.close()
@@ -173,21 +317,47 @@ class PdfEditor(BalloonOps):
 
     def op_undo(self):
         if not self.undo:
-            raise ValueError("There's nothing to undo.")
-        data, gen = self.undo.pop()
-        self.redo.append((self._bytes(), self.gen))
-        self._restore(data)
-        self.gen = gen
-        return self._answer(None, structure=True)
+            raise ValueError("That's as far back as Undo goes: the earlier steps were let go to save space."
+                             if self.trimmed else "There's nothing to undo.")
+        return self._step(self.undo, self.redo)
 
     def op_redo(self):
         if not self.redo:
             raise ValueError("There's nothing to redo.")
-        data, gen = self.redo.pop()
-        self.undo.append((self._bytes(), self.gen))
+        return self._step(self.redo, self.undo)
+
+    def _step(self, src, dst):
+        """One step back (or forward again). The window builds its pages anew ("structure") only when the pages
+        themselves differ: their number, sizes, turns, labels or order. Otherwise they're drawn again in place."""
+        was, status = self._shape(), self._list_status()
+        data, gen = src.pop()
+        dst.append((self._bytes(), self.gen))
         self._restore(data)
+        now = self._list_status()
+        if now != status:  # a released list back to draft (or the other way) is a lead's to do, by Undo too
+            try:
+                from . import roles
+                roles.need_for("balloon_status", {"status": now})
+            except ValueError as e:
+                back, _ = dst.pop()
+                self._restore(back)
+                src.append((data, gen))
+                raise ValueError(f"That step puts the balloon list from {status} back to {now}. {e}") from None
         self.gen = gen
-        return self._answer(None, structure=True)
+        self._budget()
+        return self._answer(None, structure=self._shape() != was, text=True)
+
+    def _list_status(self):
+        """The balloon list's status (kernel/balloonops.py), read without the rest of the list."""
+        import json
+        from .balloonops import KEY
+        try:
+            kind, val = self.fz.xref_get_key(self.fz.pdf_catalog(), KEY)
+            if kind != "xref":
+                return "draft"
+            return json.loads(self.fz.xref_stream(int(val.split()[0])).decode("utf-8")).get("status") or "draft"
+        except Exception:
+            return "draft"
 
     def _answer(self, changed, structure=False, text=False, result=None):
         """What an edit sends back: the pages, which of them to draw again (None: all), and the record."""
@@ -205,7 +375,26 @@ class PdfEditor(BalloonOps):
         if fn is None:
             raise ValueError(f"Unknown PDF edit: {op}")
         self._balloon_guard(op, args)
-        return fn(**args)
+        gen, nxt, redo = self.gen, self.next_gen, list(self.redo)
+        try:
+            return fn(**args)
+        except Exception as e:
+            if self.next_gen != nxt:  # it failed part way: the document as it was, and no step to undo
+                self._roll_back(gen, nxt, redo)
+            if isinstance(e, (ValueError, OSError)):
+                raise
+            # (a slip in here or in MuPDF: said plainly, the details kept for whoever looks into it)
+            traceback.print_exc(file=sys.stderr)
+            raise ValueError("That couldn't be done: this PDF didn't take the change.") from None
+
+    def _roll_back(self, gen, nxt, redo):
+        while self.undo:
+            data, g = self.undo.pop()
+            if g == gen:  # the snapshot the edit took first
+                self._restore(data)
+                break
+        self.gen, self.next_gen = gen, nxt
+        self.redo[:] = redo
 
     # ================================================================== coordinates
     def _page(self, page):
@@ -241,6 +430,7 @@ class PdfEditor(BalloonOps):
 
     # ================================================================== comments and markups
     def _annot_info(self, pg, a):
+        import pymupdf
         kind = KINDS.get(a.type[1], a.type[1].lower())
         info, colors, border = a.info, a.colors or {}, a.border or {}
         out = {"id": a.xref, "kind": kind, "rect": self._out(pg, a.rect), "contents": info.get("content", ""),
@@ -248,25 +438,46 @@ class PdfEditor(BalloonOps):
                "date": info.get("modDate") or info.get("creationDate") or "",
                "color": _hex(colors.get("stroke")), "fill": _hex(colors.get("fill")),
                "width": border.get("width", -1), "opacity": a.opacity if a.opacity is not None and a.opacity >= 0 else 1,
-               "clouds": border.get("clouds", -1) > 0, "replyTo": a.irt_xref or None}
+               "clouds": border.get("clouds", -1) > 0, "replyTo": a.irt_xref or None,
+               "print": bool(a.flags & 4)}  # (not set: shown on screen, left off the printed page)
+        v = a.vertices or []
         if kind == "line":
             ends = a.line_ends or (0, 0)
             out["arrow"] = bool(ends[1])
-            v = a.vertices or []
+            out["ends"] = list(ends)
             out["points"] = [self._pt_out(pg, p) for p in v]
         elif kind in ("ink",):
-            out["points"] = [[self._pt_out(pg, p) for p in stroke] for stroke in (a.vertices or [])]
+            out["points"] = [[self._pt_out(pg, p) for p in stroke] for stroke in v]
         elif kind in ("polygon", "polyline"):
-            out["points"] = [self._pt_out(pg, p) for p in (a.vertices or [])]
-        elif kind == "strikeout":  # the line through each quad: where a click takes it
-            import pymupdf
-            v = a.vertices or []
+            out["points"] = [self._pt_out(pg, p) for p in v]
+        elif a.type[1] in MARKUPS:
+            # each run of words it covers: its corners [upper left, upper right, lower left, lower right] as the words
+            # read, and its box. A click counts as on the mark only inside one of these, not anywhere in "rect".
+            out["quads"] = [[self._pt_out(pg, p) for p in v[k:k + 4]] for k in range(0, len(v) - 3, 4)]
+            out["parts"] = [self._out(pg, pymupdf.Quad(v[k:k + 4]).rect) for k in range(0, len(v) - 3, 4)]
+            out["quote"] = self._key_text(a, QUOTE)  # the words it marks (its "contents" are the note about them)
+        if kind == "strikeout":  # the line through each quad: where a click takes it
             out["segs"] = [[self._pt_out(pg, (pymupdf.Point(v[k]) + v[k + 2]) / 2), self._pt_out(pg, (pymupdf.Point(v[k + 1]) + v[k + 3]) / 2),
                             round(abs(pymupdf.Point(v[k + 2]) - v[k]) / 2, 2)] for k in range(0, len(v) - 3, 4)]
         if kind == "text":
             out["fontsize"] = self._freetext_size(a)
             out["textColor"] = self._freetext_color(a)
+            out["fill"] = _hex(colors.get("stroke"))  # (a text box's background is kept as its /C, which reads as "color")
+            out["align"] = self._key_int(a, "Q")
+            out["fitted"] = out["subject"] in FITTED  # sized to its words: it has no box of its own to keep
+        if kind == "note":
+            out["icon"] = info.get("name") or "Comment"
         return out
+
+    @staticmethod
+    def _key_text(a, key):
+        kind, val = a.get_parent().parent.xref_get_key(a.xref, key)
+        return val if kind == "string" else ""
+
+    @staticmethod
+    def _key_int(a, key):
+        kind, val = a.get_parent().parent.xref_get_key(a.xref, key)
+        return int(val) if kind == "int" else 0
 
     @staticmethod
     def _freetext_size(a):
@@ -305,12 +516,114 @@ class PdfEditor(BalloonOps):
                 return a
         raise ValueError("That comment isn't there any more.")
 
+    # ------------------------------------------------------------------ what's asked for, made fit to draw
+    def _box(self, pg, rect, least=2.0, shift=False):
+        """A rectangle [x, y, w, h] as shown, as it was dragged: the right way round, big enough to see, and on the
+        page (see _keep)."""
+        try:
+            x, y, w, h = [float(v) for v in rect]
+        except (TypeError, ValueError):
+            raise ValueError("Drag to draw it.") from None
+        if w < 0:
+            x, w = x + w, -w
+        if h < 0:
+            y, h = y + h, -h
+        if not (w >= least and h >= least):  # (a click without a drag; or not numbers at all)
+            raise ValueError("Drag to draw it: that was too small to see.")
+        return self._keep(pg, [x, y, w, h], shift)
+
+    @staticmethod
+    def _keep(pg, r, shift=True):
+        """[x, y, w, h] as shown, brought onto the page, where it can be seen, selected and printed: moved in when
+        it hangs off an edge (`shift`: something of a set size, pasted or placed with a click), or else cut off at
+        the edge (something dragged out past it), and moved in when nearly none of it is on the page."""
+        W, H = pg.rect.width, pg.rect.height
+        x, y, w, h = r
+        if not shift:
+            x0, y0, x1, y1 = max(x, 0), max(y, 0), min(x + w, W), min(y + h, H)
+            if x1 - x0 >= 2 and y1 - y0 >= 2:
+                return [x0, y0, x1 - x0, y1 - y0]
+        w, h = min(w, W), min(h, H)
+        return [min(max(x, 0), W - w), min(max(y, 0), H - h), w, h]
+
+    @staticmethod
+    def _on(pg, p, edge=0.0):
+        """A point as shown, brought onto the page (`edge`: that far in from its edges, for half a line's width)."""
+        return [min(max(float(p[0]), edge), pg.rect.width - edge), min(max(float(p[1]), edge), pg.rect.height - edge)]
+
+    @staticmethod
+    def _pdf(pg, p):
+        """A point in the page's own points, in the PDF's: from the bottom left of its media box, y up. (Worked out
+        here: PyMuPDF's transformation_matrix is wrong for a page both cropped and turned.)"""
+        return pg.cropbox.x0 + p[0], pg.mediabox.y1 - pg.cropbox.y0 - p[1]  # (cropbox.x0 is already from the media box's own 0)
+
+    @staticmethod
+    def _picture(url):
+        """The bytes of a picture sent as a data URL, checked that they can be read."""
+        import pymupdf
+        try:
+            data = base64.b64decode(str(url).split(",", 1)[-1])
+            pix = pymupdf.Pixmap(data)
+            if pix.width < 1 or pix.height < 1:
+                raise ValueError
+        except Exception:
+            raise ValueError("That picture can't be read.") from None
+        return data
+
+    @staticmethod
+    def _turned(data, quarters):
+        """A picture (PNG or any kind MuPDF reads) turned by quarter turns counter-clockwise: a PNG."""
+        import pymupdf
+        pix = pymupdf.Pixmap(data) if isinstance(data, (bytes, bytearray)) else data
+        if pix.colorspace is not None and pix.colorspace.n not in (1, 3):
+            pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+        if quarters % 4:
+            import numpy as np
+            px = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, :pix.width * pix.n]
+            px = np.ascontiguousarray(np.rot90(px.reshape(pix.height, pix.width, pix.n), quarters % 4))
+            pix = pymupdf.Pixmap(pix.colorspace, px.shape[1], px.shape[0], px.tobytes(), bool(pix.alpha))
+        return pix.tobytes("png")
+
+    @staticmethod
+    def _stamp_picture(code, w, h):
+        """One of the standard stamps as a picture, to put on a turned page (see the stamp in op_annot_add)."""
+        import pymupdf
+        d = pymupdf.open()
+        try:
+            a = d.new_page(width=max(w, 8), height=max(h, 8)).add_stamp_annot(pymupdf.Rect(0, 0, max(w, 8), max(h, 8)), stamp=code)
+            a.update()
+            pymupdf.TOOLS.set_icc(False)  # (see _annot_png)
+            try:
+                return a.get_pixmap(matrix=pymupdf.Matrix(4, 4), alpha=True)
+            finally:
+                pymupdf.TOOLS.set_icc(True)
+        finally:
+            d.close()
+
+    def _spans(self, pg):
+        return [{**s, "dir": ln["dir"]} for b in pg.get_text("dict", flags=0)["blocks"] for ln in b.get("lines", [])
+                for s in ln["spans"] if s["text"].strip()]
+
+    def _same_mark(self, pg, t, strike, quads):
+        """The markup of this kind already on exactly these words, if there is one: marking them twice would stack a
+        second mark no click could reach, and Delete would seem to do nothing."""
+        want = [c for q in quads for p in (q.ul, q.ur, q.ll, q.lr) for c in (p.x, p.y)]
+        for a in pg.annots():
+            if a.type[1] != t or _is_strike(a) != strike or a.info.get("subject") in BALLOON_MARKS:
+                continue
+            have = [c for p in (a.vertices or []) for c in p]
+            if len(have) == len(want) and all(abs(x - y) < 0.5 for x, y in zip(have, want)):
+                return a
+        return None
+
     def _finish(self, pg, a, o):
         """Common properties on a new annotation, then its look."""
+        now = _now()
         a.set_info(title=o.get("author") or author(), content=o.get("contents", a.info.get("content", "")),
-                   subject=o.get("subject", a.info.get("subject", "")))
+                   subject=o.get("subject", a.info.get("subject", "")), creationDate=now, modDate=now)
         if o.get("opacity") is not None:
             a.set_opacity(float(o["opacity"]))
+        a.set_flags((a.flags | 4) if o.get("print", True) else (a.flags & ~4))  # printed with the page, as Acrobat's are
         a.update()
         self._strike_look(pg, a)
         return a
@@ -318,9 +631,8 @@ class PdfEditor(BalloonOps):
     @staticmethod
     def _strike_look(pg, a):
         """A strike-through's look, in place of MuPDF's (a thin line a little below the middle): through the middle of
-        each run of figures it covers, a tenth of their height thick. It stays a comment, to select, recolor or
-        delete after saving; any PDF reader shows and prints it as drawn here."""
-        import pymupdf
+        each run of figures it covers, a tenth of their height thick, as faint as its opacity says. It stays a
+        comment, to select, recolor or delete after saving; any PDF reader shows and prints it as drawn here."""
         if not _is_strike(a):
             return
         doc = pg.parent
@@ -328,102 +640,160 @@ class PdfEditor(BalloonOps):
         if kind != "xref":
             return
         ap = int(val.split()[0])
-        to_pdf = ~pg.transformation_matrix  # (an appearance is drawn in the PDF's own space, y up)
+        # its quads as the PDF holds them, which is the space its look is drawn in (y up). Each: upper left, upper
+        # right, lower left, lower right
+        kind, val = doc.xref_get_key(a.xref, "QuadPoints")
+        n = [float(x) for x in val.strip("[]").split()] if kind == "array" else []
         r, g, b = ((a.colors or {}).get("stroke") or (0, 0, 0))[:3]
-        v = [pymupdf.Point(p) for p in (a.vertices or [])]
-        out = [f"q {r:.3f} {g:.3f} {b:.3f} RG 0 J"]
-        for k in range(0, len(v) - 3, 4):  # each quad: upper left, upper right, lower left, lower right
-            ul, ur, ll, lr = v[k:k + 4]
-            p, q = ((ul + ll) / 2) * to_pdf, ((ur + lr) / 2) * to_pdf
-            out.append(f"{max(0.5, abs(ll - ul) * 0.1):.3f} w {p.x:.3f} {p.y:.3f} m {q.x:.3f} {q.y:.3f} l S")
+        head = "q"
+        if a.opacity is not None and 0 <= a.opacity < 1:
+            doc.xref_set_key(ap, "Resources/ExtGState/H", f"<</CA {a.opacity:.3f}/ca {a.opacity:.3f}>>")
+            head = "q /H gs"
+        out = [f"{head} {r:.3f} {g:.3f} {b:.3f} RG 0 J"]
+        for k in range(0, len(n) - 7, 8):
+            ulx, uly, urx, ury, llx, lly, lrx, lry = n[k:k + 8]
+            thick = max(0.5, math.hypot(llx - ulx, lly - uly) * 0.1)
+            out.append(f"{thick:.3f} w {(ulx + llx) / 2:.3f} {(uly + lly) / 2:.3f} m {(urx + lrx) / 2:.3f} {(ury + lry) / 2:.3f} l S")
         out.append("Q")
         doc.update_stream(ap, "\n".join(out).encode("ascii"))
 
     def op_annot_add(self, page, kind, **o):
-        """A new comment or markup. Rectangles, points and paths as shown; colors as "#rrggbb"."""
+        """A new comment or markup. Rectangles, points and paths as shown; colors as "#rrggbb". Everything asked for
+        is checked before anything changes, so what can't be made leaves no step to undo."""
         import pymupdf
-        self._snapshot()
         pg = self._page(page)
         color = _color(o.get("color"))
         fill = _color(o.get("fill"))
         width = float(o.get("width", 1.5))
         rot = pg.rotation
+        r = quote = None
         if kind == "strike":  # a single line through the words, which stay readable: a comment, to delete any time
             kind = "strikeout"
             color = color or (0, 0, 0)
             o["subject"] = STRIKE
-        if kind in ("highlight", "underline", "strikeout", "squiggly"):
-            quads = [self._in(pg, r).quad for r in o.get("rects") or []]
+        if kind in MARKUP_KINDS:
+            spans = self._spans(pg) if o.get("rects") else []
+            # a box as shown says where the words are, not which way they read: that's taken from the words in it (a
+            # turned page's read across it as shown; a drawing's dimensions read up it)
+            quads = [reading_quad(pg, self._in(pg, rc), spans) for rc in o.get("rects") or []]
             for q in o.get("quads") or []:  # [upper left, upper right, lower left, lower right] as shown: text at any angle
                 quads.append(pymupdf.Quad(*[self._pt(pg, v) for v in q]))
             if not quads:
                 raise ValueError("Select some text to mark first.")
-            if o.get("subject") == STRIKE and not o.get("free"):  # (free: a line dragged across anything, as drawn)
+            strike = o.get("subject") == STRIKE
+            if strike and not o.get("free"):  # (free: a line dragged across anything, as drawn)
                 quads = _through_middle(pg, quads)
-            add = {"highlight": pg.add_highlight_annot, "underline": pg.add_underline_annot,
-                   "strikeout": pg.add_strikeout_annot, "squiggly": pg.add_squiggly_annot}[kind]
-            a = add(quads=quads)
-            a.set_colors(stroke=color or (HIGHLIGHT if kind == "highlight" else RED))
-            if o.get("contents") is None:
-                o["contents"] = o.get("text", "")
+            same = self._same_mark(pg, MARKUP_KINDS[kind], strike, quads)
+            if same is not None:  # already marked so: nothing changes
+                return self._answer([], result={**self._annot_info(pg, same), "existing": True})
+            quote = o.get("quote", o.get("text")) or ""
+            if o.get("contents") is None:  # (the words marked were once kept as its note: now only when no "quote" is sent)
+                o["contents"] = "" if "quote" in o else o.get("text", "")
+
+            def make():
+                a = getattr(pg, f"add_{kind}_annot")(quads=quads)
+                a.set_colors(stroke=color or (HIGHLIGHT if kind == "highlight" else RED))
+                return a
         elif kind == "note":
-            a = pg.add_text_annot(self._pt(pg, o["at"]), o.get("contents", ""), icon=o.get("icon", "Comment"))
-            a.set_colors(stroke=color or HIGHLIGHT)
+            at = self._pt(pg, self._keep(pg, [float(o["at"][0]), float(o["at"][1]), 20, 20])[:2])  # (its icon is 20 points square)
+
+            def make():
+                a = pg.add_text_annot(at, o.get("contents", ""), icon=o.get("icon", "Comment"))
+                a.set_colors(stroke=color or HIGHLIGHT)
+                return a
         elif kind == "text":
-            r = self._in(pg, o["rect"])
             if o.get("fit"):  # sized to its words once they're in
-                r = self._in(pg, [o["rect"][0], o["rect"][1], 40, 20])
-            # (MuPDF draws a text box's border only for rich text, which it then loses on any change: none here)
-            a = pg.add_freetext_annot(r, o.get("text", ""), fontsize=float(o.get("fontsize", 12)), fontname="Helv",
-                                      text_color=_color(o.get("textColor"), (0, 0, 0)), fill_color=fill, rotate=rot,
-                                      align=int(o.get("align", 0)))
+                r = self._in(pg, self._keep(pg, [float(o["rect"][0]), float(o["rect"][1]), 40, 20]))
+            else:
+                r = self._in(pg, self._box(pg, o["rect"], least=4, shift=True))
             o.setdefault("contents", o.get("text", ""))
-            o.setdefault("subject", "Text Box" if fill else "Typewriter")
+            o.setdefault("subject", "Typewriter" if o.get("fit") else "Text Box")
+
+            def make():
+                # (MuPDF draws a text box's border only for rich text, which it then loses on any change: none here)
+                return pg.add_freetext_annot(r, o.get("text", ""), fontsize=float(o.get("fontsize", 12)), fontname="Helv",
+                                             text_color=_color(o.get("textColor"), (0, 0, 0)), fill_color=fill, rotate=rot,
+                                             align=int(o.get("align", 0)))
         elif kind in ("rect", "ellipse", "cloud"):
-            r = self._in(pg, o["rect"])
-            a = (pg.add_circle_annot if kind == "ellipse" else pg.add_rect_annot)(r)
-            a.set_colors(stroke=color or RED, fill=fill)
-            a.set_border(width=width, clouds=1 if kind == "cloud" else 0)
+            r = self._in(pg, self._box(pg, o["rect"]))
             if kind == "cloud":
                 o.setdefault("subject", "Cloud")
+
+            def make():
+                a = (pg.add_circle_annot if kind == "ellipse" else pg.add_rect_annot)(r)
+                a.set_colors(stroke=color or RED, fill=fill)
+                a.set_border(width=width, clouds=1 if kind == "cloud" or o.get("clouds") else 0)
+                return a
         elif kind in ("line", "arrow"):
-            a = pg.add_line_annot(self._pt(pg, o["points"][0]), self._pt(pg, o["points"][1]))
-            a.set_colors(stroke=color or RED)
-            a.set_border(width=width)
+            ends = [self._pt(pg, self._on(pg, p, width / 2)) for p in (o.get("points") or [])[:2]]
+            if len(ends) < 2 or abs(ends[1] - ends[0]) < 0.5:
+                raise ValueError("Drag to draw the line.")
             if kind == "arrow":
-                a.set_line_ends(pymupdf.PDF_ANNOT_LE_NONE, pymupdf.PDF_ANNOT_LE_OPEN_ARROW)
                 o.setdefault("subject", "Arrow")
+
+            def make():
+                a = pg.add_line_annot(*ends)
+                a.set_colors(stroke=color or RED)
+                a.set_border(width=width)
+                if kind == "arrow":
+                    a.set_line_ends(pymupdf.PDF_ANNOT_LE_NONE, pymupdf.PDF_ANNOT_LE_OPEN_ARROW)
+                elif o.get("ends"):  # (a copy's: whatever ends the line it's a copy of has)
+                    a.set_line_ends(int(o["ends"][0]), int(o["ends"][1]))
+                return a
         elif kind == "ink":
-            strokes = [[self._pt(pg, p) for p in s] for s in o["points"] if len(s) > 1]
+            strokes = [[tuple(self._pt(pg, self._on(pg, p, width / 2))) for p in s] for s in o.get("points") or [] if len(s)]
+            # (a tap is a dot: a stroke a hair long, which round ends draw as one)
+            strokes = [s if len(s) > 1 else [s[0], (s[0][0] + 0.1, s[0][1])] for s in strokes]
             if not strokes:
                 raise ValueError("Draw a line to add it.")
-            a = pg.add_ink_annot([[tuple(p) for p in s] for s in strokes])
-            a.set_colors(stroke=color or RED)
-            a.set_border(width=width)
-        elif kind == "polygon":
-            a = pg.add_polygon_annot([tuple(self._pt(pg, p)) for p in o["points"]])
-            a.set_colors(stroke=color or RED, fill=fill)
-            a.set_border(width=width, clouds=1 if o.get("clouds") else 0)
+
+            def make():
+                a = pg.add_ink_annot(strokes)
+                a.set_colors(stroke=color or RED)
+                a.set_border(width=width)
+                return a
+        elif kind in ("polygon", "polyline"):
+            pts = [tuple(self._pt(pg, self._on(pg, p, width / 2))) for p in o.get("points") or []]
+            if len(pts) < (3 if kind == "polygon" else 2):
+                raise ValueError("A shape needs at least three corners." if kind == "polygon" else "Draw a line to add it.")
+
+            def make():
+                a = (pg.add_polygon_annot if kind == "polygon" else pg.add_polyline_annot)(pts)
+                a.set_colors(stroke=color or RED, fill=fill if kind == "polygon" else None)
+                a.set_border(width=width, clouds=1 if o.get("clouds") else 0)
+                return a
         elif kind == "stamp":
-            r = self._in(pg, o["rect"])
+            shown = self._box(pg, o["rect"], least=4, shift=True)
+            r = self._in(pg, shown)
             if o.get("image"):  # a signature, initials or a picture of a stamp: PNG as a data URL
-                a = pg.add_stamp_annot(r, stamp=base64.b64decode(o["image"].split(",", 1)[-1]))
+                stamp = self._picture(o["image"])
             else:
-                import pymupdf as m
-                name = o.get("stamp", "Approved")
-                a = pg.add_stamp_annot(r, stamp=getattr(m, f"STAMP_{name}", 0))
+                stamp = getattr(pymupdf, f"STAMP_{o.get('stamp', 'Approved')}", 0)
             if rot:
-                a.set_rotation(rot)
+                # On a turned page the picture is turned back and put on unturned, so it's upright as shown and
+                # fills the box asked for. (MuPDF's own turn for a stamp fits the upright picture inside the unturned
+                # box, a third of the size on a landscape sheet, and fits it again each time the stamp changes.)
+                stamp = self._turned(stamp if o.get("image") else self._stamp_picture(stamp, shown[2], shown[3]), rot // 90)
             o.setdefault("subject", o.get("stamp", "Stamp"))
             o.setdefault("contents", "")  # not MuPDF's "Image Stamp"
+
+            def make():
+                return pg.add_stamp_annot(r, stamp=stamp)
         elif kind == "redact":
-            for r in o["rects"]:
-                a = pg.add_redact_annot(self._in(pg, r), fill=(0, 0, 0), cross_out=True)
-                a.set_info(title=author(), subject="Redact")
+            boxes = [self._in(pg, self._box(pg, rc, least=0.5)) for rc in o.get("rects") or []]
+            if not boxes:
+                raise ValueError("Drag over what to redact first.")
+            self._snapshot()
+            now = _now()
+            for b in boxes:
+                a = pg.add_redact_annot(b, fill=(0, 0, 0), cross_out=True)
+                a.set_info(title=author(), subject="Redact", creationDate=now, modDate=now)
                 a.update()
             return self._answer([int(page)], result={"id": a.xref})
         else:
             raise ValueError(f"Unknown kind of comment: {kind}")
+        self._snapshot()
+        a = make()
         self._finish(pg, a, o)
         if kind in ("rect", "ellipse", "cloud"):
             self._place(a, r)
@@ -431,50 +801,106 @@ class PdfEditor(BalloonOps):
             self._grow_text(pg, a, fit=bool(o.get("fit")))
         if o.get("replyTo"):
             a.set_irt_xref(int(o["replyTo"]))
+        if quote:
+            pg.parent.xref_set_key(a.xref, QUOTE, pymupdf.get_pdf_str(str(quote)[:4000]))
         return self._answer([int(page)], result=self._annot_info(pg, a))
 
     def op_annot_reply(self, page, id, contents):
         """A reply to a comment: a note of its own, hidden, pointing at the comment it answers."""
-        self._snapshot()
         pg = self._page(page)
+        self._find_annot(pg, id)
+        self._snapshot()
         parent = self._find_annot(pg, id)
         a = pg.add_text_annot(parent.rect.tl, contents, icon="Comment")
         a.set_irt_xref(parent.xref)
         a.set_flags(a.flags | 2)  # hidden: only the comments list shows a reply
-        a.set_info(title=author(), content=contents, subject="Reply")
+        now = _now()
+        a.set_info(title=author(), content=contents, subject="Reply", creationDate=now, modDate=now)
         a.update()
         return self._answer([], result=self._annot_info(pg, a))
 
+    SETS = {"rect", "points", "color", "fill", "width", "clouds", "opacity", "contents", "text", "arrow", "fontsize",
+            "textColor", "align", "subject", "print"}
+
+    def _nothing_new(self, a, o):
+        """Whether a change asked of a comment changes nothing (the same words typed again): then it's no step to undo.
+        What can't be changed is refused here, before anything is."""
+        if "rect" in o and a.type[1] in MARKUPS and not _is_strike(a):
+            raise ValueError("A mark on words stays on them: delete it and mark the words you want.")
+        keys = self.SETS & set(o)
+        if keys <= {"text", "contents"}:
+            return not keys or str(o.get("text", o.get("contents")) or "") == (a.info.get("content") or "")
+        return False
+
     def op_annot_set(self, page, id, **o):
-        """Change a comment: its place and size ("rect", as shown), colors, width, opacity, words."""
-        import pymupdf
-        self._snapshot()
+        """Change a comment: its place and size ("rect", as shown), colors, width, opacity, words, whether it prints.
+        "fill" None takes a fill away. Typed-on text ("fitted") left with no words is taken out: result "deleted"."""
         pg = self._page(page)
         a = self._find_annot(pg, id)
-        kind = KINDS.get(a.type[1], "")
+        if self._nothing_new(a, o):
+            return self._answer([], result=self._annot_info(pg, a))
+        self._snapshot()
+        return self._answer([int(page)], result=self._annot_set(pg, self._find_annot(pg, id), o))
+
+    def op_annot_set_many(self, items):
+        """The same as annot_set for several comments at once ([{"page", "id", ...}]): one step to undo. For moving,
+        recoloring or restyling everything selected together. Result: each one's details, in order."""
+        todo = []
+        for it in items or []:
+            o = {k: v for k, v in it.items() if k not in ("page", "id")}
+            pg = self._page(it["page"])
+            if not self._nothing_new(self._find_annot(pg, it["id"]), o):
+                todo.append((int(it["page"]), int(it["id"]), o))
+        if not todo:
+            return self._answer([], result=[])
+        self._snapshot()
+        out = []
+        for page, id, o in todo:
+            pg = self._page(page)
+            out.append({"page": page, **self._annot_set(pg, self._find_annot(pg, id), o)})
+        return self._answer(sorted({p for p, _, _ in todo}), result=out)
+
+    def _annot_set(self, pg, a, o):
+        import pymupdf
+        doc, t = pg.parent, a.type[1]
+        kind = KINDS.get(t, "")
+        fitted = kind == "text" and a.info.get("subject") in FITTED
+        words = o.get("text", o.get("contents")) if ("text" in o or "contents" in o) else None
+        if words is not None and fitted and not str(words).strip():  # (with no words it would be there, and invisible)
+            info = self._annot_info(pg, a)
+            self._delete(pg, {a.xref})
+            return {**info, "deleted": True}
         boxed = kind in ("rect", "ellipse")  # its outside kept where it is (or put where asked) as its border changes
         target = a.rect
         if "points" in o and kind == "line":  # a line's two ends, as shown
-            a = self._remake(pg, a, a.rect, a.rect, pts=[tuple(self._pt(pg, q)) for q in o["points"][:2]])
+            a = self._reshape(pg, a, None, pts=[tuple(self._pt(pg, self._on(pg, q))) for q in o["points"][:2]])
         if "rect" in o:
-            new = self._in(pg, o["rect"])
-            old = a.rect
-            if kind in ("ink", "line", "polygon", "polyline") or a.type[1] in ("Highlight", "Underline", "StrikeOut", "Squiggly"):
-                a = self._remake(pg, a, old, new)
+            shown = self._box(pg, o["rect"], least=0.5, shift=True)
+            if kind == "text" and not fitted:  # never narrower than its longest word (it would wrap inside words, a hair wide and pages tall)
+                size = self._freetext_size(a)
+                widest = max((_width(w, size) for w in (a.info.get("content") or "").split()), default=0) + 6
+                shown = self._keep(pg, [shown[0], shown[1], max(shown[2], widest), shown[3]])
+            new = self._in(pg, shown)
+            if kind in ("ink", "line", "polygon", "polyline") or t in MARKUPS:
+                a = self._reshape(pg, a, new)
             elif boxed:
                 target = new
             else:
                 a.set_rect(new)
-        if "color" in o or "fill" in o:
+        upd = {}
+        clear = "fill" in o and o["fill"] in (None, "")
+        if clear:  # (MuPDF takes "no color" to mean "as it is": the key itself goes)
+            doc.xref_set_key(a.xref, "C" if kind == "text" else "IC", "null")
+        if kind == "text":  # a text box: "fill" is its background (the words' color is textColor)
+            if "fill" in o and not clear:
+                upd["fill_color"] = _color(o["fill"])
+        elif "color" in o or "fill" in o:
             c = a.colors or {}
             stroke = _color(o["color"]) if "color" in o else c.get("stroke")
-            fill = _color(o["fill"]) if "fill" in o else c.get("fill")
-            if kind == "text":  # a text box: its background (the words' color is textColor)
-                a.update(fill_color=fill)
-            elif a.type[1] in ("Highlight", "Underline", "StrikeOut", "Squiggly", "Text", "Ink", "Line", "PolyLine"):
+            if t in MARKUPS or t in ("Text", "Ink", "Line", "PolyLine"):
                 a.set_colors(stroke=stroke)
             else:
-                a.set_colors(stroke=stroke, fill=fill)
+                a.set_colors(stroke=stroke, fill=None if clear else (_color(o["fill"]) if "fill" in o else c.get("fill") or None))
         if "width" in o:
             b = a.border or {}
             a.set_border(width=float(o["width"]), clouds=b.get("clouds", -1))
@@ -482,41 +908,52 @@ class PdfEditor(BalloonOps):
             a.set_border(width=(a.border or {}).get("width", 1.5), clouds=1 if o["clouds"] else 0)
         if "opacity" in o:
             a.set_opacity(float(o["opacity"]))
-        if "contents" in o or "text" in o:
-            words = o.get("text", o.get("contents"))
-            a.set_info(content=words)
+        if words is not None:
+            if str(words) == "":  # (set_info leaves the old words when given none)
+                doc.xref_set_key(a.xref, "Contents", "()")
+            else:
+                a.set_info(content=str(words))
+        if "subject" in o:
+            a.set_info(subject=str(o["subject"]))
         if "arrow" in o and kind == "line":
             end = pymupdf.PDF_ANNOT_LE_OPEN_ARROW if o["arrow"] else pymupdf.PDF_ANNOT_LE_NONE
             a.set_line_ends(pymupdf.PDF_ANNOT_LE_NONE, end)
-        upd = {}
+        if "print" in o:
+            a.set_flags((a.flags | 4) if o["print"] else (a.flags & ~4))
         if kind == "text":
             if "fontsize" in o:
                 upd["fontsize"] = float(o["fontsize"])
             if "textColor" in o:
                 upd["text_color"] = _color(o["textColor"])
+            if "align" in o:
+                doc.xref_set_key(a.xref, "Q", str(int(o["align"])))
         a.set_info(modDate=_now())
         a.update(**upd)
         self._strike_look(pg, a)
         if boxed:
             self._place(a, target)
         if kind == "text" and ({"text", "contents", "fontsize", "rect"} & set(o)):
-            self._grow_text(pg, a)
-        return self._answer([int(page)], result=self._annot_info(pg, a))
+            self._grow_text(pg, a, fit=fitted)
+        return self._annot_info(pg, a)
 
     def _grow_text(self, pg, a, fit=False):
         """A text box made tall enough for its words (never shorter: only grown), so typing more never hides any.
-        With `fit`, sized to the words exactly (text typed straight onto the page has no box to keep)."""
-        import pymupdf
+        With `fit`, sized to the words exactly (text typed straight onto the page has no box to keep): as wide as its
+        longest line, wrapping at the page's edge, and moved in from the edge when that leaves it too narrow."""
         size = self._freetext_size(a)
         x, y, w, h = self._out(pg, a.rect)
+        W, H = pg.rect.width, pg.rect.height
         words = (a.info.get("content") or "").split("\n")
-        longest = max((pymupdf.get_text_length(ln, "helv", size) for ln in words), default=0)
         if fit:
-            w = longest + 6
-        rows = sum(max(1, math.ceil(pymupdf.get_text_length(ln, "helv", size) / max(w - 5, 1))) for ln in words)
+            w = max((_width(ln, size) for ln in words), default=0) + 6
+            if x + w > W:
+                w = min(w, max(W - x, min(W, 8 * size)))
+                x = max(0, min(x, W - w))
+        rows = sum(max(1, math.ceil(_width(ln, size) / max(w - 5, 1))) for ln in words)
         need = rows * size * 1.22 + 5
         if fit or need > h + 0.5:
-            a.set_rect(self._in(pg, [x, y, w, need if fit else max(h, need)]))
+            h = need if fit else max(h, need)
+            a.set_rect(self._in(pg, [x, max(0, min(y, H - h)), w, h]))
             a.update()
 
     @staticmethod
@@ -535,116 +972,208 @@ class PdfEditor(BalloonOps):
             inner = pymupdf.Rect(want)
         a.set_rect(inner)
 
-    def _remake(self, pg, a, old, new, pts=None, keep=False):
-        """An annotation drawn from points, moved and stretched from `old` to `new` (page points): made again, on
-        `pg` (a line with its ends at `pts`). With `keep` the first one stays: a copy."""
-        sx = new.width / old.width if old.width else 1
-        sy = new.height / old.height if old.height else 1
-
-        def move(p):
-            return ((p[0] - old.x0) * sx + new.x0, (p[1] - old.y0) * sy + new.y0)
-        t = a.type[1]
-        colors, border, info, opacity, ends = a.colors or {}, a.border or {}, a.info, a.opacity, a.line_ends
-        irt = a.irt_xref
+    def _reshape(self, pg, a, new, pts=None):
+        """An annotation drawn from points (a pen stroke, a line, a polygon, a mark on words), moved and stretched so
+        its box is `new` (page points), or a line put on `pts`. Its points are changed where they are, so it stays the
+        comment it was: the same id (what's selected or copied still names it) and the same replies. The box holds
+        the points and the border's room around them: the room stays as it is, only the points are stretched."""
+        import pymupdf
+        doc, t = pg.parent, a.type[1]
         v = a.vertices or []
+        flat = [p for s in v for p in s] if t == "Ink" else list(v)
+        move = None
+        if pts is None and flat:
+            old = pymupdf.Rect(a.rect)
+            maps = []  # across, then down: a point p goes to (p - a) * s + b
+            for k in (0, 1):
+                lo, hi = min(p[k] for p in flat), max(p[k] for p in flat)
+                n0, n1 = (new.x0, new.x1) if k == 0 else (new.y0, new.y1)
+                o0, o1 = (old.x0, old.x1) if k == 0 else (old.y0, old.y1)
+                room = (n1 - n0) - (lo - o0) - (o1 - hi)  # what the new box leaves the points, its border's room taken off
+                if hi - lo < 1e-6:  # (a level line has no height to stretch: it goes to the middle)
+                    maps.append((1.0, lo, (n0 + n1) / 2))
+                elif room < 1:  # (a box smaller than the border's room: all of it shrunk together)
+                    maps.append((max(n1 - n0, 1.0) / max(o1 - o0, 1e-6), o0, n0))
+                else:
+                    maps.append((room / (hi - lo), lo, n0 + (lo - o0)))
+
+            def move(p):
+                return [(p[k] - a) * s + b for k, (s, a, b) in enumerate(maps)]
+
+        def said(p):
+            return "%.3f %.3f" % self._pdf(pg, p)
         if t == "Ink":
-            b = pg.add_ink_annot([[move(p) for p in s] for s in v])
+            key, val = "InkList", "[" + "".join("[" + " ".join(said(move(p)) for p in s) + "]" for s in v) + "]"
         elif t == "Line":
-            b = pg.add_line_annot(*(pts or (move(v[0]), move(v[1]))))
-            if ends:
-                b.set_line_ends(*ends)
+            key, val = "L", "[" + " ".join(said(p) for p in (pts or [move(p) for p in v[:2]])) + "]"
         elif t in ("Polygon", "PolyLine"):
-            b = (pg.add_polygon_annot if t == "Polygon" else pg.add_polyline_annot)([move(p) for p in v])
+            key, val = "Vertices", "[" + " ".join(said(move(p)) for p in v) + "]"
         else:  # text markups: their quads
-            pts = [move(p) for p in v]
-            import pymupdf
-            quads = [pymupdf.Quad(pts[i:i + 4]) for i in range(0, len(pts) - 3, 4)]
-            add = {"Highlight": pg.add_highlight_annot, "Underline": pg.add_underline_annot,
-                   "StrikeOut": pg.add_strikeout_annot, "Squiggly": pg.add_squiggly_annot}[t]
-            b = add(quads=quads)
-        b.set_colors(stroke=colors.get("stroke"), fill=colors.get("fill"))
-        if border.get("width", -1) >= 0:
-            b.set_border(width=border["width"], clouds=border.get("clouds", -1))
-        b.set_info(info)
-        if opacity is not None and opacity >= 0:
-            b.set_opacity(opacity)
-        b.update()
-        self._strike_look(pg, b)
-        if keep:
-            return b
-        if irt:
-            b.set_irt_xref(irt)
-        # replies that pointed at the old one now point at the new one
-        for r in pg.annots():
-            if r.irt_xref == a.xref:
-                r.set_irt_xref(b.xref)
-        pg.delete_annot(a)
-        return b
+            key, val = "QuadPoints", "[" + " ".join(said(move(p)) for p in v) + "]"
+        doc.xref_set_key(a.xref, key, val)
+        a.update()  # (drawn again from its points, and its box worked out from them)
+        return a
+
+    # ------------------------------------------------------------------ copies
+    def _clip(self, pg, a):
+        """A comment as a copy that stands by itself, to paste on any page of any document, also after the comment
+        it came from is gone: plain data the window keeps. Places as shown on the page it came from."""
+        info = self._annot_info(pg, a)
+        kind = info["kind"]
+        if kind not in CLIPS:
+            raise ValueError("That kind of comment can't be copied: place a new one instead.")
+        c = {"v": 1, **{k: info.get(k) for k in ("kind", "rect", "contents", "subject", "color", "fill", "width", "opacity",
+                                                  "clouds", "print", "points", "ends", "quads", "quote", "fontsize",
+                                                  "textColor", "align", "fitted", "icon") if info.get(k) is not None}}
+        if kind == "stamp":
+            c["image"] = "data:image/png;base64," + base64.b64encode(self._annot_png(a, 4.0)).decode()
+        return c
+
+    def _paste(self, page, clip, dx=0, dy=0, at=None):
+        if not isinstance(clip, dict) or clip.get("kind") not in CLIPS or len(clip.get("rect") or []) != 4:
+            raise ValueError("There's no copied comment to paste.")
+        pg = self._page(page)
+        c, kind = clip, clip["kind"]
+        x, y, w, h = [float(v) for v in c["rect"]]
+        # where its box goes: centered on `at`, or shifted; and on the page, whatever page it came from
+        to = self._keep(pg, [at[0] - w / 2, at[1] - h / 2, w, h] if at is not None else [x + float(dx), y + float(dy), w, h])
+        mx, my = to[0] - x, to[1] - y
+
+        def mv(p):
+            return [p[0] + mx, p[1] + my]
+        o = {k: c[k] for k in ("contents", "subject", "color", "fill", "width", "opacity", "print") if c.get(k) is not None}
+        if o.get("width", 0) < 0:
+            o.pop("width")
+        if kind in ("rect", "ellipse"):
+            o.update(rect=to, clouds=bool(c.get("clouds")))
+        elif kind == "text":
+            o.update(rect=to, text=c.get("contents", ""), fontsize=c.get("fontsize", 12), textColor=c.get("textColor"),
+                     align=c.get("align", 0), fit=bool(c.get("fitted")))
+        elif kind == "note":
+            o.update(at=to[:2], icon=c.get("icon", "Comment"))
+        elif kind == "line":
+            o.update(points=[mv(p) for p in c["points"]], ends=c.get("ends"))
+        elif kind == "ink":
+            o.update(points=[[mv(p) for p in s] for s in c["points"]])
+        elif kind in ("polygon", "polyline"):
+            o.update(points=[mv(p) for p in c["points"]], clouds=bool(c.get("clouds")))
+        elif kind == "stamp":
+            o.update(rect=to, image=c["image"])
+        else:  # a mark on words: where its words were (free: a strike stays as it was drawn, not fitted to words again)
+            o.update(quads=[[mv(p) for p in q] for q in c["quads"]], free=True)
+            if c.get("quote"):
+                o["quote"] = c["quote"]
+        out = self.op_annot_add(page, kind, **o)
+        out["result"] = {"page": int(page), **out["result"]}
+        return out
+
+    def op_annot_copy(self, page, id):
+        """A comment as a copy to keep and paste later (annot_paste): {"clip": {...}}. It stands by itself: the comment
+        can be deleted (a cut), the page changed, another document opened."""
+        pg = self._page(page)
+        return {"clip": self._clip(pg, self._find_annot(pg, id))}
+
+    def op_annot_paste(self, page, clip, at=None, dx=0, dy=0):
+        """A copy (from annot_copy) put on a page: centered on `at` as shown (where the pointer or the middle of the
+        window is), or else where it was, shifted (dx, dy). Always on the page: moved in from an edge it would hang off."""
+        return self._paste(int(page), clip, dx, dy, at)
 
     def op_annot_clone(self, page, id, to=None, dx=12, dy=12):
-        """A copy of a comment, on page `to` (or its own), shifted (dx, dy) as shown: for paste and duplicate."""
-        import pymupdf
+        """A copy of a comment, on page `to` (or its own), shifted (dx, dy) as shown: for duplicate."""
         src = self._page(page)
-        a = self._find_annot(src, id)
-        t = a.type[1]
-        if t not in ("Ink", "Line", "Polygon", "PolyLine", "Highlight", "Underline", "StrikeOut", "Squiggly", "Square",
-                     "Circle", "FreeText", "Text"):
-            raise ValueError("That kind of comment can't be copied: place a new one instead.")
-        self._snapshot()
-        to = int(page if to is None else to)
-        pg = self._page(to)
-        d = self._pt(pg, [dx, dy]) - self._pt(pg, [0, 0])
-        old = pymupdf.Rect(a.rect)
-        new = old + (d.x, d.y, d.x, d.y)
-        new += (min(0, pg.rect.width - new.x1) if pg.rotation == 0 else 0, 0) * 2  # (kept on an unturned page)
-        colors, border, info, opacity = a.colors or {}, a.border or {}, dict(a.info), a.opacity
-        if t in ("Square", "Circle"):
-            b = (pg.add_circle_annot if t == "Circle" else pg.add_rect_annot)(new)
-            b.set_colors(stroke=colors.get("stroke"), fill=colors.get("fill"))
-            b.set_border(width=max(border.get("width", 1), 0), clouds=border.get("clouds", -1))
-        elif t == "FreeText":
-            b = pg.add_freetext_annot(new, info.get("content", ""), fontsize=self._freetext_size(a), fontname="Helv",
-                                      text_color=_color(self._freetext_color(a)), fill_color=colors.get("fill"),
-                                      rotate=pg.rotation)
-        elif t == "Text":
-            b = pg.add_text_annot(new.tl, info.get("content", ""), icon="Comment")
-            b.set_colors(stroke=colors.get("stroke"))
-        else:
-            b = self._remake(pg, a, old, new, keep=True)
-        info.pop("id", None)
-        b.set_info(content=info.get("content", ""), title=author(), subject=info.get("subject", ""))
-        if opacity is not None and 0 <= opacity < 1:
-            b.set_opacity(opacity)
-        b.update()
-        self._strike_look(pg, b)
-        if t in ("Square", "Circle"):
-            self._place(b, new)
-        return self._answer([to], result={"page": to, **self._annot_info(pg, b)})
+        return self._paste(int(page if to is None else to), self._clip(src, self._find_annot(src, id)), dx, dy)
+
+    @staticmethod
+    def _annot_png(a, most=3.0):
+        """A comment as it's drawn, the way the page is shown (MuPDF turns it with the page): PNG bytes."""
+        import pymupdf
+        r = a.rect
+        k = min(most, 1400 / max(r.width, r.height, 1))
+        pymupdf.TOOLS.set_icc(False)  # with ICC on, Annot.get_pixmap changes the colors (pure red comes out 237,28,36)
+        try:
+            return a.get_pixmap(matrix=pymupdf.Matrix(k, k), alpha=True).tobytes("png")
+        finally:
+            pymupdf.TOOLS.set_icc(True)
 
     def op_annot_image(self, page, id):
-        """A picture of one comment as it's drawn (a PNG data URL), to carry along while it's dragged; None where
-        the page is turned (the picture would be too)."""
-        import pymupdf
+        """A picture of one comment as it's drawn, as the page is shown (a PNG data URL), to carry along while it's
+        dragged. None for one with no size."""
         pg = self._page(page)
         a = self._find_annot(pg, id)
-        r = a.rect
-        if pg.rotation or r.is_empty:
+        if a.rect.is_empty:
             return None
-        k = min(3.0, 1400 / max(r.width, r.height, 1))
-        pix = a.get_pixmap(matrix=pymupdf.Matrix(k, k), alpha=True)
-        return "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode()
+        return "data:image/png;base64," + base64.b64encode(self._annot_png(a)).decode()
 
-    def op_annot_delete(self, page, ids):
-        self._snapshot()
-        pg = self._page(page)
-        ids = {int(i) for i in (ids if isinstance(ids, list) else [ids])}
+    @staticmethod
+    def _delete(pg, ids):
+        """Takes comments off a page, and their replies. Whether any were there."""
         doomed = {a.xref for a in pg.annots() if a.xref in ids or (a.irt_xref and a.irt_xref in ids)}  # replies go too
         for xref in doomed:
             # found again each time: MuPDF deletes a comment's replies and popup along with it
             a = next((x for x in pg.annots() if x.xref == xref), None)
             if a is not None:
                 pg.delete_annot(a)
-        return self._answer([int(page)])
+        return bool(doomed)
+
+    def op_annot_delete(self, page, ids):
+        return self.op_annot_delete_many([{"page": page, "ids": ids}])
+
+    def op_annot_delete_many(self, items):
+        """Comments taken off several pages at once ([{"page", "ids"}]): one step to undo. Ones already gone are
+        passed over (and with none left to take, nothing changes)."""
+        todo = {}
+        for it in items or []:
+            pg = self._page(it["page"])
+            ids = {int(i) for i in (it["ids"] if isinstance(it["ids"], list) else [it["ids"]])}
+            if any(a.xref in ids for a in pg.annots()):
+                todo.setdefault(int(it["page"]), set()).update(ids)
+        if not todo:
+            return self._answer([])
+        self._snapshot()
+        for page, ids in todo.items():
+            self._delete(self._page(page), ids)
+        return self._answer(sorted(todo))
+
+    def op_annot_order(self, page, ids, to="front"):
+        """Which comments lie over which on a page: `ids` brought to the "front" (drawn last, over the others), sent
+        to the "back", or one place "forward" or "backward". They keep their order among themselves. Result:
+        {"order": every id on the page, from the back to the front}."""
+        if to not in ("front", "back", "forward", "backward"):
+            raise ValueError(f"Unknown place to put a comment: {to}")
+        pg = self._page(page)
+        doc = self.fz
+        ids = {int(i) for i in (ids if isinstance(ids, list) else [ids])}
+        kind, val = doc.xref_get_key(pg.xref, "Annots")
+        held = None  # (the list is the page's own, or an object of its own the page points at)
+        if kind == "xref":
+            held = int(val.split()[0])
+            val = doc.xref_object(held, compressed=True)
+        refs = re.findall(r"(\d+)\s+(\d+)\s+R", val or "")
+        if re.sub(r"\d+\s+\d+\s+R|[\[\]\s]", "", val or ""):  # (comments written into the list itself: left alone)
+            raise ValueError("This page keeps its comments in a way that can't be put in another order.")
+        was = [int(x) for x, _ in refs]
+        if not ids & set(was):
+            raise ValueError("That comment isn't there any more.")
+        now = list(was)
+        if to in ("front", "back"):
+            picked, rest = [x for x in was if x in ids], [x for x in was if x not in ids]
+            now = rest + picked if to == "front" else picked + rest
+        else:  # one place: each swaps with its neighbor that way, unless that's one of them too
+            span = range(len(now) - 2, -1, -1) if to == "forward" else range(1, len(now))
+            step = 1 if to == "forward" else -1
+            for k in span:
+                if now[k] in ids and now[k + step] not in ids:
+                    now[k], now[k + step] = now[k + step], now[k]
+        if now != was:
+            gens = dict((int(x), g) for x, g in refs)
+            said = "[" + " ".join(f"{x} {gens[x]} R" for x in now) + "]"
+            self._snapshot()
+            if held is None:
+                doc.xref_set_key(pg.xref, "Annots", said)
+            else:
+                doc.update_object(held, said)
+            doc.reload_page(pg)
+        return self._answer([int(page)] if now != was else [], result={"order": now})
 
     def op_state(self):
         return self.state()
@@ -661,8 +1190,9 @@ class PdfEditor(BalloonOps):
         return out
 
     def op_pages_rotate(self, pages, by=90):
+        pages = self._pages_list(pages)
         self._snapshot()
-        for i in self._pages_list(pages):
+        for i in pages:
             pg = self.fz[i]
             pg.set_rotation((pg.rotation + int(by)) % 360)
         return self._answer(None, structure=True)
@@ -796,21 +1326,26 @@ class PdfEditor(BalloonOps):
         """Crop the pages to `rect` (as shown on the first of them); crop boxes are the page's visible part."""
         import pymupdf
         pages = self._pages_list(pages)
-        self._snapshot()
         first = self.fz[pages[0]]
         want = self._in(first, rect)
+        want.normalize()
+        boxes = []
         for i in pages:
             pg = self.fz[i]
             box = pymupdf.Rect(want) + (pg.cropbox.x0, pg.cropbox.y0, pg.cropbox.x0, pg.cropbox.y0)
             box &= pg.mediabox
             if box.is_empty or box.width < 9 or box.height < 9:
                 raise ValueError("That crop leaves too little of the page.")
-            pg.set_cropbox(box)
+            boxes.append(box)
+        self._snapshot()
+        for i, box in zip(pages, boxes):
+            self.fz[i].set_cropbox(box)
         return self._answer(None, structure=True)
 
     def op_pages_uncrop(self, pages):
+        pages = self._pages_list(pages)
         self._snapshot()
-        for i in self._pages_list(pages):
+        for i in pages:
             pg = self.fz[i]
             pg.set_cropbox(pg.mediabox)
         return self._answer(None, structure=True)
@@ -834,13 +1369,13 @@ class PdfEditor(BalloonOps):
         return out
 
     def op_field_set(self, page, id, value):
-        self._snapshot()
         pg = self._page(page)
         for w in pg.widgets() or []:
             if w.xref != int(id):
                 continue
             if w.field_flags & 1:
                 raise ValueError("That field can't be changed: it's read-only.")
+            self._snapshot()
             if w.field_type in (2, 5):  # a check box or radio button: on or off
                 w.field_value = w.on_state() if value in (True, "true", "on", 1) or value == w.on_state() else "Off"
             else:
@@ -980,7 +1515,10 @@ class PdfEditor(BalloonOps):
 
     def op_flatten(self, annots=True, fields=True):
         """Make comments and filled-in fields part of the pages, so nobody can change them. Balloons stay balloons:
-        made part of the pages they'd be read as the print's own text, and drawn again over themselves."""
+        made part of the pages they'd be read as the print's own text, and drawn again over themselves. Not with
+        redaction marks waiting: their look would become part of the page while the words under them stayed in it."""
+        if annots and any(a.type[1] == "Redact" for pg in self.fz for a in pg.annots()):
+            raise ValueError("There are redaction marks not applied yet: apply them (or delete them) before flattening.")
         self._snapshot()
         keep = self._insp() if annots else None
         if keep and (keep["chars"] or keep["views"]):
@@ -991,8 +1529,21 @@ class PdfEditor(BalloonOps):
         return self._answer(None, text=True)
 
     # ================================================================== the pages' own text and pictures
+    @staticmethod
+    def _look(s):
+        """A run of text's look: the font it's in and the nearest standard one."""
+        font, flags = s["font"], s["flags"]
+        low = font.lower()
+        return {"font": font.split("+", 1)[-1], "size": round(s["size"], 2), "color": f"#{s['color']:06x}",
+                "bold": bool(flags & 16) or "bold" in low or "black" in low,
+                "italic": bool(flags & 2) or "italic" in low or "oblique" in low,
+                "serif": bool(flags & 4) and "sans" not in low, "mono": bool(flags & 8)}
+
     def op_text_at(self, page, at):
-        """The line of text under a point: its words, place, font, size and color, to edit."""
+        """The line of text under a point: its words, place, font, size and color, to edit. "spans": its runs, each
+        with its own words, box, start ("origin") and look, and "span": which of them the point is on ("mixed": they
+        don't all look the same, so changing one run keeps the others' look). "dir": which way the line runs on the
+        page unturned (sent back to text_replace as it is); "dirShown": the same as the page is shown."""
         import pymupdf
         pg = self._page(page)
         p = self._pt(pg, at)
@@ -1000,26 +1551,35 @@ class PdfEditor(BalloonOps):
         for b in pg.get_text("dict", flags=0)["blocks"]:
             for line in b.get("lines", []):
                 r = pymupdf.Rect(line["bbox"])
-                if not r.contains(p) and best is not None:
+                if not r.contains(p) and best is not None and best[0] == 0:
                     continue
                 d = 0 if r.contains(p) else min(abs(p.y - r.y0), abs(p.y - r.y1)) + max(r.x0 - p.x, 0, p.x - r.x1)
-                if d < 6 and (best is None or d < best[0]):
-                    best = (d, line)
+                # Lines' boxes reach into their neighbors' (a font's highest to its lowest). Under the point, the
+                # line whose letters it's on wins: how far the point is from the band between the letters' feet and
+                # their heads, then from the middle of it
+                first = line["spans"][0] if line["spans"] else None
+                mid = (0, 0)
+                if first:
+                    u, size = line["dir"], first["size"]
+                    rise = (p.x - first["origin"][0]) * u[1] - (p.y - first["origin"][1]) * u[0]  # above the baseline
+                    mid = (max(-0.22 * size - rise, 0, rise - 0.75 * size), abs(rise - 0.3 * size))
+                if d < 6 and (best is None or (d, mid) < best[:2]):
+                    best = (d, mid, line)
         if best is None:
             return None
-        line = best[1]
+        line = best[2]
         spans = [s for s in line["spans"] if s["text"].strip()] or line["spans"]
         s = max(spans, key=lambda s: len(s["text"]))
-        font = s["font"]
-        flags = s["flags"]
-        bold = bool(flags & 16) or "bold" in font.lower() or "black" in font.lower()
-        italic = bool(flags & 2) or "italic" in font.lower() or "oblique" in font.lower()
-        serif = bool(flags & 4) and "sans" not in font.lower()
-        mono = bool(flags & 8)
-        return {"rect": self._out(pg, line["bbox"]), "text": "".join(x["text"] for x in line["spans"]),
-                "font": font.split("+", 1)[-1], "size": round(s["size"], 2), "color": f"#{s['color']:06x}",
-                "bold": bold, "italic": italic, "serif": serif, "mono": mono,
-                "origin": self._pt_out(pg, line["spans"][0]["origin"]), "dir": list(line["dir"])}
+        runs = [{"text": x["text"], "rect": self._out(pg, x["bbox"]), "origin": self._pt_out(pg, x["origin"]), **self._look(x)}
+                for x in line["spans"] if x["text"]]
+        boxes = [pymupdf.Rect(x["bbox"]) for x in line["spans"] if x["text"]]
+        on = min(range(len(boxes)), key=lambda k: 0 if boxes[k].contains(p) else 1 + max(boxes[k].x0 - p.x, 0, p.x - boxes[k].x1) + max(boxes[k].y0 - p.y, 0, p.y - boxes[k].y1)) if boxes else 0
+        looks = {tuple(sorted(self._look(x).items())) for x in spans}
+        turn = pg.rotation_matrix
+        shown = pymupdf.Point(line["dir"]) * turn - pymupdf.Point(0, 0) * turn
+        return {"rect": self._out(pg, line["bbox"]), "text": "".join(x["text"] for x in line["spans"]), **self._look(s),
+                "origin": self._pt_out(pg, line["spans"][0]["origin"]), "dir": list(line["dir"]),
+                "dirShown": [round(shown.x, 4), round(shown.y, 4)], "spans": runs, "span": on, "mixed": len(looks) > 1}
 
     def op_strike_at(self, page, at, color=None, whole=False):
         """Strike through what's under a click: its line of text (one of two stacked limits, a frame's tolerance or
@@ -1128,42 +1688,102 @@ class PdfEditor(BalloonOps):
             return MONO[(bool(o.get("bold")), bool(o.get("italic")))]
         return BASE14[(bool(o.get("serif")), bool(o.get("bold")), bool(o.get("italic")))]
 
+    def _font_slot(self, pg, name):
+        """A resource name for one of our fonts on `pg`: the one put in since the last save, or a new name when the
+        page has that name already as a font cut down to the letters used then (a save, or another session)."""
+        if not hasattr(self, "_fresh_fonts"):
+            self._fresh_fonts = set()
+        have, base, n = {f[4] for f in pg.get_fonts()}, name, 0
+        while name in have and (pg.xref, name) not in self._fresh_fonts:
+            n += 1
+            name = f"{base}{n}"
+        return name
+
     def _write_text(self, pg, origin, text, o, angle):
-        """Words into the page itself, the first line's baseline starting at `origin` (page points)."""
+        """Words into the page itself, the first line's baseline starting at `origin` (page points), running along
+        `angle` (degrees counter-clockwise). Characters the standard fonts lack are set in a font that has them (see
+        _runs), embedded in the PDF; never swapped for something else."""
         import pymupdf
         size = float(o.get("size", 11))
         fontname = self._fontname(o)
         color = _color(o.get("color"), (0, 0, 0))
         lines = str(text).split("\n")
-        # insert_text turns by multiples of 90 degrees, counter-clockwise: lines run along `angle`
-        rotate = int(round(angle / 90.0)) * 90 % 360
-        pg.insert_text(pymupdf.Point(origin), lines, fontsize=size, fontname=fontname, color=color, rotate=rotate,
-                       lineheight=1.2)
+        origin = pymupdf.Point(origin)
+        square = abs(angle - round(angle / 90.0) * 90) < 0.5
+        if square and all(ord(c) < 256 for c in str(text)):
+            # insert_text turns by multiples of 90 degrees, counter-clockwise: lines run along `angle`
+            pg.insert_text(origin, lines, fontsize=size, fontname=fontname, color=color,
+                           rotate=int(round(angle / 90.0)) * 90 % 360, lineheight=1.2)
+            return
+        # run by run, each in its font, laid out level and then turned about the start: text at any angle (a
+        # dimension along a slanted dimension line stays along it)
+        turn = (origin, pymupdf.Matrix(round(angle / 90.0) * 90 if square else angle))
+        for k, line in enumerate(lines):
+            x = 0.0
+            for font, run in _runs(line, o):
+                if font is None:
+                    name, w = fontname, pymupdf.get_text_length(run, fontname, size)
+                else:
+                    name, w = "ss" + re.sub(r"\W", "", font[0].rsplit(".", 1)[0]), font[2].text_length(run, size)
+                    name = self._font_slot(pg, name)
+                    pg.insert_font(fontname=name, fontfile=font[1])
+                    self._fresh_fonts.add((pg.xref, name))  # (the whole font went in: cut down to what's used, in the file saved)
+                pg.insert_text(origin + (x, k * size * 1.2), run, fontsize=size, fontname=name, color=color, morph=turn)
+                x += w
 
     def op_text_replace(self, page, rect, text, **o):
-        """Change a line of the page's own text: the old words are taken out of the page (as a redaction does, so
-        they're really gone), and the new ones set in their place in the nearest standard font."""
+        """Change a line of the page's own text, or one run of it: the old words are taken out of the page (as a
+        redaction does, so they're really gone), and the new ones set in their place in the nearest standard font.
+        rect: the line's (or run's) box as shown, from text_at. origin, dir: where its baseline starts (as shown) and
+        which way it runs, as text_at gave them: with these the words go back exactly where they were, at any angle
+        (without, the line is found again from the box)."""
         import pymupdf
-        self._snapshot()
         pg = self._page(page)
         r = self._in(pg, rect)
-        old = self._lines_in(pg, r)
-        origin = pymupdf.Point(old["origin"]) if old else pymupdf.Point(r.x0, r.y1 - (r.height * 0.2))
-        dirv = old["dir"] if old else (1, 0)
-        # an unturned page's text runs along dir; insert_text measures its turn counter-clockwise, with y down
+        r.normalize()
+        new = str(text)
+        at = self._pt(pg, o["origin"]) if o.get("origin") is not None else None
+        old = self._lines_in(pg, r, at)
+        if old is None and not new.strip():
+            return self._answer([])  # (nothing there, and nothing to put there)
+        origin = at if at is not None else pymupdf.Point(old["origin"]) if old else pymupdf.Point(r.x0, r.y1 - (r.height * 0.2))
+        dirv = o["dir"] if o.get("dir") else old["dir"] if old else (1, 0)
+        # an unturned page's text runs along dir; a turn is measured counter-clockwise, with y down
         angle = math.degrees(math.atan2(-dirv[1], dirv[0]))
-        # only the words: a box a little inside the line's, so the lines above and below stay
+        for ln in new.split("\n"):
+            _runs(ln, o)  # (says so now, when a symbol can't be set)
+        boxes = self._word_boxes(r, dirv, old)
+        self._snapshot()
+        pg = self._take_text(pg, boxes)
+        if new.strip():
+            self._write_text(pg, origin, new, o, angle)
+        return self._answer([int(page)], text=True)
+
+    @staticmethod
+    def _word_boxes(r, dirv, line=None):
+        """What to take out of the page to take out the words in the box `r` and nothing else: a box a little inside
+        it, so the lines above and below (whose boxes overlap it) stay. For words on a slant, whose box takes in a
+        good deal besides them, the middle of each character in it."""
+        import pymupdf
+        if min(abs(dirv[0]), abs(dirv[1])) > 0.02 and line and line.get("chars"):
+            out = []
+            for c in line["chars"]:
+                b = pymupdf.Rect(c)
+                mid = pymupdf.Point((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2)
+                if r.contains(mid):
+                    out.append(pymupdf.Rect(mid.x - b.width * 0.2, mid.y - b.height * 0.2, mid.x + b.width * 0.2, mid.y + b.height * 0.2))
+            if out:
+                return out
         inner = pymupdf.Rect(r)
         if abs(dirv[0]) >= abs(dirv[1]):
-            inner.y0 += r.height * 0.25
-            inner.y1 -= r.height * 0.25
+            inner.y0, inner.y1 = r.y0 + r.height * 0.25, r.y1 - r.height * 0.25
+            if r.width > 1.2:
+                inner.x0, inner.x1 = r.x0 + 0.3, r.x1 - 0.3
         else:
-            inner.x0 += r.width * 0.25
-            inner.x1 -= r.width * 0.25
-        pg = self._take_text(pg, [inner])
-        if str(text).strip():
-            self._write_text(pg, origin, text, o, angle)
-        return self._answer([int(page)], text=True)
+            inner.x0, inner.x1 = r.x0 + r.width * 0.25, r.x1 - r.width * 0.25
+            if r.height > 1.2:
+                inner.y0, inner.y1 = r.y0 + 0.3, r.y1 - 0.3
+        return [inner]
 
     def _take_text(self, pg, boxes):
         """The page's own words in these boxes (page points) taken out for good, as a redaction does, and nothing else:
@@ -1188,7 +1808,6 @@ class PdfEditor(BalloonOps):
     def op_text_delete(self, page, rects):
         """Selected words taken out of the page itself (Select, then Delete): each rect [x, y, w, h] as shown, a line
         of the selection. Only the words go, a box a little inside each line's so the lines above and below stay."""
-        import pymupdf
         pg = self._page(page)
         boxes = []
         for rect in rects or []:
@@ -1196,36 +1815,63 @@ class PdfEditor(BalloonOps):
             r.normalize()
             line = self._lines_in(pg, r)
             dirv = line["dir"] if line else ((1, 0) if r.width >= r.height else (0, 1))
-            inner = pymupdf.Rect(r)
-            if abs(dirv[0]) >= abs(dirv[1]):
-                inner.y0, inner.y1 = r.y0 + r.height * 0.25, r.y1 - r.height * 0.25
-                inner.x0, inner.x1 = r.x0 + 0.3, r.x1 - 0.3
-            else:
-                inner.x0, inner.x1 = r.x0 + r.width * 0.25, r.x1 - r.width * 0.25
-                inner.y0, inner.y1 = r.y0 + 0.3, r.y1 - 0.3
-            if not inner.is_empty:
-                boxes.append(inner)
+            boxes += [b for b in self._word_boxes(r, dirv, line) if not b.is_empty]
         if not boxes:
             raise ValueError("Select some of the page's words first (drag across them with Select).")
         self._snapshot()
         self._take_text(pg, boxes)
         return self._answer([int(page)], text=True)
 
-    def _lines_in(self, pg, r):
+    def _lines_in(self, pg, r, at=None):
+        """The line of the page's text a box is the box of: {"origin", "dir", "chars": its characters' boxes}. The
+        one starting at `at` (page points) when that's known; else the one the box covers most of. (Not the first one
+        it touches: a line's box reaches into the lines above and below it.)"""
         import pymupdf
-        for b in pg.get_text("dict", flags=0)["blocks"]:
+        best = None
+        for b in pg.get_text("rawdict", flags=0)["blocks"]:
             for line in b.get("lines", []):
-                if pymupdf.Rect(line["bbox"]).intersects(r) and line["spans"]:
-                    return {"origin": line["spans"][0]["origin"], "dir": line["dir"]}
-        return None
+                if not line["spans"]:
+                    continue
+                box = pymupdf.Rect(line["bbox"])
+                if at is not None:
+                    score = -min(abs(pymupdf.Point(s["origin"]) - at) for s in line["spans"])
+                    if score < -1.5:
+                        continue
+                elif box.intersects(r):
+                    score = (box & r).get_area() / max(box.get_area(), 1e-6)
+                else:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, line)
+        if best is None:
+            return None
+        line = best[1]
+        return {"origin": line["spans"][0]["origin"], "dir": line["dir"],
+                "chars": [c["bbox"] for s in line["spans"] for c in s.get("chars", [])]}
 
     def op_text_add(self, page, at, text, **o):
-        """New words in the page itself (not a comment), reading across the page as shown, from `at`'s baseline."""
-        self._snapshot()
+        """New words in the page itself (not a comment), reading across the page as shown, from `at`'s baseline. Kept
+        on the page: started further left when they'd run off its right edge. Result: {"at", "rect"} as shown, where
+        they went."""
         pg = self._page(page)
+        new = str(text)
+        if not new.strip():
+            return self._answer([])
+        W, H = pg.rect.width, pg.rect.height
+        x, y = float(at[0]), float(at[1])
+        if not (0 <= x <= W and 0 <= y <= H):
+            raise ValueError("That's off the page.")
+        size = float(o.get("size", 11))
+        lines = new.split("\n")
+        for ln in lines:
+            _runs(ln, o)  # (says so now, when a symbol can't be set)
+        wide = max(_width(ln, size, o, self._fontname(o)) for ln in lines)
+        x = max(0.0, min(x, W - wide - 2))
+        self._snapshot()
         # reading across the page as shown: against the page's own turn
-        self._write_text(pg, self._pt(pg, at), text, o, pg.rotation)
-        return self._answer([int(page)], text=True)
+        self._write_text(pg, self._pt(pg, [x, y]), new, o, pg.rotation)
+        return self._answer([int(page)], text=True, result={"at": [round(x, 2), round(y, 2)], "rect": [
+            round(x, 2), round(y - size, 2), round(wide, 2), round(size * (1.2 * len(lines) + 0.1), 2)]})
 
     def op_words(self, page):
         """Where a page's words are, as shown: [[x, y, w, h], ...] (for the Select tool's I-beam and text drag)."""
@@ -1264,12 +1910,13 @@ class PdfEditor(BalloonOps):
         now = [i for i in pg.get_image_info(xrefs=True) if i.get("xref") == xref]
         if not now:
             raise ValueError("That picture isn't there any more.")
+        target = self._in(pg, self._box(pg, rect, shift=True)) if rect else pymupdf.Rect(now[0]["bbox"])
+        data = self._picture(image) if image else None
         self._snapshot()
-        target = self._in(pg, rect) if rect else pymupdf.Rect(now[0]["bbox"])
         pix = None if image else self._image_pixmap(xref)
         pg.delete_image(xref)
         if image:
-            pg.insert_image(target, stream=base64.b64decode(image.split(",", 1)[-1]), keep_proportion=False,
+            pg.insert_image(target, stream=data, keep_proportion=False,
                             rotate=pg.rotation and (360 - pg.rotation) % 360)
         else:
             pg.insert_image(target, pixmap=pix, keep_proportion=False,
@@ -1277,16 +1924,19 @@ class PdfEditor(BalloonOps):
         return self._answer([int(page)], text=True)
 
     def op_image_delete(self, page, id):
-        self._snapshot()
         pg = self._page(page)
+        if not any(i.get("xref") == int(id) for i in pg.get_image_info(xrefs=True)):
+            raise ValueError("That picture isn't there any more.")
+        self._snapshot()
         pg.delete_image(int(id))
         return self._answer([int(page)], text=True)
 
     def op_image_add(self, page, rect, image):
-        self._snapshot()
         pg = self._page(page)
-        pg.insert_image(self._in(pg, rect), stream=base64.b64decode(image.split(",", 1)[-1]),
-                        rotate=pg.rotation and (360 - pg.rotation) % 360)
+        target = self._in(pg, self._box(pg, rect, shift=True))
+        data = self._picture(image)
+        self._snapshot()
+        pg.insert_image(target, stream=data, rotate=pg.rotation and (360 - pg.rotation) % 360)
         return self._answer([int(page)], text=True)
 
     # ================================================================== redacting
@@ -1513,6 +2163,22 @@ class PdfEditor(BalloonOps):
             if os.path.exists(tmp):
                 os.remove(tmp)
 
+    def _save_subset(self, target):
+        """Save with our fonts cut down to the letters used: done to a copy, so the document here keeps them whole
+        (MuPDF would put the cut-down one in again for the next words typed, and their letters would be missing)."""
+        import pymupdf
+        cp = pymupdf.open(stream=self._bytes(), filetype="pdf")
+        try:
+            if cp.needs_pass:
+                cp.authenticate(self.pdf.password or "")
+            try:
+                cp.subset_fonts()
+            except Exception:
+                pass  # (the whole fonts stay in: a bigger file, the same page)
+            self._save_doc(cp, target)
+        finally:
+            cp.close()
+
     # A signed PDF, a PDF/A or an XFA form is written as other programs expect only when what changed is added to
     # the end of the file, as Acrobat does it, leaving the bytes that were signed (or checked) as they were. A save
     # does that when the edits are comments, balloons or filled-in fields; an edit to the pages themselves can't be
@@ -1566,8 +2232,13 @@ class PdfEditor(BalloonOps):
             new = cur.xref_object(x, compressed=True)
             raw_new = cur.xref_stream_raw(x) if cur.xref_is_stream(x) else None
             if x < n0:
-                if T.xref_is_stream(x) and T.xref_get_key(x, "Type")[1] in ("/ObjStm", "/XRef"):
-                    if new.strip() not in ("null", "") and new != T.xref_object(x, compressed=True):
+                kind = T.xref_get_key(x, "Type")[1] if T.xref_is_stream(x) else None
+                if kind in ("/ObjStm", "/XRef"):
+                    if kind == "/XRef":  # (writing bytes rewrites its /ID: the index is still an index, and one is written anyway)
+                        changed = not (cur.xref_is_stream(x) and cur.xref_get_key(x, "Type")[1] == kind)
+                    else:
+                        changed = new != T.xref_object(x, compressed=True)
+                    if new.strip() not in ("null", "") and changed:
                         pages_changed = True  # an edit took a number the file uses for its own (can't be added on)
                     continue  # the file's own containers: what's in them stays where it is
                 old = T.xref_object(x, compressed=True)
@@ -1674,7 +2345,10 @@ class PdfEditor(BalloonOps):
                     "kind": "guarded", "title": "Saving would undo something",
                     "text": " ".join(why), "go": "Save anyway"}})
         if not appended:
-            self._save_doc(self.fz, target)
+            if getattr(self, "_fresh_fonts", None):  # one of our fonts went in whole: the file keeps only the letters used
+                self._save_subset(target)
+            else:
+                self._save_doc(self.fz, target)
             if self._guarded():
                 self.guards_ok = True  # (said once; the file is as it is now)
         recovery.clear(self.path)  # (saved: nothing to recover, here or, after Save As, at the old name)

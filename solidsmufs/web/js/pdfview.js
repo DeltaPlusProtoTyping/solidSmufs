@@ -2,9 +2,9 @@
 // pixels, in tiles, so text and fine lines stay sharp at any zoom. While a new zoom is being drawn the tiles
 // already here are stretched to fit, so zooming answers at once, and the newest view is always drawn first.
 import { api } from './api.js';
-import { h, toast } from './ui.js';
+import { h, toast, menu, menuOpen, typingKey } from './ui.js';
 import { PrintHints } from './printhints.js';
-import { PdfEditor } from './pdfedit.js';
+import { PdfEditor, ICON } from './pdfedit.js';
 import { Balloons } from './balloons.js';
 
 const TILE = 1536; // device pixels: large, as a word cut by a seam can differ by a pixel across it
@@ -14,6 +14,7 @@ const IN_FLIGHT = 2;
 const MAX_TILES = 60;
 const POINT = 96 / 72; // css px per point at 100%
 const clamp = (x, a, b) => Math.min(Math.max(x, a), b);
+const SIDE_MIN = 120, SIDE_MAX = 320; // css px: how narrow and how wide the thumbnails panel can be dragged
 
 export class PdfView {
   constructor(host, onMode) {
@@ -27,9 +28,17 @@ export class PdfView {
     this.scroller = h('div', { class: 'pv-scroll', tabindex: '0' });
     this.sheet = h('div', { class: 'pv-sheet' });
     this.scroller.append(this.sheet);
-    // the page thumbnails are a side bar on the left, with an arrow on its edge to open and close it
-    this.sideTab = h('button', { class: 'pv-sidetab', onclick: () => this._toggleSide() }, h('span'));
+    // the page thumbnails are a panel on the left. Its edge is a splitter: dragged, the panel gets wider or narrower;
+    // double-clicked, it closes (closed, the edge is a thin strip that a click opens: the Pages panel button and F4 too)
+    this.sideTab = h('div', { class: 'pv-split' }, h('span'));
+    this.sideTab.addEventListener('pointerdown', (e) => this._splitDown(e));
+    this.sideTab.addEventListener('dblclick', () => { if (this.state?.side && performance.now() - (this._splitOpened || 0) > 600) this._toggleSide(); }); // (not the double-click whose first click opened it)
+    try { this.sideW = parseInt(localStorage.getItem('pv:sidew'), 10) || 0; } catch { this.sideW = 0; }
+    if (this.sideW) this.side.style.width = `${clamp(this.sideW, SIDE_MIN, SIDE_MAX)}px`;
     this.body = h('div', { class: 'pv-body' }, this.side, this.sideTab, this.scroller);
+    // which was clicked last, the thumbnails or the pages: what the Delete key is about
+    this.lastRegion = 'pages';
+    this.el.addEventListener('pointerdown', (e) => { this.lastRegion = this.side.contains(e.target) ? 'side' : 'pages'; }, true);
     this.el.append(this.bar, this.body);
     host.append(this.el);
     // a 3D PDF's switch between its model and its pages
@@ -45,6 +54,7 @@ export class PdfView {
     this.scroller.addEventListener('wheel', (e) => this._wheel(e), { passive: false });
     this.scroller.addEventListener('pointerdown', (e) => this._down(e));
     new ResizeObserver(() => { if (this.doc && !this.el.hidden) this._resized(); }).observe(this.scroller);
+    new ResizeObserver(() => this._fitBar()).observe(this.bar);
     document.addEventListener('keydown', (e) => this._key(e), true);
     document.addEventListener('copy', (e) => {
       if (this.doc && this.selection?.text) {
@@ -55,34 +65,69 @@ export class PdfView {
   }
 
   // ================================================================== toolbar
+  // The Document bar: the same in every tab and with every tool. Panels, the file's own buttons (the editor's, in
+  // fileSlot), the page, the zoom, the view's turn, the print's help, Find, and the comments list (panelSlot).
   _buildBar() {
     const btn = (text, tip, run) => h('button', { class: 'pv-btn', text, title: tip, onclick: run });
+    const ibtn = (icon, tip, run, cls = '') => h('button', { class: `pv-btn${cls ? ` ${cls}` : ''}`, html: ICON[icon], title: tip, onclick: run });
+    this.sideBtn = ibtn('panelLeft', 'Pages panel: the pages as small pictures, to jump to one or pick some (F4)', () => this._toggleSide(), 'pv-toggle');
+    this.fileSlot = h('span', { class: 'pv-slot' }); // Save, Print, Undo and Redo: the editor fills it
+    this.panelSlot = h('span', { class: 'pv-slot' }); // the comments list's button, far right: the editor's too
     this.pageIn = h('input', { class: 'pv-page', title: 'Go to page', spellcheck: 'false' });
     this.pageIn.addEventListener('change', () => this.goto(parseInt(this.pageIn.value, 10) - 1));
     this.pageOf = h('span', { class: 'pv-of' });
-    this.zoomLabel = h('span', { class: 'pv-zoom', title: 'Zoom' });
-    this.findIn = h('input', { class: 'pv-find', placeholder: 'Find in PDF', spellcheck: 'false' });
+    this.zoomLabel = h('button', { class: 'pv-btn pv-zoom', title: 'Zoom: fit the page or its width, actual size, or a size from the list', onclick: () => this._zoomMenu() });
+    this.findIn = h('input', { class: 'pv-find', placeholder: 'Find in PDF', title: 'Find words in the PDF (Ctrl+F). Enter for the next place, Shift+Enter for the one before, Esc to clear.', spellcheck: 'false' });
     this.findIn.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { this._find(e.shiftKey ? -1 : 1); e.preventDefault(); }
-      if (e.key === 'Escape') { this.findIn.value = ''; this._clearFind(); this.scroller.focus(); }
+      if (e.key === 'Escape') { this._findOff(); this.scroller.focus(); }
       e.stopPropagation();
     });
-    this.findCount = h('span', { class: 'pv-of' });
+    this.findIn.addEventListener('input', () => this._findState());
+    this.findCount = h('span', { class: 'pv-of pv-count' });
+    this.findPrev = ibtn('up', 'The place before (Shift+Enter)', () => this._find(-1), 'pv-fb');
+    this.findNext = ibtn('down', 'The next place (Enter)', () => this._find(1), 'pv-fb');
+    this.findX = h('button', { class: 'pv-btn pv-fb', text: '×', title: 'Clear what was found (Esc)', onclick: () => this._findOff() });
+    this.findBox = h('span', { class: 'pv-findgrp' }, this.findIn, this.findCount, this.findPrev, this.findNext, this.findX);
     this.chip = h('span', { class: 'pv-chip', hidden: true });
     this.bar.append(
+      this.sideBtn, h('span', { class: 'pv-sep' }),
+      this.fileSlot,
       btn('‹', 'Previous page (Page Up)', () => this.goto(this.current - 1)), this.pageIn, this.pageOf,
       btn('›', 'Next page (Page Down)', () => this.goto(this.current + 1)),
       h('span', { class: 'pv-sep' }),
-      btn('−', 'Zoom out (-)', () => this.zoomBy(1 / 1.25)), this.zoomLabel, btn('+', 'Zoom in (+)', () => this.zoomBy(1.25)),
-      btn('Fit page', 'See the whole page (Ctrl+0)', () => this.setFit('page')),
-      btn('Fit width', 'Fill the width', () => this.setFit('width')),
-      btn('100%', 'Actual size', () => this.setFit(null, 1)),
+      btn('−', 'Zoom out (Ctrl+Minus)', () => this.zoomBy(1 / 1.25)), this.zoomLabel, btn('+', 'Zoom in (Ctrl+Plus)', () => this.zoomBy(1.25)),
       h('span', { class: 'pv-sep' }),
-      btn('⟳', 'Turn the pages a quarter turn', () => this.turn()),
-      this.chip,
+      ibtn('turnView', 'Turn view a quarter turn (R). Shift+click turns it the other way.\nView only, not saved: to turn pages in the file, use Pages > Rotate.', (e) => this.turn(e.shiftKey ? -1 : 1)),
+      h('span', { class: 'pv-sep' }),
+      this.chip, // (the print's help and its status go in before this: see PrintHints)
       h('span', { class: 'pv-grow' }),
-      this.findCount, this.findIn,
+      this.findBox,
+      this.panelSlot,
     );
+    this._findState();
+  }
+
+  // the zoom button's menu: the fits (the one in force is checked), then sizes
+  _zoomMenu() {
+    const st = this.state, at = (x) => !st.fit && Math.abs(st.zoom - x) < 0.005;
+    menu(this.zoomLabel, [
+      { label: 'Fit page', kb: 'Ctrl+0', check: st.fit === 'page', action: () => this.setFit('page') },
+      { label: 'Fit width', kb: 'Ctrl+2', check: st.fit === 'width', action: () => this.setFit('width') },
+      { label: 'Actual size', kb: 'Ctrl+1', check: at(1), action: () => this.setFit(null, 1) },
+      { sep: true },
+      ...[0.5, 0.75, 1.25, 1.5, 2, 4].map((x) => ({ label: `${x * 100}%`, check: at(x), action: () => this.setFit(null, x) })),
+    ]);
+  }
+
+  // when the window is too narrow for the whole bar, the least needed things step aside (see .pv-bar.narrow)
+  _fitBar() {
+    const b = this.bar;
+    if (!b.clientWidth) return;
+    const was = b.classList.contains('narrow');
+    b.classList.remove('narrow');
+    if (b.scrollWidth > b.clientWidth + 1) b.classList.add('narrow');
+    if (was !== b.classList.contains('narrow')) this.app?.status?.(); // (the status bar says what the bar no longer has room for)
   }
 
   _toggleSide() {
@@ -96,8 +141,38 @@ export class PdfView {
     const on = !!this.state?.side;
     this.side.hidden = !on;
     this.sideTab.classList.toggle('open', on);
-    this.sideTab.title = on ? 'Close the pages side bar' : 'Open the pages side bar';
-    this.sideTab.firstChild.textContent = on ? '‹' : '›';
+    this.sideBtn.classList.toggle('on', on);
+    this.sideTab.title = on ? 'Drag to make the Pages panel wider or narrower. Double-click closes it.' : 'Open the Pages panel (F4)';
+    this.sideTab.firstChild.textContent = on ? '' : '›';
+  }
+
+  // the edge of the thumbnails panel is pressed: closed, that opens it; open, a drag sizes it (kept for next time)
+  _splitDown(e) {
+    if (e.button !== 0 || !this.state) return;
+    e.preventDefault();
+    if (!this.state.side) { this._splitOpened = performance.now(); this._toggleSide(); return; }
+    const x0 = e.clientX, w0 = this.side.offsetWidth, tab = this.sideTab;
+    let moved = false;
+    tab.setPointerCapture(e.pointerId);
+    const move = (m) => {
+      if (!moved && Math.abs(m.clientX - x0) < 3) return;
+      moved = true;
+      tab.classList.add('drag');
+      this.side.style.width = `${clamp(w0 + m.clientX - x0, SIDE_MIN, SIDE_MAX)}px`;
+    };
+    const up = () => {
+      tab.removeEventListener('pointermove', move);
+      tab.removeEventListener('pointerup', up);
+      tab.removeEventListener('pointercancel', up);
+      tab.classList.remove('drag');
+      if (!moved) return;
+      this.sideW = this.side.offsetWidth;
+      try { localStorage.setItem('pv:sidew', String(this.sideW)); } catch { /* storage off */ }
+      if (this.doc && !this.el.hidden) this._resized();
+    };
+    tab.addEventListener('pointermove', move);
+    tab.addEventListener('pointerup', up);
+    tab.addEventListener('pointercancel', up);
   }
 
   // ================================================================== opening
@@ -114,7 +189,8 @@ export class PdfView {
     this.chip.title = doc.meta.pdf.problem || '';
     this.chip.textContent = `3D model inside (${models.join(', ')}): can't be shown yet`;
     this.modeSwitch.hidden = !hasModel;
-    this.findIn.hidden = !!doc.meta.pdf.picture; // a picture has no text to find
+    this.findBox.hidden = !!doc.meta.pdf.picture; // a picture has no text to find
+    this._findOff(); // (what was found in the document before this one isn't here)
     this._showSide();
     this._buildPages();
     this.hints.open(doc);
@@ -135,13 +211,14 @@ export class PdfView {
     this.scroller.scrollTop = this.state.top;
     if (this.state.side) this._thumbs();
     this.scroller.focus({ preventScroll: true });
+    this.editor.moved(); // (once: where Save, Undo and Balloon went)
   }
 
   close() {
     if (this.doc?.pdfState && !this.el.hidden) this.doc.pdfState.top = this.scroller.scrollTop;
     this.doc = null;
     this.hints?.close();
-    this.editor?.close();
+    this.editor?.close(); // (lets go of any drag still on, across words too)
     this.balloons?.close();
     this.run++;
     this.el.hidden = true;
@@ -209,7 +286,7 @@ export class PdfView {
     }
     this.sheet.style.width = `${right}px`;
     this.sheet.style.height = `${y}px`;
-    this.zoomLabel.textContent = `${Math.round(z * 100)}%`;
+    this.zoomLabel.textContent = `${Math.round(z * 100)}% ▾`;
     this._pageNumber();
     this.editor?.layout();
     this.balloons?.layout();
@@ -259,8 +336,9 @@ export class PdfView {
     this._schedule(70);
   }
 
-  turn() {
-    this.state.turns = (this.state.turns + 1) % 4;
+  // a quarter turn of the view (dir -1: the other way): how the pages are looked at, nothing in the file
+  turn(dir = 1) {
+    this.state.turns = (this.state.turns + dir + 4) % 4;
     this.run++;
     this.queue = [];
     this.selection = null;
@@ -282,13 +360,22 @@ export class PdfView {
 
   _key(e) {
     if (!this.doc || this.el.hidden) return;
+    if (document.querySelector('.modal-back') || menuOpen()) return; // a dialog or an open menu has the keyboard
     if (this.editor.key(e)) return;
-    const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
+    const typing = typingKey(e); // (a ticked box on a form isn't typing: the page keys and the zoom keys go on working)
     const done = () => { e.preventDefault(); e.stopPropagation(); };
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { this.findIn.focus(); this.findIn.select(); done(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !this.findBox.hidden) { this.findFocus(); done(); return; }
     if (typing) return;
-    if ((e.ctrlKey || e.metaKey) && e.key === '0') { this.setFit('page'); done(); return; }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (e.key === '0') { this.setFit('page'); done(); return; }
+      if (e.key === '1') { this.setFit(null, 1); done(); return; }
+      if (e.key === '2') { this.setFit('width'); done(); return; }
+      if (e.key === '+' || e.key === '=') { this.zoomBy(1.25); done(); return; }
+      if (e.key === '-') { this.zoomBy(1 / 1.25); done(); return; }
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'F4') { this._toggleSide(); done(); return; }
+    if (e.key === 'F6') { if (this.editor.editable && !this.balloons.on) this.editor.togglePanel(); done(); return; }
     if (e.key === 'PageDown') { this.goto(this.current + 1); done(); }
     else if (e.key === 'PageUp') { this.goto(this.current - 1); done(); }
     else if (e.key === 'Home') { this.goto(0); done(); }
@@ -484,16 +571,17 @@ export class PdfView {
   _down(e) {
     const s = this.scroller;
     if (this.editor.down(e)) return;
-    if (e.button === 1 || (e.button === 0 && !e.shiftKey)) { // left or middle drag pans; Shift+left-drag selects text
+    if (e.button === 1 || (e.button === 0 && (this.editor.space || !e.shiftKey))) { // left or middle drag pans (with Space held, always); Shift+left-drag selects text
       e.preventDefault();
       s.focus({ preventScroll: true });
       if (e.button === 0 && this.selection) { this.selection = null; this._showSelection(); }
       const x0 = e.clientX, y0 = e.clientY, l0 = s.scrollLeft, t0 = s.scrollTop;
       s.classList.add('panning');
       const move = (m) => { s.scrollLeft = l0 - (m.clientX - x0); s.scrollTop = t0 - (m.clientY - y0); };
-      const up = () => { s.classList.remove('panning'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+      const up = () => { s.classList.remove('panning'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up); // (a touch the system took over to scroll with: no pointerup ever comes)
       return;
     }
     if (e.button !== 0) return;
@@ -506,33 +594,61 @@ export class PdfView {
     this._selectDrag(this.pages[+box.dataset.page], e);
   }
 
-  // select text from where a drag starts; `done(selection)` once the button's up
+  // select text from where a drag starts; `done(selection)` once the button's up. Esc while it's on lets go of it
+  // (selectOff): nothing stays selected, and done(null, true) says so
   _selectDrag(p, e, done) {
-    const from = this._pagePoint(p, e);
-    let pending = false, last = null, up = false;
+    const from = this._pagePoint(p, e), doc = this.doc;
+    let pending = false, last = null, up = false, dead = false;
     const ask = async () => {
       if (pending || !last) return;
       pending = true;
       const to = last;
       last = null;
       try {
-        const r = await api.pdfSelect(this.doc.id, { page: p.i, ax: from[0], ay: from[1], bx: to[0], by: to[1] });
-        this.selection = { page: p.i, ...r };
-        this._showSelection();
+        const r = await api.pdfSelect(doc.id, { page: p.i, ax: from[0], ay: from[1], bx: to[0], by: to[1] });
+        if (dead || this.doc !== doc) { pending = false; return; }
+        // (dragged on to where nothing is selected: what was selected so far stays, never blinking out mid-drag)
+        if (r.rects?.length || !(this.selection?.page === p.i && this.selection.rects?.length)) {
+          this.selection = { page: p.i, ...r };
+          this._showSelection();
+        }
       } catch { /* nothing selected */ }
       pending = false;
+      if (dead) return;
       if (last) ask();
       else if (up) done?.(this.selection);
     };
     const move = (m) => { last = this._pagePoint(p, m); ask(); };
-    const stop = () => {
+    const off = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+      if (this._selOff === cancel) this._selOff = null;
+    };
+    const stop = () => {
+      off();
       up = true;
       if (!pending && !last) done?.(this.selection);
     };
+    const cancel = () => {
+      off();
+      dead = true;
+      last = null;
+      if (this.doc === doc) { this.selection = null; this._showSelection(); }
+      done?.(null, true);
+    };
+    this._selOff?.(); // (one at a time)
+    this._selOff = cancel;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+  }
+
+  // Esc while words are being dragged across: was there such a drag to let go of?
+  selectOff() {
+    if (!this._selOff) return false;
+    this._selOff();
+    return true;
   }
 
   // a rectangle in the page's own points, as percentages of the page as shown
@@ -555,12 +671,16 @@ export class PdfView {
     const q = this.findIn.value.trim();
     if (!q) { this._clearFind(); return; }
     if (q !== this.findQuery) {
-      try {
-        this.hits = await api.pdfFind(this.doc.id, q);
-      } catch (e) { toast(e.message, 'error'); return; }
+      const doc = this.doc;
+      let hits;
+      try { hits = await api.pdfFind(doc.id, q); } catch (e) { if (this.doc === doc) toast(e.message, 'error'); return; }
+      if (this.doc !== doc || this.findIn.value.trim() !== q) return; // (another document, or the Find box changed or cleared, meanwhile)
+      this.hits = hits;
       this.findQuery = q;
       this.hitAt = -1;
     }
+    this._findState();
+    this.editor?.findChanged();
     if (!this.hits.length) { this.findCount.textContent = 'Not found'; this._showHits(); return; }
     this.hitAt = (this.hitAt + dir + this.hits.length) % this.hits.length;
     this.findCount.textContent = `${this.hitAt + 1} of ${this.hits.length}`;
@@ -575,12 +695,53 @@ export class PdfView {
     this.hits = [];
     this.findCount.textContent = '';
     this._showHits();
+    this._findState();
+    this.editor?.findChanged(); // (its "Mark all found" waits on what Find found)
+  }
+
+  // The pages' words may have changed (an edit, an undo): what Find found is looked up again, quietly, staying on
+  // the hit it was on, so one step back doesn't throw the search away.
+  async refind() {
+    const q = this.findQuery, doc = this.doc;
+    if (!q) return;
+    let hits;
+    try { hits = await api.pdfFind(doc.id, q); } catch { hits = null; }
+    if (this.doc !== doc || this.findQuery !== q) return; // (another search, or another document, meanwhile)
+    if (!hits) { this._clearFind(); return; }
+    this.hits = hits;
+    this.hitAt = hits.length ? clamp(this.hitAt, 0, hits.length - 1) : -1;
+    this.findCount.textContent = hits.length ? `${this.hitAt + 1} of ${hits.length}` : 'Not found';
+    this._showHits();
+    this._findState();
+    this.editor?.findChanged();
+  }
+
+  // the keyboard goes to the Find box (Ctrl+F, Edit > Find in PDF, Find... on the page's right-click menu)
+  findFocus() {
+    if (this.findBox.hidden) return;
+    this.findIn.focus();
+    this.findIn.select();
+  }
+
+  // the Find box emptied, and what it found put away
+  _findOff() {
+    this.findIn.value = '';
+    this._clearFind();
+  }
+
+  // the buttons beside the Find box work once there's something to look for (or to clear)
+  _findState() {
+    const q = !!this.findIn.value.trim();
+    this.findPrev.disabled = !q;
+    this.findNext.disabled = !q;
+    this.findX.disabled = !q && !this.findQuery;
   }
 
   _showHits() {
     for (const p of this.pages) p.marks.querySelectorAll('.pv-hit').forEach((n) => n.remove());
     (this.hits || []).forEach((hit, k) => {
       const p = this.pages[hit.page];
+      if (!p) return;
       for (const r of hit.rects) p.marks.append(h('div', { class: `pv-hit${k === this.hitAt ? ' now' : ''}`, style: this._rectStyle(p, r) }));
     });
   }

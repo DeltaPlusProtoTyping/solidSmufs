@@ -16,7 +16,7 @@ const svg = (tag, attrs = {}) => {
   return el;
 };
 export const MARK_COLORS = ['#e02020', '#FF5F05', '#ffd400', '#2bb24c', '#1f9bd7', '#000000', '#ffffff'];
-const TOOLS = [['select', 'Select'], ['arrow', 'Arrow'], ['line', 'Line'], ['oval', 'Oval'], ['rect', 'Box'], ['lasso', 'Lasso'], ['pen', 'Sketch'],
+const TOOLS = [['select', 'Select'], ['arrow', 'Arrow'], ['line', 'Line'], ['oval', 'Oval'], ['rect', 'Rectangle'], ['lasso', 'Lasso'], ['pen', 'Draw'],
   ['text', 'Text'], ['stamp', 'Stamp'], ['erase', 'Erase']];
 const FILLS = [['none', 'No fill'], ['solid', 'Filled'], ['blur', 'Blur']];
 const FILLED = new Set(['oval', 'rect', 'lasso']);

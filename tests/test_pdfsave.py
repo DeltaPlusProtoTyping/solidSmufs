@@ -91,6 +91,28 @@ class Saving(unittest.TestCase):
                 self.assertTrue(ed.run("save", {})["result"]["appended"])
                 self.assertEqual(path.read_bytes()[:len(after)], after)
 
+    def test_one_comment_on_a_signed_pdf_with_an_xref_stream_goes_on_the_end(self):
+        path, ed = self.open("xrefstm.pdf", signed=True, objstms=True)
+        before = path.read_bytes()
+        self.note(ed)  # (no undo or redo first: the document still holds the file's own index)
+        r = ed.run("save", {})
+        self.assertNotIn("ask", r["result"])
+        self.assertTrue(r["result"]["appended"])
+        self.assertEqual(path.read_bytes()[:len(before)], before)
+
+    def test_left_over_undo_folders_are_cleared(self):
+        from solidsmufs import recovery
+        old = Path(tempfile.mkdtemp(prefix="ss-undo-"))
+        new = Path(tempfile.mkdtemp(prefix="ss-undo-"))
+        self.addCleanup(shutil.rmtree, old, True)
+        self.addCleanup(shutil.rmtree, new, True)
+        (old / "1.pdf").write_bytes(b"%PDF")
+        t = time.time() - 3 * 86400
+        os.utime(old, (t, t))
+        recovery.tidy()
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())  # (one in use is left alone)
+
     def test_undo_across_a_save_loses_nothing(self):
         path, ed = self.open("undo.pdf", signed=True, objstms=True)
         self.note(ed)

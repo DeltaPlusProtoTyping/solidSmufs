@@ -1,4 +1,4 @@
-// Ballooning mode, on the page view. The Balloon button (beside "TP on hover") turns the PDF view into a place to
+// Ballooning mode, on the page view. The Balloon tab of the tool bar (pdfedit.js _tabs) turns the PDF view into a place to
 // balloon a print, and back: while it's on, the PDF editor's toolbar gives way to this mode's own (Auto Balloon, Add,
 // Sub-balloon, Renumber, Report…), every callout that has a balloon is marked on the print, and the Bill of
 // Characteristics is docked under the pages: a row for each balloon with its zone, type, requirement, nominal,
@@ -23,7 +23,7 @@
 // kernel/balloonops.py); this draws the balloons to drag and the list to edit. Every change goes through the PDF
 // editor's run(), so it's undone with Ctrl+Z.
 import { api } from './api.js';
-import { h, toast, modal, menu } from './ui.js';
+import { h, toast, modal, menu, menuOpen } from './ui.js';
 import { photoStrip } from './balloonphotos.js';
 
 const TOLS = [['0', 'X'], ['1', '.X'], ['2', '.XX'], ['3', '.XXX'], ['4', '.XXXX'], ['angle', 'Angles']];
@@ -111,24 +111,22 @@ export class Balloons {
     this.tab = 'chars'; // which of the dock's lists is showing: 'chars', 'results' or 'issues'
     this.ishow = 'open'; // which issues the Issues tab shows
     this.col = 'text'; // the column last clicked: where Enter starts typing
-    this.btn = h('button', { class: 'pv-btn pv-toggle', text: 'Balloon',
-      title: 'Ballooning mode: number every dimension, tolerance, thread, finish, geometric tolerance and note on this print,\nlist them with their limits, and write the inspection report. The balloons are saved into the PDF.\nClick again to go back to the PDF view.',
-      onclick: () => this.toggle() });
-    view.hints.tpBtn.after(this.btn);
-    // the mode's own toolbar, where the PDF editor's is
+    // the mode's own row of tools, where the PDF editor's is: it starts with the same tabs (Balloon is one of them,
+    // and any other tab leaves the mode: pdfedit.js _tab)
     this.row = h('div', { class: 'bl-row', hidden: true });
-    view.el.insertBefore(this.row, view.body);
+    view.el.insertBefore(this.row, this.ed.opts); // (above the options strip, as the editor's own row is)
     // the Bill of Characteristics, docked under the pages
     this.grip = h('div', { class: 'bl-grip', title: 'Drag to make the list taller or shorter' });
     this.head = h('div', { class: 'bl-dhead' });
     this.wrap = h('div', { class: 'bl-gridwrap', tabindex: '0' });
     this.dock = h('div', { class: 'bl-dock', hidden: true }, this.grip, this.head, this.wrap);
     this.dock.style.height = `${Math.min(Math.max(parseInt(kept('bl:dock', '250'), 10) || 250, 110), 900)}px`;
+    this.dock.classList.toggle('min', kept('bl:dockmin', '0') === '1'); // folded down to its row of tabs
     view.el.append(this.dock);
     this.grip.addEventListener('pointerdown', (e) => this._gripDown(e));
     view.scroller.addEventListener('pointerdown', (e) => this._addDown(e), true);
     document.addEventListener('keydown', (e) => this._key(e), true);
-    // Undo, Redo and Save are the PDF editor's: this toolbar's follow its own
+    // the PDF editor's toolbar is drawn again after every edit: this one follows it
     const bar = this.ed._bar.bind(this.ed);
     this.ed._bar = () => { bar(); if (this.on) this._row(); };
   }
@@ -163,7 +161,7 @@ export class Balloons {
   _roleText() {
     const r = this.roles;
     if (!r?.on) return 'Roles off ▾';
-    return r.level ? `🔓 ${r.level === 'admin' ? 'Admin' : 'Lead'}` : '🔒';
+    return r.level ? `🔓 ${r.level === 'admin' ? 'Admin' : 'Lead'}` : '🔒 Locked';
   }
 
   _roleTip() {
@@ -265,17 +263,45 @@ export class Balloons {
     this.doc = doc;
     this.sel = null;
     this.data = empty();
+    this.loaded = false; // (until the list has been read: an empty one isn't yet "no balloons")
     this.filter = 'all';
-    this.btn.hidden = !this.ed.editable; // balloons are kept in a PDF (a picture is printed to one first)
-    this._show(!!doc.balloonsOn && this.ed.editable);
-    if (this.on) { this.render(); this.load(); }
+    this._show(!!doc.balloonsOn && this.ed.editable); // (balloons are kept in a PDF: a picture has no tool bar, so no Balloon tab)
+    if (this.on) { this.render(); this.load(); } else this._peek();
+  }
+
+  // Outside the Balloon tab the balloons are only part of the pages' picture. Where they are is read quietly, so a
+  // click on one can say what it is and offer to open Balloon (near, point) instead of doing nothing.
+  async _peek() {
+    const doc = this.doc;
+    if (!doc || !this.ed.editable) return;
+    try {
+      await this.ed._ready;
+      const data = await api.pdfEdit(doc.id, 'balloons');
+      if (this.doc === doc && !this.on) this.data = data;
+    } catch { /* (no list to read: clicks on the pages stay as they are) */ }
+  }
+
+  // the balloon at a point of a page, while the Balloon tab is closed (null: none there)
+  near(page, pt) {
+    if (this.on) return null;
+    return this.data.chars.find((c) => c.page === page && c.at && Math.hypot(pt[0] - c.at[0], pt[1] - c.at[1]) <= (c.r || 0) + 1) || null;
+  }
+
+  // ...and what a click on it says: its number and requirement, with a button that opens Balloon on it
+  point(c) {
+    const doc = this.doc, t = toast(`Balloon ${c.label}${c.text ? `: ${c.text}` : ''} - open Balloon to change it.`, 'info', 5000);
+    t.append(h('button', { class: 'btn', text: 'Open Balloon', onclick: async () => {
+      t.remove();
+      if (this.doc !== doc) return; // (another PDF is in front now: its balloons aren't this one's)
+      if (!this.on) await this.toggle();
+      if (this.doc === doc && this.on && this.char(c.id)) this.select(c.id, { toRow: true });
+    } }));
   }
 
   close() {
     this._adding(false);
     this.doc = null;
     this.on = false;
-    this.btn.classList.remove('on');
     this.v.el.classList.remove('ballooning');
     this.row.hidden = true;
     this.dock.hidden = true;
@@ -295,7 +321,6 @@ export class Balloons {
     const was = this.on;
     this.on = on;
     if (this.doc) this.doc.balloonsOn = on;
-    this.btn.classList.toggle('on', on);
     this.v.el.classList.toggle('ballooning', on); // (hides the editor's toolbar and its comments list: see the style sheet)
     this.row.hidden = !on;
     this.dock.hidden = !on;
@@ -304,6 +329,8 @@ export class Balloons {
       if (this.ed.sel) this.ed.select(null);
     }
     if (!on) { this._adding(false); this._clearEls(); }
+    this.ed._syncFile(); // (the comments list is put away with the editor's tools, and its button with it)
+    this.ed._optsBar(); // (the options strip says which of the two is on)
     if (was !== on && this.v.doc && !this.v.el.hidden) this.v._resized();
   }
 
@@ -312,8 +339,21 @@ export class Balloons {
     this._show(!this.on);
     if (!this.on) return;
     this.render();
-    await this.load();
-    if (this.on && !this.data.chars.length) this.auto(); // a print with no balloons yet: what to balloon on it
+    await this.load(); // (a print with no balloons yet opens no dialog: the list's place offers Auto Balloon or Add by hand)
+  }
+
+  // What the options strip (under the tool bar) says while Balloon is on: what's being done, or the selected balloon.
+  // esc: Esc ends it
+  hint() {
+    // (keep: its "Keep tool on" tick in the strip, kept with the editor's own: one balloon and done, or one after another)
+    if (this.adding === 'balloon') return { name: 'Add balloon', hint: 'Drag a box around a callout on the print (its text is read), or click a spot for an empty balloon to fill in', esc: true, keep: 'blAdd' };
+    if (this.adding === 'view') return { name: 'Drawing a view', hint: 'Drag a box round the drawing view: its balloons take its color, and Renumber goes view by view', esc: true };
+    if (this.busy) return { name: 'Balloon', hint: 'Reading the print…' };
+    if (!this.loaded && !this.data.chars.length) return { name: 'Balloon', hint: 'Opening the list…' };
+    const c = this.sel === null ? null : this.char(this.sel);
+    if (c) return { name: `Balloon ${c.label}`, hint: `${c.text || 'No requirement yet'}${this._limits(c) ? ` (${this._limits(c)})` : ''} · drag it to move it, double-click to change it, Delete to remove it` };
+    if (!this.data.chars.length) return { name: 'Balloon', hint: 'No balloons yet - Auto Balloon reads the print for you' };
+    return { name: 'Balloon', hint: 'Click a balloon or its row to select it, drag a balloon to move it, double-click it to change it' };
   }
 
   async load() {
@@ -325,12 +365,16 @@ export class Balloons {
       this.data = data;
       this.roles = roles;
     } catch (e) { toast(e.message, 'error'); }
+    this.loaded = true;
     this.render();
   }
 
   /** The PDF editor made a change (an edit here, or an undo): the list as it is now. */
   changed(r) {
-    if (!this.on) return;
+    if (!this.on) { // (the tab is closed: only where the balloons are is kept, and only if the print has any)
+      if (this.data.chars.length) { clearTimeout(this._peekT); this._peekT = setTimeout(() => this._peek(), 600); }
+      return;
+    }
     if (r?.result?.chars) { this.data = r.result; this.render(); } else this.load();
   }
 
@@ -414,24 +458,15 @@ export class Balloons {
     this.busy = on;
     this.dock.classList.toggle('busy', on);
     if (!this.data.chars.length) this._grid();
+    if (this.on) this.ed._optsBar();
   }
 
   _adding(on) {
     this.adding = on === true ? 'balloon' : on || false; // what a box dragged now makes: 'balloon' or 'view'
     this.v.scroller.classList.toggle('bl-adding', !!this.adding);
     this.addBtn?.classList.toggle('on', this.adding === 'balloon');
-    this.viewBtn?.classList.toggle('on', this.adding === 'view');
-    if (this.adding === 'view') toast('Drag a box round the view. Esc cancels.', 'info', 3500);
-  }
-
-  _autoMenu(anchor) {
-    const n = this.data.chars.length;
-    menu(anchor, [
-      { label: n ? 'Auto Balloon again…' : 'Auto Balloon…', action: () => this.auto() },
-      { label: 'Carry over from the last revision…', action: () => this.carry() },
-      { sep: true },
-      { label: 'Remove all balloons…', disabled: !n, action: () => this.clear() },
-    ]);
+    if (this.on) this.ed._optsBar(); // (the options strip says what a drag makes now: a balloon, or a view's box)
+    this.v.app?.status?.(); // (and so does the status bar)
   }
 
   _multItems(anchor) {
@@ -739,9 +774,10 @@ export class Balloons {
     setTimeout(() => inputs[0]?.[2].focus(), 30);
   }
 
-  remove(id) {
+  async remove(id) {
+    const c = this.char(id);
     if (this.sel === id) this.sel = null;
-    this.run('balloon_delete', { ids: [id] });
+    if (await this.run('balloon_delete', { ids: [id] })) this.ed._gone(`Balloon ${c?.label ?? ''} deleted.`.replace('  ', ' '));
   }
 
   /** Another thing to check on the same callout: a new balloon under this one's number, and its details to fill in. */
@@ -765,14 +801,18 @@ export class Balloons {
 
   // ================================================================== the keyboard
   _key(e) {
-    if (!this.on || !this.doc || this.v.el.hidden || typing(e.target) || document.querySelector('.modal-back')) return;
+    if (!this.on || !this.doc || this.v.el.hidden || typing(e.target) || document.querySelector('.modal-back') || menuOpen()) return; // (a dialog or an open menu has the keyboard)
     const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
-    if (e.key === 'Escape' && (this.adding || this.sel !== null)) {
-      if (this.adding) this._adding(false); else this.select(null);
-      e.stopImmediatePropagation();
+    // Esc, one step back for each press: what's being dragged or added is let go of, then the balloon's selection
+    // (after that the press is the page view's: the selected words, then what Find found)
+    if (e.key === 'Escape' && (this.adding || this.sel !== null || this.ed._dragOff)) {
+      if (this.ed._cancelDrag()) { /* one step for each press: only the drag is let go of, what was in hand stays */ }
+      else if (this.adding) this._adding(false);
+      else this.select(null);
+      stop();
       return;
     }
-    if ((e.key === 'Delete' || e.key === 'Backspace') && this.sel !== null && !this.ed.sel && !this.ed.fsel) {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && this.sel !== null && !this.ed.sel && !this.ed.fsel && !(this.v.lastRegion === 'side' && this.ed.picked.size)) {
       this.remove(this.sel);
       stop();
       return;
@@ -933,7 +973,7 @@ export class Balloons {
 
   // a balloon is pressed: it's selected, and a drag moves it
   _down(e, el) {
-    if (e.button !== 0 || this.adding) return;
+    if (e.button !== 0 || this.adding || this.ed.space) return; // (Space held: the press pans the pages)
     if (this.fixed) { e.stopPropagation(); this.select(el.char.id, { toRow: true }); return; }
     e.preventDefault();
     e.stopPropagation();
@@ -946,7 +986,7 @@ export class Balloons {
       if (this.data.leaders !== false) line = this._leaderLine(p, c, at, line);
     }, (a, b, moved) => {
       if (moved) this.run('balloon_move', { id: c.id, at }).finally?.(() => line?.remove()); else line?.remove();
-    });
+    }, () => { line?.remove(); this.layout(); }); // (Esc: back where it was)
   }
 
   // while a balloon is dragged: its leader as it will be (the saved one is drawn into the page when it's let go).
@@ -971,7 +1011,7 @@ export class Balloons {
 
   // Add is on: a box dragged around a callout balloons what's in it; a click leaves an empty balloon to fill in
   _addDown(e) {
-    if (!this.adding || e.button !== 0) return;
+    if (!this.adding || e.button !== 0 || this.ed.space) return; // (Space held: the press pans the pages)
     const box = e.target.closest?.('.pv-pagebox');
     if (!box) return;
     e.preventDefault();
@@ -982,22 +1022,29 @@ export class Balloons {
     if (view) ghost.classList.add('bl-vghost');
     this.ed._drag(e, p, this.v._pagePoint(p, e), (a, b) => { ghost.style.cssText = this.v._rectStyle(p, rectOf(a, b)); }, async (a, b, moved) => {
       ghost.remove();
-      this._adding(false);
       const rect = moved ? rectOf(a, b) : [a[0], a[1], 0, 0];
       if (view) {
-        if (!moved) { toast('Drag a box round the view.', 'info'); return; }
+        if (!moved) { toast('Drag a box round the view.', 'info'); return; } // (still in hand: the next drag draws it)
+        this._adding(false);
         const r = await this.run('balloon_view_add', { page: p.i, rect });
         const made = r?.result?.views?.find((v) => v.id === r.result.view);
         if (made) toast(`${made.name}: ${made.count} balloon${made.count === 1 ? '' : 's'} in it. Click its name on the print to rename it or give it a start number.`, 'ok', 5000);
         return;
       }
+      // one balloon and back, unless "Keep tool on" is ticked for it (the options strip; or a double-click on Add
+      // balloon): then it stays in hand for the next, until Esc
+      const stay = !!this.ed.keepOn.blAdd;
+      if (!stay) this._adding(false);
       const r = await this.run('balloon_add', { page: p.i, rect }, 'Reading it…');
       const id = r?.result?.ids?.[0];
-      if (id === undefined) return;
+      if (id === undefined) { // (it couldn't be added, and the toast says why: back in hand, to try again)
+        if (!stay && !this.adding && this.on && !this.fixed) this._adding('balloon');
+        return;
+      }
       this.select(id, { toRow: true });
       const c = this.char(id);
       if (c && !c.text) this.edit(c);
-    });
+    }, () => ghost.remove());
   }
 
   // ================================================================== the mode's toolbar
@@ -1011,43 +1058,80 @@ export class Balloons {
 
   _row() {
     if (!this.on) return;
-    const n = this.data.chars.length, st = this.ed.state || {}, sel = this.sel === null ? null : this.char(this.sel);
-    const b = (text, tip, run, o = {}) => h('button', { class: `pv-btn bl-tb${o.cls ? ` ${o.cls}` : ''}`, text, title: tip, disabled: !!o.off || (o.edits && this.fixed), onclick: run });
-    const more = b('▾', 'Auto Balloon again, or remove all the balloons', () => this._autoMenu(more), { cls: 'bl-more', edits: true });
-    // the tools used now and then, in one menu: (this.viewBtn: lit while a view's box is being drawn)
-    this.viewBtn = b('More ▾', 'Sub-balloon: another thing to check under the selected balloon (2.1, 2.2…).\nRenumber: 1, 2, 3… closing the gaps, by rows, columns or clockwise.\nViews: boxes round the drawing views, numbered view by view.\nMultiply: a row for each place of a 4X characteristic.', () => menu(this.viewBtn, [
-      { label: sel ? `Add sub-balloon under ${sel.label}` : 'Add sub-balloon', disabled: !sel, action: () => this.addSub(sel) },
+    const n = this.data.chars.length, sel = this.sel === null ? null : this.char(this.sel), fixed = this.fixed, s = this.data.status || 'draft';
+    const fixedWhy = s === 'superseded' ? 'This revision is superseded, so nothing in it changes: Back to draft (the status button) to change it.'
+      : 'This list is released, so its balloons are fixed: Back to draft (the status button) to change them.';
+    // a button of the row. o.off: it can't act now, so it's disabled, and o.why (in its tooltip) says what it waits for.
+    // o.edits: it changes the balloons, so it's off once the list is released
+    const b = (text, tip, run, o = {}) => {
+      const why = o.off ? o.why : o.edits && fixed ? fixedWhy : '';
+      return h('button', { class: `pv-btn bl-tb${o.cls ? ` ${o.cls}` : ''}`, text, disabled: !!o.off || (!!o.edits && fixed), onclick: run,
+        title: why ? `${text.replace(/( ▾|…)$/, '')}\n${why}` : tip });
+    };
+    const none = 'Nothing is ballooned yet: Auto Balloon reads the print, Add balloon adds one by hand.', pick = 'Select a balloon first: click it on the print, or its row in the list.';
+    const status = b(`${this.data.sid ? `Sheet ${this.data.sid}: ` : ''}${STATUS_LABEL[s]} ▾`, 'Draft: being ballooned. Released: its balloons and characteristics are fixed.\nSuperseded: by the next revision, and nothing in it changes.',
+      () => this._statusMenu(status), { cls: `bl-status s-${s}`, off: !n && s === 'draft', why: 'Nothing is ballooned yet, so there is nothing to release.' });
+    const role = b(this._roleText(), this._roleTip(), () => this._rolesMenu(role), { cls: `bl-role${this.roles?.level ? ' open' : ''}` });
+    role.hidden = !this.roles?.on;
+    this.addBtn = b('Add balloon', 'Balloon something by hand: drag a box around a callout on the print (its text is read),\nor click a spot for an empty balloon to fill in. Esc cancels.\nDouble-click to keep it on for several.',
+      (e) => {
+        if (e?.detail >= 2) { // the second click of a double-click: kept on, for one balloon after another
+          this.ed.keepOn.blAdd = true;
+          try { localStorage.setItem('pe:keep', JSON.stringify(this.ed.keepOn)); } catch { /* storage off */ }
+          this._adding('balloon');
+          return;
+        }
+        this._adding(this.adding === 'balloon' ? false : 'balloon');
+      }, { cls: this.adding === 'balloon' ? 'on' : '', edits: true });
+    // "More tools", the last thing in the row as in every tab: what's used now and then, what acts on the whole
+    // document, and last what can't be taken lightly
+    const part = this._partDoc(), views = (this.data.views || []).length;
+    const more = h('button', { class: 'pv-btn pe-more', html: '<span>More tools</span><i class="pe-car">▾</i>',
+      title: 'More tools: Auto Balloon again, carry over from the last revision, sub-balloons, Renumber, Views, Multiply, leader lines,\nand what acts on the whole document' });
+    more.addEventListener('click', () => menu(more, [
+      { label: n ? 'Auto Balloon again…' : 'Auto Balloon…', disabled: fixed, action: () => this.auto() },
+      { label: 'Carry over from the last revision…', disabled: fixed, action: () => this.carry() },
       { sep: true },
-      { label: 'Renumber', disabled: !n, sub: () => this._renumberItems(this.viewBtn) },
-      { label: `Views${(this.data.views || []).length ? ` (${this.data.views.length})` : ''}`, sub: () => this._viewsItems(this.viewBtn) },
-      { label: 'Multiply', disabled: !n, sub: () => this._multItems(this.viewBtn) },
-      { sep: true },
-      { label: 'Leader lines', check: this.data.leaders !== false, disabled: !n,
+      { label: sel ? `Add sub-balloon under ${sel.label}` : 'Add sub-balloon', disabled: !sel || fixed, action: () => this.addSub(sel) },
+      { label: 'Renumber', disabled: !n || fixed, sub: () => this._renumberItems(more) },
+      { label: `Views${views ? ` (${views})` : ''}`, disabled: fixed, sub: () => this._viewsItems(more) },
+      { label: 'Multiply', disabled: !n || fixed, sub: () => this._multItems(more) },
+      { label: 'Leader lines', check: this.data.leaders !== false, disabled: !n || fixed,
         action: () => this.run('balloon_leaders', { on: this.data.leaders === false }) },
-    ]), { cls: this.adding === 'view' ? 'on' : '', edits: true });
-    this.addBtn = b('Add', 'Balloon something by hand: drag a box around a callout on the print (its text is read),\nor click a spot for an empty balloon to fill in. Esc cancels.', () => this._adding(this.adding === 'balloon' ? false : 'balloon'), { cls: this.adding === 'balloon' ? 'on' : '', edits: true });
+      { sep: true },
+      { label: 'Show on the 3D part…', disabled: !part, action: () => this._onPart(part) },
+      ...this.ed._wholeItems(),
+      { sep: true },
+      { label: 'Remove all balloons…', disabled: !n || fixed, action: () => this.clear() },
+    ], { align: 'right' }));
+    const sep = () => h('span', { class: 'pv-sep' });
     this.row.replaceChildren(
-      h('span', { class: 'bl-mode', text: 'Ballooning' }),
-      (() => { const s = this.data.status || 'draft', sb = b(`${STATUS_LABEL[s]} ▾`, `Draft: being ballooned. Released: its balloons and characteristics are fixed.\nSuperseded: by the next revision, and nothing in it changes.${this.data.sid ? `\nSheet ${this.data.sid}` : ''}`, () => this._statusMenu(sb), { cls: `bl-status s-${s}`, off: !n && s === 'draft' }); return sb; })(),
-      (() => { const lb = b(this._roleText(), this._roleTip(), () => this._rolesMenu(lb), { cls: `bl-role${this.roles?.level ? ' open' : ''}` }); lb.hidden = !this.roles?.on; return lb; })(),
-      h('span', { class: 'pv-sep' }),
-      b('Auto Balloon', 'Read the print and balloon what there is to inspect on it: dimensions and their tolerances, angles,\nchamfers, threads, finishes, feature control frames and notes. It asks which pages and what to balloon first.', () => this.auto(), { cls: 'bl-main', edits: true }),
-      more,
-      this.addBtn,
-      b('Edit…', "All of the selected balloon's details in one place (or double-click the balloon)", () => this.edit(sel), { off: !sel }),
-      b('Delete', 'Remove the selected balloon (Delete)', () => this.remove(sel.id), { off: !sel, edits: true }),
-      this.viewBtn,
-      h('span', { class: 'pv-sep' }),
-      b('Search…', 'Find characteristics and production issues by balloon number, dimension, description, gage or earlier fix:\non this print, or on every ballooned print saved on this computer', () => this.search(), {}),
-      b('Job…', "The job's details: part, revision, customer, job number, lot… and what was changed, by whom and why.\nA detail changed once it was filled in needs a change note.", () => this.job(), { off: !n }),
-      b('Report…', 'Write the inspection report as an Excel workbook and a PDF: the sheet to print and fill in, five parts to a table,\nor the list with Pass / Fail worked out from the results, with AS9102 Form 3', () => this.report(), { off: !n }),
-      h('span', { class: 'pv-grow' }),
-      b('Undo', 'Undo (Ctrl+Z)', () => this.ed.undo(), { off: !st.undo }),
-      b('Redo', 'Redo (Ctrl+Y)', () => this.ed.redo(), { off: !st.redo }),
-      b(st.dirty ? 'Save' : 'Saved', 'Save the print with its balloons and its list (Ctrl+S)', () => this.ed.save(), { cls: st.dirty ? 'pe-dirty' : '' }),
-      h('span', { class: 'pv-sep' }),
-      b('Exit Ballooning', 'Back to the PDF view and its tools. The balloons stay on the print.', () => this.toggle(), { cls: 'bl-exit' }),
+      this.ed._tabs('balloon'), sep(), // (the same tabs as the editor's row: any other one leaves Balloon)
+      h('div', { class: 'bl-tools' },
+        status, role, sep(),
+        b('Auto Balloon', 'Read the print and balloon what there is to inspect on it: dimensions and their tolerances, angles,\nchamfers, threads, finishes, feature control frames and notes. It asks which pages and what to balloon first.', () => this.auto(), { cls: 'bl-main', edits: true }),
+        this.addBtn,
+        b('Edit…', "All of the selected balloon's details in one place (or double-click the balloon)", () => this.edit(sel), { off: !sel, why: pick }),
+        b('Delete', 'Remove the selected balloon (Delete)', () => this.remove(sel.id), { off: !sel, why: pick, edits: true }),
+        sep(),
+        b('Job…', "The job's details: part, revision, customer, job number, lot… and what was changed, by whom and why.\nA detail changed once it was filled in needs a change note.", () => this.job(), { off: !n, why: none }),
+        b('Search list…', 'Find characteristics and production issues by balloon number, dimension, description, gage or earlier fix:\non this print, or on every ballooned print saved on this computer.\n(Words on the print itself: Find in PDF, in the bar above.)', () => this.search(), {}),
+        sep(),
+        b('Report…', 'Write the inspection report as an Excel workbook and a PDF: the sheet to print and fill in, five parts to a table,\nor the list with Pass / Fail worked out from the results, with AS9102 Form 3', () => this.report(), { cls: 'bl-acc', off: !n, why: none })),
+      more, // (Undo, Redo and Save are in the Document bar above, the same as in every tab)
     );
+    this.ed._optsBar(); // (the options strip names the selected balloon, or says what a drag makes now)
+  }
+
+  // an open 3D part, to show this print's callouts on (its Print Callouts panel)
+  _partDoc() { return (this.v.app?.docs || []).find((d) => d.meta?.bodies?.length && !d.meta.drawing && !d.meta.pdf) || null; }
+
+  _onPart(part) {
+    const app = this.v.app, print = this.doc;
+    if (!app || !part) return;
+    app.activate(part);
+    app.manager?.show('callouts');
+    if (print?.path && app.callouts?.doc === part) app.callouts.choose(print); // (this print is the one read there)
   }
 
   // ================================================================== the Bill of Characteristics
@@ -1077,7 +1161,10 @@ export class Balloons {
         return h('label', {}, h('span', { text: label }), inp);
       }));
     const tab = (id, label, tip) => h('button', { class: `bl-tab${this.tab === id ? ' on' : ''}`, text: label, title: tip,
-      onclick: () => { if (this.tab !== id) { this.tab = id; this.wrap.scrollTop = 0; this.wrap.scrollLeft = 0; this._head(); this._grid(); } } });
+      onclick: () => {
+        if (this.dock.classList.contains('min')) this._fold(false); // (a folded list opens on the tab clicked)
+        if (this.tab !== id) { this.tab = id; this.wrap.scrollTop = 0; this.wrap.scrollLeft = 0; this._head(); this._grid(); }
+      } });
     const tabs = h('div', { class: 'bl-tabs' },
       tab('chars', 'Bill of Characteristics', 'What there is to inspect: every balloon with its requirement and limits'),
       tab('results', 'Results', 'What each part measured: a column for each part inspected'),
@@ -1092,7 +1179,7 @@ export class Balloons {
         h('button', { class: 'btn bl-hbtn', text: sel ? `+ Add issue on ${sel.label}` : '+ Add issue', title: 'Something to dial in: on the selected balloon, or on none', onclick: () => this.editIssue(null) }),
         h('label', { class: 'bl-showl' }, 'Show', show),
         h('span', { class: 'pv-grow' }),
-        this._count());
+        this._count(), this._foldBtn());
       return;
     }
     if (this.tab === 'results') {
@@ -1101,17 +1188,31 @@ export class Balloons {
         h('button', { class: 'btn bl-hbtn', text: '+ Add part', title: 'Another part to inspect: a column for what it measures.\nDouble-click its heading to give it its serial number.', disabled: !n, onclick: () => this.addPart() }),
         h('button', { class: 'btn bl-hbtn', text: 'Sampling…', title: 'Which parts of the lot to inspect: every part, the first and last, 1 in N, or a share of them.\nA column is added for each.', disabled: !n, onclick: () => this.sampling() }),
         h('button', { class: 'btn bl-hbtn', text: 'Import…', title: "Results from a CMM's or a gage's export, or a spreadsheet: CSV, text or Excel (.xlsx),\nmatched to the balloons by their numbers", disabled: !n, onclick: () => this.importResults() }),
-        parts.length ? h('button', { class: 'bl-link', text: 'New lot…', title: 'Take out every part and result, to inspect another lot against the same balloons (this lot is kept for SPC)', onclick: () => this.newLot() }) : '',
+        parts.length ? h('button', { class: 'btn bl-hbtn', text: 'New lot…', title: 'Take out every part and result, to inspect another lot against the same balloons (this lot is kept for SPC)', onclick: () => this.newLot() }) : '',
         (d.lots || []).length ? h('button', { class: 'btn bl-hbtn', text: 'SPC…', title: `How each characteristic ran from lot to lot: X̄ and R charts, Cpk and Ppk over the ${(d.lots || []).length} kept lot${(d.lots || []).length === 1 ? '' : 's'} and this one`, onclick: () => this.spc() }) : '',
         h('span', { class: 'pv-grow' }),
-        this._count());
+        this._count(), this._foldBtn());
       return;
     }
     this.head.replaceChildren(tabs,
       h('label', { class: 'bl-showl' }, 'Show', show),
       this.fixed ? h('span', { class: 'bl-locked', text: this.data.status === 'superseded' ? 'Superseded: read only' : 'Released: characteristics fixed', title: 'Back to draft (the status beside the sheet id) to change them' }) : tols,
       h('span', { class: 'pv-grow' }),
-      this._count());
+      this._count(), this._foldBtn());
+  }
+
+  // the chevron at the right end of the dock's head: folds the list down to its row of tabs, for more of the print
+  _foldBtn() {
+    const min = this.dock.classList.contains('min');
+    return h('button', { class: 'pv-btn bl-fold', text: min ? '▴' : '▾', title: min ? 'Open the list again' : 'Fold the list down to its tabs, for more room for the print',
+      onclick: () => this._fold(!min) });
+  }
+
+  _fold(min) {
+    this.dock.classList.toggle('min', min);
+    keep('bl:dockmin', min ? '1' : '0');
+    this._head();
+    if (this.v.doc && !this.v.el.hidden) this.v._resized();
   }
 
   // what a cell says
@@ -1164,7 +1265,13 @@ export class Balloons {
     }
     if (!d.chars.length) {
       this._next = null;
-      this.wrap.replaceChildren(h('div', { class: 'bl-empty', text: this.busy ? 'Reading the print…' : 'No balloons on this print yet. Auto Balloon reads it; Add balloons something by hand.' }));
+      // nothing ballooned yet: the two ways to start, here in the list's place (no dialog opens by itself)
+      this.wrap.replaceChildren(this.busy || !this.loaded ? h('div', { class: 'bl-empty', text: this.busy ? 'Reading the print…' : 'Opening the list…' }) : h('div', { class: 'bl-empty bl-start' },
+        h('b', { text: 'No balloons on this print yet' }),
+        h('p', { text: 'Auto Balloon reads the print and numbers what there is to inspect: it asks which pages and what to balloon first. Or add them one at a time by hand.' }),
+        h('div', { class: 'bl-startb' },
+          h('button', { class: 'btn primary', text: 'Auto Balloon', disabled: this.fixed, onclick: () => this.auto() }),
+          h('button', { class: 'btn', text: 'Add by hand', disabled: this.fixed, title: 'Drag a box around a callout on the print, or click a spot for an empty balloon', onclick: () => this._adding('balloon') }))));
       return;
     }
     const all = h('input', { type: 'checkbox' });

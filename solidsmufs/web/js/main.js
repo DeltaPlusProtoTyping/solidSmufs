@@ -148,6 +148,17 @@ class App {
     return m && !(m.pdf && this.active.pdfMode === 'pages') ? m : null;
   }
   get isAssembly() { return !!this.meta && this.meta.bodies.some((b) => (b.path || []).length > 1); }
+  // are a PDF's pages on show? (their commands work only then)
+  get pdfOn() { const d = this.active; return !!d?.meta?.pdf && d.pdfMode === 'pages'; }
+
+  // can't a command act now? needsDoc: it wants a part on show. needsPdf: a PDF's pages on show; edits: ...of a PDF
+  // that can be changed (not a picture of a drawing). off(): its own reason
+  cmdOff(c) {
+    if (c.needsDoc && !this.meta) return true;
+    if (c.needsPdf && !this.pdfOn) return true;
+    if (c.edits && !this.pdf.editor.editable) return true;
+    return !!c.off?.();
+  }
 
   async openDialog() {
     if (!this.native) {
@@ -285,7 +296,7 @@ class App {
     this.pages.close(false);
     if (doc.meta) this.show(doc);
     else {
-      this.$('workspace').classList.remove('pdf-doc');
+      this._pdfDoc(false);
       this.pdf.close();
       this.viewer.clear();
       this.sel = [];
@@ -305,10 +316,10 @@ class App {
     if (doc.meta.pdf) {
       doc.pdfMode ||= hasModel ? 'model' : 'pages'; // a 3D PDF opens on its model, one click from its pages
       this.pdf.open(doc);
-      this.$('workspace').classList.toggle('pdf-doc', doc.pdfMode === 'pages');
+      this._pdfDoc(doc.pdfMode === 'pages');
     } else {
       this.pdf.close();
-      this.$('workspace').classList.remove('pdf-doc');
+      this._pdfDoc(false);
     }
     if (doc.view && hasModel) {
       this.viewer.rig.quat.copy(doc.view.quat);
@@ -319,6 +330,16 @@ class App {
     document.title = `${doc.name} - ${PRODUCT}`;
     api.title(document.title);
     this.refreshAll();
+  }
+
+  // a PDF's pages are on show (or not): the part's side panels and its row of 3D commands step aside for them
+  _pdfDoc(on) {
+    this.$('workspace').classList.toggle('pdf-doc', on);
+    this.$('app').classList.toggle('pdf-doc', on); // (the command row is the workspace's sibling: see the style sheet)
+    this.taskpane?.pdfMode(on); // (appearances and scenes are the 3D view's)
+    // over a PDF's words Ctrl+F is Find in PDF, so the command search doesn't claim it
+    const d = this.active, find = on && !d?.meta?.pdf?.picture;
+    document.querySelector('.cmd-search')?.setAttribute('title', find ? 'Search commands: every tool and tab by name' : 'Search commands (Ctrl+F)');
   }
 
   // is the active document a PDF that can be edited (and saved)? Shows its pages if it is
@@ -337,7 +358,7 @@ class App {
     this.setSelection([]);
     this.tools.closeDocDialogs();
     this.pages.close(false);
-    this.$('workspace').classList.toggle('pdf-doc', mode === 'pages');
+    this._pdfDoc(mode === 'pages');
     this.pdf.setMode(mode);
     this.refreshAll();
     requestAnimationFrame(() => this.viewer.requestRender());
@@ -379,6 +400,8 @@ class App {
 
   // a PDF with edits not saved: Save, Don't Save, or Cancel (false: keep it open)
   async unsavedOk(doc, verb = 'closing') {
+    // (what's still being typed goes in first, and the edits on their way land: only then is it known whether there's anything to save)
+    if (this.pdf.editor.doc === doc) await this.pdf.editor._settle(); else await doc._peQ;
     if (!doc.pdfDirty) return true;
     const answer = await new Promise((res) => {
       let done = false;
@@ -410,7 +433,7 @@ class App {
       if (next) this.activate(next);
       else {
         this.active = null;
-        this.$('workspace').classList.remove('pdf-doc');
+        this._pdfDoc(false);
         this.pdf.close();
         this.viewer.clear();
         this.sel = [];
@@ -686,6 +709,9 @@ class App {
     const c = this.commands[id];
     if (!c) return;
     if (c.needsDoc && !this.meta) { toast('Open a part first', 'info'); return; }
+    if (c.needsPdf && !this.pdfOn) { toast("That works on a PDF's pages: open a PDF first.", 'info'); return; }
+    if (c.edits && !this.pdf.editor.editable) { toast('Only a PDF can be edited and saved here.', 'info'); return; }
+    if (c.off?.()) return;
     closeMenus();
     c.run(anchor);
   }
@@ -752,6 +778,38 @@ class App {
     def('quote', { label: 'Quote Summary', icon: 'quote', tip: 'Size, volume, weight and holes in one copyable list', run: () => this.tools.quote() });
     def('material', { label: 'Edit Material', icon: 'material', tip: 'Material for mass properties', run: () => this.tools.material() });
     def('explorer', { label: 'File Explorer', icon: 'tpExplorer', tip: 'Browse folders for parts', needsDoc: false, run: () => this.taskpane.show('explorer') });
+    // A PDF's pages: what's in their bars, by name, so the title bar's menus and "Search commands" find it all.
+    // needsPdf: only while the pages are on show; edits: and the PDF can be changed. also: names it went by before
+    const pv = this.pdf, ed = this.pdf.editor;
+    const pdef = (id, o) => { C[id] = { needsDoc: false, needsPdf: true, ...o, id }; };
+    pdef('pdfUndo', { label: 'Undo', kb: 'Ctrl+Z', tip: 'Take back the last change to the PDF', edits: true, off: () => !ed.state?.undo && !ed._ink?.strokes?.length, run: () => ed.undo() });
+    pdef('pdfRedo', { label: 'Redo', kb: 'Ctrl+Y', tip: 'Put back the change that was undone', edits: true, off: () => !ed.state?.redo, run: () => ed.redo() });
+    pdef('pdfCopy', { label: 'Copy', kb: 'Ctrl+C', tip: 'Copy the selected words, or keep the selected comment to paste', edits: true, run: () => ed.copy() });
+    pdef('pdfCut', { label: 'Cut comment', kb: 'Ctrl+X', tip: 'Take the selected comments off the page and keep them to paste', edits: true, off: () => ed.sel?.type !== 'annot', run: () => ed.cut() });
+    pdef('pdfPaste', { label: 'Paste comment', kb: 'Ctrl+V', tip: 'Put the copied comments on the page in view (they can come from another PDF)', edits: true, off: () => !ed.canPaste || !!pv.balloons?.on, run: () => ed.paste() });
+    pdef('pdfSelectAll', { label: 'Select all text on this page', kb: 'Ctrl+A', tip: 'Every word on the page in view', edits: true, run: () => ed._selectPage(pv.current || 0) });
+    pdef('pdfFind', { label: 'Find in PDF', kb: 'Ctrl+F', tip: 'Find words in the PDF', also: 'Search the text', off: () => pv.findBox.hidden, run: () => pv.findFocus() });
+    pdef('pdfZoomIn', { label: 'Zoom in', kb: 'Ctrl+Plus', tip: 'Make the pages bigger', run: () => pv.zoomBy(1.25) });
+    pdef('pdfZoomOut', { label: 'Zoom out', kb: 'Ctrl+Minus', tip: 'Make the pages smaller', run: () => pv.zoomBy(1 / 1.25) });
+    pdef('pdfFitPage', { label: 'Fit page', kb: 'Ctrl+0', tip: 'The whole page in the window', toggle: () => pv.state?.fit === 'page', run: () => pv.setFit('page') });
+    pdef('pdfFitWidth', { label: 'Fit width', kb: 'Ctrl+2', tip: 'The page as wide as the window', toggle: () => pv.state?.fit === 'width', run: () => pv.setFit('width') });
+    pdef('pdfActual', { label: 'Actual size', kb: 'Ctrl+1', tip: 'The pages at 100%', also: '100%', run: () => pv.setFit(null, 1) });
+    pdef('pdfTurnRight', { label: 'Turn view right', kb: 'R', tip: 'A quarter turn of how the pages are looked at: view only, not saved (Pages > Rotate turns the pages in the file)', also: 'Rotate view', run: () => pv.turn(1) });
+    pdef('pdfTurnLeft', { label: 'Turn view left', tip: 'A quarter turn the other way: view only, not saved', also: 'Rotate view', run: () => pv.turn(-1) });
+    pdef('pdfPagesPanel', { label: 'Pages panel', kb: 'F4', tip: 'The pages as small pictures, to jump to one or pick some', also: 'Thumbnails', toggle: () => !!pv.state?.side, run: () => pv._toggleSide() });
+    pdef('pdfCommentsPanel', { label: 'Comments panel', kb: 'F6', tip: 'The list of comments, to read, answer and delete', edits: true, toggle: () => ed.showPanel && !pv.balloons.on,
+      run: () => { if (pv.balloons.on) toast('The comments list is put away while ballooning.', 'info'); else ed.togglePanel(); } });
+    pdef('pdfInches', { label: 'Inches on hover', tip: 'Print help: hovering a metric size shows it in inches', toggle: () => !!pv.hints.store?.inches, run: () => pv.hints._inches(!pv.hints.store?.inches) });
+    pdef('pdfTolerance', { label: 'Tolerance help on hover (GD&T)', tip: 'Print help: what a feature control frame means, and how hard it is to hold', also: 'TP on hover, true position',
+      toggle: () => !!pv.hints.store?.tp, run: () => pv.hints._tp(!pv.hints.store?.tp) });
+    pdef('pdfDifficulty', { label: 'Part difficulty', tip: "How hard the part is to make, from the print's geometric tolerances", off: () => !this.active?.partDifficulty, run: () => this.tools.partDifficulty() });
+    pdef('pdfAutoBalloon', { label: 'Auto Balloon', tip: 'Read the print and balloon what there is to inspect on it', edits: true,
+      run: async () => { const b = pv.balloons; if (!b.on) await b.toggle(); if (!b.on) return; if (b.fixed) b._fixedSay(); else b.auto(); } });
+    for (const c of ed.commands()) pdef(`pdf-${c.id}`, { ...c, edits: true });
+    // a 3D PDF's two sides
+    const both = () => !!(this.active?.meta?.pdf && this.active.meta.bodies.length);
+    def('pdfShowModel', { label: 'Show the 3D model', tip: "A 3D PDF's model, in place of its pages", needsDoc: false, off: () => !both(), toggle: () => both() && this.active.pdfMode !== 'pages', run: () => this.setPdfMode('model') });
+    def('pdfShowPages', { label: 'Show the pages', tip: "A 3D PDF's pages, in place of its model", needsDoc: false, off: () => !both(), toggle: () => both() && this.active.pdfMode === 'pages', run: () => this.setPdfMode('pages') });
     return C;
   }
 
@@ -865,7 +923,11 @@ class App {
     } else if (this.meta) html = this.prefs.mouse === 'sw'
       ? 'Middle-drag to rotate · Ctrl+middle to pan · Wheel to zoom · Right-drag for gestures'
       : 'Drag to rotate · Right-drag to pan · Wheel to zoom';
-    else if (this.active?.meta?.pdf && this.active.pdfMode === 'pages') html = this.pdf.editor.hint() || `${this.active.meta.pdf.picture ? 'Drag to pan' : 'Drag across text to select it · drag bare paper (or hold Space) to pan · click a comment to select it · right-click for more'} · ${this.active.meta.pdf.pages.length > 1 ? 'Ctrl+wheel' : 'Wheel'} to zoom`;
+    else if (this.active?.meta?.pdf && this.active.pdfMode === 'pages') {
+      html = this.pdf.editor.hint() || `${this.active.meta.pdf.picture ? 'Drag to pan' : 'Drag across words to select them · drag paper to pan · right-click for more'} · ${this.active.meta.pdf.pages.length > 1 ? 'Ctrl+wheel' : 'Wheel'} to zoom`;
+      const ocr = this.pdf.hints.status; // (the Document bar is too narrow to say it: it's said here)
+      if (!ocr.hidden && this.pdf.bar.classList.contains('narrow')) html += `<span class="sep">|</span>${escapeHtml(ocr.textContent)}`;
+    }
     else html = 'Open a part to begin.';
     if (this.active && this.active.state === 'ready' && this.active.exact === false) html += '<span class="sep">|</span>Loading exact geometry for measuring…';
     el.innerHTML = html;

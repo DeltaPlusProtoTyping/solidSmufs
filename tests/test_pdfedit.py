@@ -159,8 +159,8 @@ class Editing(unittest.TestCase):
         other = e.run("annot_clone", {"page": 0, "id": made["rect"]["id"], "to": 2})["result"]
         self.assertEqual((other["page"], len(list(self.pdf.fz[2].annots()))), (2, 1))
         stamp = e.run("annot_add", {"page": 0, "kind": "stamp", "rect": [400, 680, 150, 50], "stamp": "Draft"})["result"]
-        with self.assertRaises(ValueError):
-            e.run("annot_clone", {"page": 0, "id": stamp["id"]})
+        twin = e.run("annot_clone", {"page": 0, "id": stamp["id"]})["result"]  # (a stamp too: as a picture of itself)
+        self.assertEqual((twin["kind"], twin["subject"], [round(v) for v in twin["rect"][2:]]), ("stamp", "Draft", [round(v) for v in stamp["rect"][2:]]))
         self.assertTrue(e.run("annot_image", {"page": 0, "id": stamp["id"]}).startswith("data:image/png;base64,"))
 
     def test_a_lines_ends_and_text_that_grows(self):
@@ -499,6 +499,83 @@ class Editing(unittest.TestCase):
         again = pymupdf.open(locked)
         self.assertTrue(again.needs_pass)
         self.assertTrue(again.authenticate("pw"))
+
+
+class Fixes(unittest.TestCase):
+    """Edits on pages whose media box doesn't start at 0, copied pictures' colors, and the fonts typed text brings."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="ss-fix-"))
+        self.addCleanup(__import__("shutil").rmtree, self.dir, True)
+
+    def open(self, name, make):
+        path = self.dir / name
+        d = pymupdf.open()
+        make(d)
+        d.save(path)
+        d.close()
+        pdf = PdfFile(str(path))
+        self.addCleanup(pdf.close)
+        return path, PdfEditor(pdf, path)
+
+    def test_lines_and_ink_move_where_set_on_an_offset_media_box(self):
+        for crop in (False, True):
+            for turn in (0, 90):
+                with self.subTest(crop=crop, turn=turn):
+                    def make(d):
+                        pg = d.new_page(width=612, height=792)
+                        pg.insert_text((72, 100), "x", fontsize=12)
+                        d.xref_set_key(pg.xref, "MediaBox", "[100 50 712 842]")
+                        if crop:
+                            d.xref_set_key(pg.xref, "CropBox", "[110 60 700 830]")
+                        if turn:
+                            d.xref_set_key(pg.xref, "Rotate", str(turn))
+                    _, e = self.open(f"off{int(crop)}{turn}.pdf", make)
+                    line = e.run("annot_add", {"page": 0, "kind": "line", "points": [[50, 60], [150, 90]]})["result"]
+                    moved = e.run("annot_set", {"page": 0, "id": line["id"], "points": [[70, 80], [200, 140]]})["result"]
+                    self.assertEqual([[round(v) for v in q] for q in moved["points"]], [[70, 80], [200, 140]])
+                    ink = e.run("annot_add", {"page": 0, "kind": "ink", "points": [[[100, 200], [150, 230]]]})["result"]
+                    r = [200, 200, ink["rect"][2], ink["rect"][3]]
+                    moved = e.run("annot_set", {"page": 0, "id": ink["id"], "rect": r})["result"]
+                    self.assertEqual([round(v) for v in moved["rect"][:2]], [200, 200])
+
+    def test_a_copied_picture_keeps_its_colors(self):
+        _, e = self.open("stamp.pdf", lambda d: d.new_page(width=612, height=792))
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 20), 0)
+        pix.set_rect(pymupdf.IRect(0, 0, 20, 20), (255, 0, 0))
+        pix.set_rect(pymupdf.IRect(20, 0, 40, 20), (0, 0, 255))
+        img = "data:image/png;base64," + base64.b64encode(pix.tobytes("png")).decode()
+        e.run("annot_add", {"page": 0, "kind": "stamp", "rect": [100, 100, 80, 40], "image": img})
+        pg = e.fz[0]
+        a = next(pg.annots())
+        got = pymupdf.Pixmap(PdfEditor._annot_png(a))
+        w, h = got.width, got.height
+        self.assertEqual(got.pixel(w // 4, h // 2)[:3], (255, 0, 0))
+        self.assertEqual(got.pixel(3 * w // 4, h // 2)[:3], (0, 0, 255))
+
+    def test_a_typed_symbol_does_not_bring_the_whole_font(self):
+        path, e = self.open("small.pdf", lambda d: d.new_page(width=612, height=792))
+        e.run("text_add", {"page": 0, "at": [100, 100], "text": "⌀.250 ≤ .005", "size": 12})
+        e.run("save", {})
+        self.assertLess(path.stat().st_size, 150_000)
+        # typed again after that save, and in a session opened afresh: the new letters are there to draw
+        e.run("text_add", {"page": 0, "at": [100, 200], "text": "≥ ±", "size": 12})
+        e.run("save", {})
+        self.assertLess(path.stat().st_size, 300_000)
+        pdf = PdfFile(str(path))
+        self.addCleanup(pdf.close)
+        e2 = PdfEditor(pdf, path)
+        e2.run("text_add", {"page": 0, "at": [100, 300], "text": "∓ °", "size": 12})
+        e2.run("save", {})
+        d = pymupdf.open(path)
+        words = d[0].get_text()
+        for ch in "⌀≤≥±∓°":
+            self.assertIn(ch, words)
+        for f in d[0].get_fonts():  # every font has the glyphs for its letters (a missing one comes out as glyph 0)
+            if f[1] == "ttf":
+                font = pymupdf.Font(fontbuffer=d.extract_font(f[0])[3])
+                self.assertTrue(font.glyph_count > 1)
+        d.close()
 
 
 if __name__ == "__main__":

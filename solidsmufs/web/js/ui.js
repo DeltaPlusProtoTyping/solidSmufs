@@ -101,15 +101,28 @@ export function menu(anchor, items, opts = {}) {
   return m;
 }
 
+// A message in the corner that goes by itself. It waits while the pointer is on it (to read it, or reach a button put
+// on it), and its x puts it away at once.
+// The same message again while it's still showing takes the place of the one there: a run of slips never stacks up.
 export function toast(msg, kind = 'ok', ms = 2600) {
   const icons = { ok: 'check', error: 'warn', warn: 'warn', info: 'info' };
   const t = h('div', { class: `toast ${kind}` }, iconEl(icons[kind] || 'info'), h('span', { text: msg }));
-  document.getElementById('toasts').append(t);
-  setTimeout(() => {
+  const box = document.getElementById('toasts'), same = `${kind}:${msg}`;
+  for (const old of [...box.children]) if (old.says === same) { clearTimeout(old.timer); old.remove(); }
+  t.says = same;
+  let timer = null;
+  const go = () => {
     t.style.transition = 'opacity .25s';
     t.style.opacity = '0';
-    setTimeout(() => t.remove(), 260);
-  }, kind === 'error' ? Math.max(ms, 6000) : ms);
+    timer = setTimeout(() => t.remove(), 260);
+  };
+  let end = 0; // (when it goes: a pointer passing over it only ever adds time, at least 1.5 s after it leaves)
+  const wait = (n) => { end = Math.max(end, Date.now() + n); clearTimeout(timer); timer = t.timer = setTimeout(go, end - Date.now()); };
+  t.append(h('button', { class: 'toast-x', title: 'Close', text: '×', onclick: () => { clearTimeout(timer); t.remove(); } }));
+  t.addEventListener('mouseenter', () => { clearTimeout(timer); t.style.transition = ''; t.style.opacity = ''; });
+  t.addEventListener('mouseleave', () => wait(1500));
+  box.append(t);
+  wait(kind === 'error' ? Math.max(ms, 6000) : ms);
   return t;
 }
 
@@ -207,10 +220,23 @@ export class Dialog {
   }
 }
 
+// A dialog that has the window to itself until it's answered. It takes the keyboard as it opens (its main button, so
+// Enter accepts; a caller that then puts the caret in a box of its own still wins), Tab stays inside it, Esc closes
+// it, and when it goes the keyboard goes back to where it was.
 export function modal(title, body, opts = {}) {
   const back = h('div', { class: 'modal-back' });
-  const d = new Dialog({ key: null, title, icon: opts.icon, width: opts.width || 640, body, resizable: false, onClose: () => back.remove() });
+  const opener = document.activeElement;
+  let onKey = null;
+  const d = new Dialog({ key: null, title, icon: opts.icon, width: opts.width || 640, body, resizable: false, onClose: () => {
+    back.remove();
+    document.removeEventListener('keydown', onKey, true);
+    // (only if the keyboard was left with nothing: a dialog opened over this one, or a box focused since, keeps it)
+    const f = document.activeElement;
+    if ((!f || f === document.body) && opener?.isConnected && opener !== document.body) { try { opener.focus({ preventScroll: true }); } catch { /* can't take it */ } }
+  } });
   layer().insertBefore(back, d.el);
+  d.el.tabIndex = -1;
+  try { (d.el.querySelector('.btn.primary:not([disabled])') || d.el).focus({ preventScroll: true }); } catch { /* not shown yet */ }
   const center = () => {
     d.el.style.left = `${Math.max(8, (innerWidth - d.el.offsetWidth) / 2)}px`;
     d.el.style.top = `${Math.max(30, (innerHeight - d.el.offsetHeight) / 2)}px`;
@@ -218,9 +244,54 @@ export function modal(title, body, opts = {}) {
   center();
   requestAnimationFrame(center); // (again once laid out: one opened while the page is still loading measured nothing)
   back.addEventListener('pointerdown', () => d.close());
-  const onKey = (e) => { if (e.key === 'Escape') { d.close(); document.removeEventListener('keydown', onKey, true); } };
+  // Esc closes the dialog on top, and the press is that dialog's alone: nothing under it acts on it too. Enter is
+  // its main button's, unless the keyboard is in a box or on a button of its own (those answer Enter themselves).
+  onKey = (e) => {
+    if (!back.isConnected) { document.removeEventListener('keydown', onKey, true); return; }
+    const backs = document.querySelectorAll('.modal-back');
+    if (backs[backs.length - 1] !== back || menuOpen()) return;
+    const f = document.activeElement, inside = !!f && d.el.contains(f);
+    if (e.key === 'Escape') {
+      e.stopImmediatePropagation();
+      d.close();
+    } else if (e.key === 'Tab') { // round and round inside the dialog
+      const stops = [...d.el.querySelectorAll('button, input, select, textarea, [contenteditable], [tabindex]:not([tabindex="-1"])')]
+        .filter((n) => !n.disabled && !n.hidden && n.tabIndex >= 0 && n.getClientRects().length);
+      if (!stops.length) { e.preventDefault(); return; }
+      const first = stops[0], last = stops[stops.length - 1];
+      if (!inside || f === d.el || (e.shiftKey && f === first) || (!e.shiftKey && f === last)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        (e.shiftKey ? last : first).focus();
+      }
+    } else if (e.key === 'Enter' && !e.repeat && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const own = inside && (f.isContentEditable || (/^(BUTTON|TEXTAREA|SELECT|A)$/.test(f.tagName)) || (f.tagName === 'INPUT' && !/^(checkbox|radio)$/.test(f.type)));
+      if (own) return;
+      const main = d.el.querySelector('.btn.primary:not([disabled])');
+      if (!main) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      main.click();
+    }
+  };
   document.addEventListener('keydown', onKey, true);
   return d;
+}
+
+// Is this key press for something being typed in? A box of words is; a tick box or a list only for the keys that
+// work it (Space, Enter, Tab, a letter that jumps in a list), so that Ctrl+Z, Esc, Delete, the page keys and the
+// zoom keys go on working after a box on a form is ticked.
+export function typingKey(e) {
+  const el = document.activeElement, tag = el?.tagName;
+  if (!el) return false;
+  if (el.isContentEditable || tag === 'TEXTAREA') return true;
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (tag === 'INPUT') {
+    if (!/^(checkbox|radio|button|range|file)$/.test(el.type)) return true;
+    return [' ', 'Tab', 'Enter'].includes(e.key) || e.key.startsWith('Arrow') || (e.key.length === 1 && !ctrl && !'+-='.includes(e.key));
+  }
+  if (tag === 'SELECT') return !ctrl && e.key !== 'Escape';
+  return false;
 }
 
 export async function copyText(text) {

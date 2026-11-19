@@ -2,7 +2,7 @@
 // in English, and, with "Inches on hover" on, a metric size in inches. The marks come from the document's worker
 // (kernel/printmarks.py): the PDF's own text at once, then what Windows OCR reads off the page's picture.
 import { api } from './api.js';
-import { h } from './ui.js';
+import { h, menu } from './ui.js';
 
 const RANK = { gdt: -1, fit: 0, dim: 1, fr: 2 }; // a size inside a French line wins over the line
 const AGAIN = 1500; // ms between asks while OCR is still reading a page
@@ -15,14 +15,12 @@ export class PrintHints {
     this.box = h('div', { class: 'pv-hint' });
     this.tip = h('div', { class: 'pv-tip', hidden: true });
     document.body.append(this.tip);
-    this.btn = h('button', { class: 'pv-btn pv-toggle', text: 'Inches on hover',
-      title: 'Hover a size on the print to see it in inches. Fit classes like H7 always show their limits (H is a hole,\nh a shaft), and French notes show in English. On by itself when the print looks metric.',
-      onclick: () => this._inches(!this.store.inches) });
-    this.tpBtn = h('button', { class: 'pv-btn pv-toggle', text: 'TP on hover',
-      title: 'Hover a feature control frame (true position and the other geometric tolerances) to see what it means,\nits zone, and how hard it is to hold and to measure, from 1 to 10. The scores are a first guess, still being tuned.',
-      onclick: () => { this.store.tp = !this.store.tp; try { localStorage.setItem('pv:tp', this.store.tp ? '1' : '0'); } catch { /* storage off */ } this._button(); this.hide(); } });
+    // one button for the print's aids: what hovering shows, and how hard the part is
+    this.btn = h('button', { class: 'pv-btn pv-toggle', text: 'Print help ▾',
+      title: 'What hovering the print shows, and how hard the part is to make.\nInches on hover: a metric size in inches (on by itself when the print looks metric). Fit classes like H7 always show\ntheir limits (H is a hole, h a shaft), and French notes show in English.\nTolerance help on hover: what a feature control frame (true position and the other geometric tolerances) means,\nits zone, and how hard it is to hold and to measure, from 1 to 10. The scores are a first guess, still being tuned.',
+      onclick: () => this._menu() });
     this.status = h('span', { class: 'pv-of pv-ocr', hidden: true });
-    view.chip.after(h('span', { class: 'pv-sep' }), this.btn, this.tpBtn, this.status);
+    view.chip.before(this.btn, this.status);
     view.scroller.addEventListener('pointermove', (e) => this._move(e));
     view.scroller.addEventListener('pointerleave', () => this.hide());
     view.scroller.addEventListener('scroll', () => this.hide());
@@ -85,15 +83,34 @@ export class PrintHints {
     }, ms);
   }
 
+  _menu() {
+    const st = this.store, p = this.doc?.partDifficulty;
+    if (!st) return;
+    menu(this.btn, [
+      { label: 'Inches on hover', check: !!st.inches, action: () => this._inches(!st.inches) },
+      { label: 'Tolerance help on hover (GD&T)', check: !!st.tp, action: () => this._tp(!st.tp) },
+      { sep: true },
+      { label: p ? `Part difficulty ${p.score.toFixed(1)}/10${p.whole ? '' : ' (still reading)'}…` : 'Part difficulty: no geometric tolerances read yet', disabled: !p,
+        action: () => this.v.app?.tools?.partDifficulty() },
+    ]);
+  }
+
   _inches(on) {
     this.store.inches = on;
     this._button();
     this.hide();
   }
 
+  _tp(on) {
+    this.store.tp = on;
+    try { localStorage.setItem('pv:tp', on ? '1' : '0'); } catch { /* storage off */ }
+    this._button();
+    this.hide();
+  }
+
+  // the button is lit while either aid is on
   _button() {
-    this.btn.classList.toggle('on', !!this.store?.inches);
-    this.tpBtn.classList.toggle('on', !!this.store?.tp);
+    this.btn.classList.toggle('on', !!(this.store?.inches || this.store?.tp));
   }
 
   _status() {
@@ -102,6 +119,8 @@ export class PrintHints {
     this.status.hidden = !reading && !failed;
     this.status.textContent = reading ? 'Reading the print…' : 'OCR couldn\'t read this print';
     this.status.title = reading ? 'Windows OCR is reading the page, for sizes drawn as lines' : '';
+    this.v._fitBar?.();
+    if (this.v.bar.classList.contains('narrow')) this.v.app?.status?.(); // (no room for it in the bar: the status bar says it)
   }
 
   hide() {
@@ -126,6 +145,7 @@ export class PrintHints {
 
   _move(e) {
     if (!this.doc || e.buttons) { this.hide(); return; } // not while panning or selecting
+    if (e.target.closest?.('.bl, .bl-vname')) { this.hide(); return; } // a balloon or a view's name tag has its own tip
     const box = e.target.closest?.('.pv-pagebox');
     const p = box && this.v.pages[+box.dataset.page];
     const marks = p && this.store.pages[p.i]?.marks;

@@ -10,6 +10,7 @@ import datetime
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -97,3 +98,11 @@ def tidy():
                 f.unlink()
     except OSError:
         pass
+    # undo snapshots kept in files by a worker that was stopped (killed, crashed) before it could clear them: a
+    # folder still in use gets a new file with each snapshot, so a day without one means it's left over
+    for p in Path(tempfile.gettempdir()).glob("ss-undo-*"):
+        try:
+            if p.is_dir() and p.stat().st_mtime < time.time() - 86400:
+                shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            pass
